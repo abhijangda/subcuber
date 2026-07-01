@@ -239,6 +239,7 @@ public:
   static_assert(MaxThreadsPerBlock == 384, "Pingpong kernel must have 384 threads in total.");
   static const bool IsFusedM2M3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
   static const bool IsFusedM4M5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
+  static constexpr uint32_t ConsumerSubMIterations = StrassenMiGroup::numMs() == 2 ? 2 : 1;
 
   /// Register requirement for Load and Math WGs
   static constexpr int RegsPerThread =
@@ -729,8 +730,9 @@ public:
     EpiStorePipeline epi_store_pipeline(epi_store_pipeline_params);
 
     typename LoadWarpOrderBarrier::Params params_load_order_barrier;
-    params_load_order_barrier.group_id = producer_warp_role == ProducerWarpRole::Mainloop ? 0 : 1;
-    params_load_order_barrier.group_size = NumThreadsPerWarp;
+    params_load_order_barrier.group_id = (warp_group_role == WarpGroupRole::Consumer0 ||
+                        warp_group_role == WarpGroupRole::Consumer1) ? 0 : 1;
+    params_load_order_barrier.group_size = NumThreadsPerWarpGroup;
     LoadWarpOrderBarrier load_order_barrier(shared_storage.pipelines.load_order, params_load_order_barrier);
 
     typename MathWarpGroupOrderBarrier::Params params_math_wg_order_barrier;
@@ -794,7 +796,10 @@ public:
     Tensor gA2_mkl = get<0>(load_inputs2);
     Tensor gB2_nkl = get<1>(load_inputs2);
 
-    bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
+    constexpr bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
+    constexpr bool is_fused_m2_m3 = (StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3());
+    constexpr bool is_fused_m4_m5 = (StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5());
+
 
     // Get pipeline stage increments from tensor shapes
     auto k_tile_count = size<3>(gA_mkl);
@@ -812,11 +817,9 @@ public:
 
 
     if (warp_group_role == WarpGroupRole::Consumer1) {
-      if (StrassenMiGroup::numMs() == 1) {
-        if constexpr (not IsSchedDynamicPersistent) {
-          // Advance 2nd Math WG to the next work tile for the startup
-          scheduler.template advance_to_next_work<StrassenMiGroup> ();
-        }
+      if constexpr (not IsSchedDynamicPersistent) {
+        // Advance 2nd Math WG to the next work tile for the startup
+        scheduler.template advance_to_next_work<StrassenMiGroup> ();
       }
 
       // Advance 2nd Math WG pipeline states to the end of 1st Math WG
@@ -886,7 +889,6 @@ public:
         // Ensure that the prefetched kernel does not touch
         // unflushed global memory prior to this instruction
         cutlass::arch::wait_on_dependent_grids();
-        bool do_load_order_arrive = true;
         bool requires_clc_query = true;
         int sub_m_idx = 0;
         if (threadIdx.x % 32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
@@ -908,37 +910,50 @@ public:
             ++scheduler_pipe_throttle_producer_state;
           }
 
-          collective_mainloop.load(
-            params.mainloop, half_problem_shape_MNKL,
-            mainloop_pipeline,
-            mainloop_pipe_producer_state,
-            load_inputs,
-            blk_coord, sub_m_idx,
-            k_tile_iter,
-            k_tile_count,
-            lane_idx,
-            block_rank_in_cluster,
-            shared_storage.tensors.mainloop,
-            all_presumld_inputs,
-            shared_storage.tensors.extra_storage.presum_tensors
-          );
-          // Update starting pipeline state for the next tile
-          mainloop_pipe_producer_state.advance(k_tile_count);
-
-          // Signal for the epilogue load warp to begin
-          if (do_load_order_arrive) {
-            load_order_barrier.arrive();
-            do_load_order_arrive = false;
-          }
           if (StrassenMiGroup::numMs() > 1) {
-            sub_m_idx = 1;
-            k_tile_iter.coord += (is_fused) ? k_tile_count : 0;
-            
+            auto load_work_tile = [&] (decltype(work_tile_info) load_work_tile_info, int load_sub_m_idx) {
+              auto load_m_coord = idx2crd(load_work_tile_info.M_idx, shape<2>(gA_mkl));
+              auto load_n_coord = idx2crd(load_work_tile_info.N_idx, shape<2>(gB_nkl));
+              auto load_l_coord = idx2crd(load_work_tile_info.L_idx, shape<4>(gB_nkl));
+              auto load_blk_coord = make_coord(load_m_coord, load_n_coord, _, load_l_coord);
+              auto load_k_tile_iter  = cute::make_coord_iterator(shape<3>(gA_mkl));
+              load_k_tile_iter.coord += (is_fused && load_sub_m_idx == 1) ? k_tile_count : 0;
+
+              collective_mainloop.load(
+                params.mainloop, half_problem_shape_MNKL,
+                mainloop_pipeline,
+                mainloop_pipe_producer_state,
+                (is_fused || load_sub_m_idx == 0) ? load_inputs : load_inputs2,
+                load_blk_coord, load_sub_m_idx,
+                load_k_tile_iter,
+                k_tile_count,
+                lane_idx,
+                block_rank_in_cluster,
+                shared_storage.tensors.mainloop,
+                all_presumld_inputs,
+                shared_storage.tensors.extra_storage.presum_tensors
+              );
+              mainloop_pipe_producer_state.advance(k_tile_count);
+            };
+
+            auto next_scheduler = scheduler;
+            next_scheduler.template advance_to_next_work<StrassenMiGroup>();
+            auto next_work_tile_info = next_scheduler.get_current_work();
+
+            load_work_tile(work_tile_info, 0);
+            if (next_work_tile_info.is_valid()) {
+              load_work_tile(next_work_tile_info, 0);
+            }
+            load_work_tile(work_tile_info, 1);
+            if (next_work_tile_info.is_valid()) {
+              load_work_tile(next_work_tile_info, 1);
+            }
+          } else {
             collective_mainloop.load(
               params.mainloop, half_problem_shape_MNKL,
               mainloop_pipeline,
               mainloop_pipe_producer_state,
-              (is_fused) ? load_inputs : load_inputs2,
+              load_inputs,
               blk_coord, sub_m_idx,
               k_tile_iter,
               k_tile_count,
@@ -966,7 +981,7 @@ public:
           }
           else {
           // Get next work tile
-          scheduler.template advance_to_next_work<StrassenMiGroup>();
+          scheduler.template advance_to_next_work<StrassenMiGroup>(StrassenMiGroup::numMs() > 1 ? NumMmaWarpGroups : 1);
           work_tile_info = scheduler.get_current_work();
           }
         } // Scheduler work fetch loop
@@ -1038,13 +1053,7 @@ public:
         // Ensure that the prefetched kernel does not touch
         // unflushed global memory prior to this instruction
         cutlass::arch::wait_on_dependent_grids();
-        bool do_load_order_wait = true;
         while (work_tile_info.is_valid()) {
-          if (do_load_order_wait) {
-            load_order_barrier.wait();
-            do_load_order_wait = false;
-          }
-
           // Compute m_coord, n_coord, l_coord with the post-tiled m-shape and n-shape
           auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
           auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
@@ -1053,59 +1062,75 @@ public:
 
           #pragma unroll (StrassenMiGroup::numMs())
           for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
-            #pragma unroll 4
-            for (int c = 0; c < 4; c++) {
-              const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
-              const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+            auto new_scheduler = scheduler;
+            auto work_tile_info2 = new_scheduler.get_current_work();
 
-              uint mi = StrassenMiGroup::getMi(fused_mi);
-              int misign = RWCTypes::MiSignByOutputIndex(c, mi);
-
-              if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
-
-              int read_c = 0;
-              MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
-              int postsum_src_len = 0;
+            //TODO: Fix this is_fused_m4_m5 condition and below at line 1164.
+            for (int wg = 0; wg < (is_fused_m4_m5 ? NumMmaWarpGroups : 1); wg++) {
+              if (!work_tile_info2.is_valid()) continue;
+              auto m_coord = idx2crd(work_tile_info2.M_idx, shape<2>(gA_mkl));
+              auto n_coord = idx2crd(work_tile_info2.N_idx, shape<2>(gB_nkl));
+              auto l_coord = idx2crd(work_tile_info2.L_idx, shape<4>(gB_nkl));
+              auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
               #pragma unroll 4
-              for (read_c = 0; read_c < 4; read_c++) {
-                auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
-                  postsum_srcs[postsum_src_len++] = postsum_src;
+              for (int c = 0; c < 4; c++) {
+                const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+                const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+
+                uint mi = StrassenMiGroup::getMi(fused_mi);
+                int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+                if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
+
+                int read_c = 0;
+                MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
+                int postsum_src_len = 0;
+                #pragma unroll 4
+                for (read_c = 0; read_c < 4; read_c++) {
+                  auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+                  if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+                    postsum_srcs[postsum_src_len++] = postsum_src;
+                  }
+                }
+
+                if (postsum_src_len > 0) {
+                  load_order_barrier.wait();
+                  load_order_barrier.advance();
+                  if (false) {
+                    epi_load_pipe_producer_state =
+                    collective_epilogue.load(//TODO: Give postsum as argument
+                      epi_load_pipeline,
+                      epi_load_pipe_producer_state,
+                      problem_shape_MNKL,
+                      blk_shape,
+                      blk_coord,
+                      tiled_mma,
+                      lane_idx,
+                      shared_storage.tensors.extra_storage.epilogue,
+                      shared_storage.tensors.extra_storage.epilogue2
+                    );
+                  } else {
+                    epi_load_pipe_producer_state =
+                    collective_epilogue.load_m0(//TODO: Give postsum as argument
+                      epi_load_pipeline,
+                      epi_load_pipe_producer_state,
+                      problem_shape_MNKL,
+                      blk_shape,
+                      blk_coord, fused_mi,
+                      tiled_mma,
+                      lane_idx,
+                      shared_storage.tensors.extra_storage.epilogue,
+                      shared_storage.tensors.extra_storage.epilogue2,
+                      postsum_srcs
+                    );
+                  }
+                  // if (fused_mi < StrassenMiGroup::numMs() - 1)
+                    // asm volatile("bar.cta.sync %0, %1;" : : "r"(9 + epilogue_load_consumer_idx), "r"(NumThreadsPerWarpGroup+32));
                 }
               }
 
-              if (postsum_src_len > 0) {
-                if (false) {
-                  epi_load_pipe_producer_state =
-                  collective_epilogue.load(//TODO: Give postsum as argument
-                    epi_load_pipeline,
-                    epi_load_pipe_producer_state,
-                    problem_shape_MNKL,
-                    blk_shape,
-                    blk_coord,
-                    tiled_mma,
-                    lane_idx,
-                    shared_storage.tensors.extra_storage.epilogue,
-                    shared_storage.tensors.extra_storage.epilogue2
-                  );
-                } else {
-                  epi_load_pipe_producer_state =
-                  collective_epilogue.load_m0(//TODO: Give postsum as argument
-                    epi_load_pipeline,
-                    epi_load_pipe_producer_state,
-                    problem_shape_MNKL,
-                    blk_shape,
-                    blk_coord, fused_mi,
-                    tiled_mma,
-                    lane_idx,
-                    shared_storage.tensors.extra_storage.epilogue,
-                    shared_storage.tensors.extra_storage.epilogue2,
-                    postsum_srcs
-                  );
-                }
-                if (fused_mi < StrassenMiGroup::numMs() - 1)
-                  asm volatile("bar.cta.sync %0, %1;" : : "r"(9), "r"(NumThreadsPerWarpGroup+32));
-              }
+              new_scheduler.template advance_to_next_work<StrassenMiGroup>(1);
+              work_tile_info2 = new_scheduler.get_current_work();
             }
           }
 
@@ -1122,7 +1147,8 @@ public:
           }
           else {
           // Get next work tile
-          scheduler.template advance_to_next_work<StrassenMiGroup>();
+          //TODO: Fix this is_fused_m4_m5 condition
+          scheduler.template advance_to_next_work<StrassenMiGroup>(is_fused_m4_m5 ? 2 : 1);
           work_tile_info = scheduler.get_current_work();
           }
         } // Scheduler work fetch loop
@@ -1148,8 +1174,6 @@ public:
         // The timing of calling this function only influences performance,
         // not functional correctness.
         cutlass::arch::launch_dependent_grids();
-
-        return;
       }
       #endif
       
@@ -1172,6 +1196,7 @@ public:
           }
         }
       }
+
         if (warp_group_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
           MY_PRINTF("1127\n");
       while (work_tile_info.is_valid()) {
@@ -1179,41 +1204,30 @@ public:
         auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
         auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
         auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
-        auto sub_m_idx = (StrassenMiGroup::numMs() == 2) ? canonical_warp_group_idx() - 1 : 0;
-        if (sub_m_idx == 0 || sub_m_idx == 1) {} else CUTE_GCC_UNREACHABLE;
         auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
-
-        // Allocate the accumulators for the (M,N) blk_shape
+       if (warp_group_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1141 %d: %d %d\n", threadIdx.x, m_coord, n_coord);
+        // Keep the fused Mi accumulator live in the consumer WG's registers.
         Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape));               // (MMA,MMA_M,MMA_N)
+        auto consumer_scratch_idx = canonical_warp_group_idx() - static_cast<int>(WarpGroupRole::Consumer0);
+        bool has_peer_work = true;
+        if (StrassenMiGroup::numMs() > 1 && consumer_scratch_idx == 0) {
+          auto peer_scheduler = scheduler;
+          peer_scheduler.template advance_to_next_work<StrassenMiGroup>();
+          has_peer_work = peer_scheduler.get_current_work().is_valid();
+        }
+
+        #pragma unroll
+        for (int consumer_sub_m_iter = 0; consumer_sub_m_iter < ConsumerSubMIterations; ++consumer_sub_m_iter) {
+        auto sub_m_idx = consumer_sub_m_iter;
+        if (sub_m_idx == 0 || sub_m_idx == 1) {} else CUTE_GCC_UNREACHABLE;
+
         // Order two Math WG's MMA one after the other, helps hide Epilogue
         math_wg_order_barrier.wait();
-        if (warp_group_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-          MY_PRINTF("1141 %d: %d %d\n", threadIdx.x, m_coord, n_coord);
-        if ((is_fused /*|| IsFusedM2M3*/) && sub_m_idx == 1) {
-          NumericArrayConverter<float, ElementD, 8> converter;
-          //Read from this shared memory
-          cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators;
-          auto sh_ptr = ((cutlass::Array<ElementD, 8>*)shared_storage.tensors.extra_storage.epilogue.collective.smem_C.begin());
-          const uint SHMEM_SIZE = 4096/(NumThreadsPerWarpGroup*sizeof(ElementD));
-
-          for (int i = 0; i < accumulators.size(); i += 2*SHMEM_SIZE) {
-            asm volatile("bar.cta.sync %0, %1;" : : "r"(7), "r"(256));
-            for (int e = 0; e < SHMEM_SIZE; e += 8) {
-              arrs[(i + e)/8] = converter(sh_ptr[warp_group_thread_idx + 128*(e/8)]);
-            }
-            asm volatile("bar.cta.sync %0, %1;" : : "r"(8), "r"(256));
-            if (i + SHMEM_SIZE < accumulators.size()) {
-              for (int e = 0; e < SHMEM_SIZE; e += 8) {
-                arrs[(i + SHMEM_SIZE + e)/8] = converter(sh_ptr[warp_group_thread_idx + 128*(SHMEM_SIZE+e)/8]);
-              }
-            }
-          }
-          asm volatile("bar.cta.sync %0, %1;" : : "r"(9), "r"(256));
-        }
 
         using EpilogueTile = typename CollectiveEpilogue::EpilogueTile;
 
-        if (is_fused) {
+        if (StrassenMiGroup::numMs() > 1) {
           if (sub_m_idx == 0)
             collective_mainloop.mma(
               blk_coord, 0, problem_shape_MNKL, half_problem_shape_MNKL,
@@ -1258,7 +1272,6 @@ public:
         // Cue for next Math WG's MMA to start
         // Make sure the math instructions are done and free buffers before entering the epilogue
 
-        // Next Mi=1 can read from this shared memory 
         math_wg_order_barrier.arrive();
         collective_mainloop.mma_tail(
           mainloop_pipeline,
@@ -1268,32 +1281,12 @@ public:
 
         if (StrassenMiGroup::hasM2() && warp_group_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
           MY_PRINTF("1163 %d: %d %d ; %f\n", threadIdx.x, m_coord, n_coord, float(accumulators[0]));
-        if ((is_fused /*|| IsFusedM2M3*/) && sub_m_idx == 0) {
-          NumericArrayConverter<ElementD, float, 8> converter;
-          cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators;
-          auto sh_ptr = ((cutlass::Array<ElementD, 8>*)shared_storage.tensors.extra_storage.epilogue.collective.smem_C.begin());
 
-          const uint SHMEM_SIZE = 4096/(NumThreadsPerWarpGroup*sizeof(ElementD)); 
-          for (int i = 0; i < accumulators.size(); i += 2*SHMEM_SIZE) {
-            for (int e = 0; e < SHMEM_SIZE; e += 8) {
-              cutlass::Array<ElementD, 8> arr = converter(arrs[(i+e)/8]);
-              sh_ptr[warp_group_thread_idx + NumThreadsPerWarpGroup*(e/8)] = arr;
-            }
-            asm volatile("bar.cta.sync %0, %1;" : : "r"(7), "r"(256));
-            if (i + SHMEM_SIZE < accumulators.size()) {
-              for (int e = 0; e < SHMEM_SIZE; e += 8) {
-                cutlass::Array<ElementD, 8> arr = converter(arrs[(i+SHMEM_SIZE+e)/8]);
-                sh_ptr[warp_group_thread_idx + 128*(SHMEM_SIZE+e)/8] = arr;
-              }
-            }
-            asm volatile("bar.cta.sync %0, %1;" : : "r"(8), "r"(256));
-          }
-          asm volatile("bar.cta.sync %0, %1;" : : "r"(9), "r"(256));
-        }
+        uint32_t mainloop_advance_chunks = (StrassenMiGroup::numMs() > 1) ? (has_peer_work ? NumMmaWarpGroups : 1) :
+          ((consumer_sub_m_iter + 1 < ConsumerSubMIterations) ?
+           1 : (NumMmaWarpGroups * ConsumerSubMIterations - (ConsumerSubMIterations - 1)));
 
-        // if (sub_m_idx == 1)
-          // Update starting mainloop pipeline state for the next tile
-          mainloop_pipe_consumer_state.advance(k_tile_count * NumMmaWarpGroups);
+        mainloop_pipe_consumer_state.advance(k_tile_count * mainloop_advance_chunks);
 
         #ifdef CUTLASS_ENABLE_GDC_FOR_SM90
         if (scheduler.is_last_tile(work_tile_info, 1)) {//NumMmaWarpGroups
@@ -1310,7 +1303,7 @@ public:
         // Order two Math WG's Epilogue one after the other
         math_wg_order_barrier.wait();
 
-        if (StrassenMiGroup::numMs() == 2 && sub_m_idx == 1) {
+        if (false && StrassenMiGroup::numMs() == 2 && sub_m_idx == 1) {
           uint fused_mi = sub_m_idx;
           #pragma unroll 4
           for (int c = 0; c < 4; c++) {
@@ -1335,13 +1328,14 @@ public:
               NumericArrayConverter<float, ElementD, 8> converter;
               //Read from this shared memory
               cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators;
-              auto sh_ptr = ((cutlass::Array<ElementD, 8>*)shared_storage.tensors.extra_storage.epilogue.collective.smem_C.begin());
               const uint SHMEM_SIZE = (size<0>(TileShape{}) * size<1>(TileShape{}))/NumThreadsPerWarpGroup;
+              auto sh_ptr = ((cutlass::Array<ElementD, 8>*)shared_storage.tensors.extra_storage.epilogue.collective.smem_C.begin()) +
+                            consumer_scratch_idx * NumThreadsPerWarpGroup * (SHMEM_SIZE / 8);
 
               for (int i = 0; i < accumulators.size(); i += 8) {
                 arrs[i/8] = arrs[i/8] + converter(sh_ptr[warp_group_thread_idx + NumThreadsPerWarpGroup*(i/8)]);
               }
-              asm volatile("bar.cta.sync %0, %1;" : : "r"(9), "r"(128+32));
+              asm volatile("bar.cta.sync %0, %1;" : : "r"(9 + consumer_scratch_idx), "r"(NumThreadsPerWarpGroup+32));
             }
           }
         }
@@ -1380,6 +1374,12 @@ public:
           }
         }
 
+        if (has_global_src) {
+          load_order_barrier.arrive();
+        }
+
+        if (m_coord == 0 && n_coord == 0 && warp_group_thread_idx == 0)
+          MY_PRINTF("1402 %d %d %d ; %d : %f\n", is_fused, is_fused_m2_m3, StrassenMiGroup::hasM6(), sub_m_idx, accumulators[0]);
         if (any_global_dst_valid) {
         if (!any_global_dst_final) {
           auto ret = collective_epilogue.store_m2(
@@ -1436,7 +1436,7 @@ public:
           sub_m_idx
         );
 
-        if (StrassenMiGroup::numMs() == 2 && sub_m_idx == 0) {
+        if (false && StrassenMiGroup::numMs() == 2 && sub_m_idx == 0) {
           //Wait for all warpgroup threads to finish
           uint fused_mi = sub_m_idx;
           #pragma unroll 4
@@ -1448,14 +1448,16 @@ public:
 
             if (misign != 0 && postsum_shared_dest.valid() && //&& !postsum_global_dest.valid()
                 RWCTypes::HasPostsumSrc(postsum_global_dest.get_op())) {
-              asm volatile("bar.cta.sync %0, %1;" : : "r"(10), "r"(NumThreadsPerWarpGroup));
+              int consumer_postsum_barrier = 11 + consumer_scratch_idx;
+              asm volatile("bar.cta.sync %0, %1;" : : "r"(consumer_postsum_barrier), "r"(NumThreadsPerWarpGroup));
               //Transfer only current Mi to shared memory
               //If this shared memory destination is different from global memory destination
               NumericArrayConverter<ElementD, float, 8> converter;
               //Read from this shared memory
               cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators;
-              auto sh_ptr = ((cutlass::Array<ElementD, 8>*)shared_storage.tensors.extra_storage.epilogue.collective.smem_C.begin());
               const uint SHMEM_SIZE = (size<0>(TileShape{}) * size<1>(TileShape{}))/NumThreadsPerWarpGroup;
+              auto sh_ptr = ((cutlass::Array<ElementD, 8>*)shared_storage.tensors.extra_storage.epilogue.collective.smem_C.begin()) +
+                            consumer_scratch_idx * NumThreadsPerWarpGroup * (SHMEM_SIZE / 8);
 
               for (int i = 0; i < accumulators.size(); i += 8) {
                 sh_ptr[warp_group_thread_idx + NumThreadsPerWarpGroup*(i/8)] = converter(arrs[i/8]);
@@ -1468,9 +1470,6 @@ public:
           }
         }
 
-        if (warp_group_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-          MY_PRINTF("1428 %d: %d %d\n", threadIdx.x, m_coord, n_coord);
-
         epi_load_pipe_consumer_state_next_ = get<0>(ret);
         epi_store_pipe_producer_state_next_ = get<1>(ret);
 
@@ -1481,12 +1480,20 @@ public:
           epi_load_pipe_consumer_state = epi_load_pipe_consumer_state_next_;
         epi_store_pipe_producer_state = epi_store_pipe_producer_state_next_;
 
+        uint32_t epilogue_load_advance_chunks = (consumer_sub_m_iter + 1 < ConsumerSubMIterations) ?
+          0 : ((StrassenMiGroup::numMs() > 1) ?
+               (NumMmaWarpGroups - 1) :
+               (NumMmaWarpGroups * ConsumerSubMIterations - ConsumerSubMIterations));
+        uint32_t epilogue_store_advance_chunks = (StrassenMiGroup::numMs() > 1) ? (NumMmaWarpGroups - 1) :
+          ((consumer_sub_m_iter + 1 < ConsumerSubMIterations) ?
+           0 : (NumMmaWarpGroups * ConsumerSubMIterations - ConsumerSubMIterations));
         if (is_epi_load_needed)
-          epi_load_pipe_consumer_state.advance(c_tile_count);
-        epi_store_pipe_producer_state.advance(d_tile_count);
+          epi_load_pipe_consumer_state.advance(c_tile_count * epilogue_load_advance_chunks);
+        epi_store_pipe_producer_state.advance(d_tile_count * epilogue_store_advance_chunks);
 
         // Cue for next Math WG's Epilogue to start
         math_wg_order_barrier.arrive();
+        }
         if constexpr (IsSchedDynamicPersistent) {  
           // Get next work tile
           auto [next_work_tile_info, increment_pipe] = 
@@ -1501,17 +1508,41 @@ public:
         }
         else {
         // Get next work tile
-        scheduler.template advance_to_next_work<StrassenMiGroup>(NumMmaWarpGroups/((StrassenMiGroup::numMs() == 2) ? 2 : 1));
+        scheduler.template advance_to_next_work<StrassenMiGroup>(NumMmaWarpGroups);
         work_tile_info = scheduler.get_current_work();
         }
       } // Scheduler work fetch loop
+
+        if (StrassenMiGroup::numMs() > 1 && !work_tile_info.is_valid() &&
+            warp_group_role == WarpGroupRole::Consumer1 &&
+            scheduler.current_work_linear_idx_ >= scheduler.total_grid_size_) {
+        auto peer_work_tile_info = scheduler.get_current_work_for_linear_idx(
+          scheduler.current_work_linear_idx_ - scheduler.total_grid_size_);
+        if (peer_work_tile_info.is_valid()) {
+          #pragma unroll
+          for (int consumer_sub_m_iter = 1; consumer_sub_m_iter < ConsumerSubMIterations; ++consumer_sub_m_iter) {
+            if (consumer_sub_m_iter == 0) {
+              math_wg_order_barrier.wait();
+              math_wg_order_barrier.arrive();
+              math_wg_order_barrier.wait();
+              math_wg_order_barrier.arrive();
+            }
+            else {
+              math_wg_order_barrier.wait();
+              math_wg_order_barrier.arrive();
+              math_wg_order_barrier.wait();
+              math_wg_order_barrier.arrive();
+            }
+          }
+        }
+      }
     } // Consumer Warp Groups End
 #endif
-  if (threadIdx.x % 32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+  if (threadIdx.x % 128 == 0)
     MY_PRINTF("1467 %d: %d %d\n", threadIdx.x, blockIdx.x, blockIdx.y);
   __syncthreads();
-  if (threadIdx.x == 0)
-    MY_PRINTF("1470 %d: %d %d\n", threadIdx.x, blockIdx.x, blockIdx.y);
+  // if (threadIdx.x == 0)
+    // MY_PRINTF("1470 %d: %d %d\n", threadIdx.x, blockIdx.x, blockIdx.y);
   }
 };
 

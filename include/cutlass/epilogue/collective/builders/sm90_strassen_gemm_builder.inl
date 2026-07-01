@@ -273,7 +273,7 @@ private:
   using EpilogueTile_MN = cute::conditional_t<StrassenMiGroup::hasM0() or StrassenMiGroup::hasM1() or StrassenMiGroup::hasM2() or StrassenMiGroup::hasM3() or is_fused_m4_m5,
                                               cute::tuple<_64, _32>,
                           decltype(detail::sm90_compute_tile_shape_or_override<ElementD, EpilogueTileType, Schedule, TileShape_MNK>())>;
-  using DispatchPolicy = cute::conditional_t<StrassenMiGroup::hasM0() or StrassenMiGroup::hasM1() or StrassenMiGroup::hasM2() or StrassenMiGroup::hasM3() or is_fused_m4_m5,
+  using DispatchPolicy = cute::conditional_t<StrassenMiGroup::hasM0()/* or StrassenMiGroup::hasM1() or StrassenMiGroup::hasM2() or StrassenMiGroup::hasM3() or is_fused_m4_m5)*/,
                                              cutlass::epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, size<1>(EpilogueTile_MN{})/2, true, false>,
                                              decltype(detail::sm90_get_tma_dispatch_policy<TileShape_MNK,EpilogueTile_MN,ElementC,ElementD,Schedule>())>;
   // typename DispatchPolicy::x y;

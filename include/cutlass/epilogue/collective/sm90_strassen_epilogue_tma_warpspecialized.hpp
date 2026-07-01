@@ -246,7 +246,7 @@ private:
     // alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, 2*8192> smem_reg_transfer;
   };
 
-  using CollectiveStorageReuseC = cute::conditional_t<(IsFusedM2M3||IsFusedM4M5 || StrassenMiGroup::hasM5() || StrassenMiGroup::hasM4()) && UseLinearStoreLoads,
+  using CollectiveStorageReuseC = cute::conditional_t<false && (IsFusedM4M5 || StrassenMiGroup::hasM5() || StrassenMiGroup::hasM4()) && UseLinearStoreLoads,
                                                       CollectiveStorageReuseCFusedM2M3Linear,
                                                       CollectiveStorageReuseC_>;
   
@@ -859,6 +859,7 @@ public:
 
     bool issue_tma_load = thread_idx == 0;//cute::elect_one_sync();
     bool is_M_load_needed = src_global_ops[0].valid();
+
     int num_src_ops = 0;
     #pragma unroll 4
     for (; num_src_ops < 4; num_src_ops++)
@@ -866,10 +867,12 @@ public:
 
     load_pipeline.params_.transaction_bytes = STAGE_ELEMS * 2 * num_src_ops;
 
+    if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+      MY_PRINTF("1030 %d %d: %d %d\n", 0/*stage*/, threadIdx.x, m_coord, n_coord);
+
+    if (is_M_load_needed)
     CUTLASS_PRAGMA_UNROLL
     for (uint stage = 0; stage < size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{}); stage += STAGE_ELEMS) {
-      if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-        MY_PRINTF("1030 %d %d: %d %d\n", stage, threadIdx.x, m_coord, n_coord);
       uint64_t* tma_barrier = load_pipeline.producer_get_barrier(load_pipe_producer_state);
       load_pipeline.producer_acquire(load_pipe_producer_state);
       if (issue_tma_load && is_M_load_needed) {
@@ -887,13 +890,14 @@ public:
         }
 
         load_pipeline.producer_expect_transaction(load_pipe_producer_state);
-        if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-          MY_PRINTF("1044 %d %d: %d %d\n", stage, threadIdx.x, m_coord, n_coord);
       }
       load_pipeline.producer_commit(load_pipe_producer_state);
       ++load_pipe_producer_state;
       postsum_m0 += STAGE_ELEMS;
     }
+
+    if (thread_idx == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+      MY_PRINTF("1044 %d %d: %d %d\n", 0/*stage*/, threadIdx.x, m_coord, n_coord);
 
     return load_pipe_producer_state;
   }
@@ -1067,6 +1071,8 @@ public:
     #pragma unroll (128/STAGE_ELEMS)
     for (uint stage = 0; stage < accumulators.size(); stage += STAGE_ELEMS) {
       if (is_producer_load_needed) load_pipeline.consumer_wait(load_wait_state);
+      if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1071 EpiStore %d: %d %d : %d\n", threadIdx.x, m_coord, n_coord, stage);
       //Load smem here
       asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumThreadsPerWarpGroup));
       uint smem_st_index =  (store_pipe_producer_state.index()* STAGE_ELEMS);

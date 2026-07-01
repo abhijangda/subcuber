@@ -1126,8 +1126,8 @@ public:
 
     Status result = Status::kSuccess;
 
-    if (StrassenGroups::PresumGroup::AllPresums::APresumComputeLoads(PresumGlobalKernel).numAccess() > 0 ||
-        StrassenGroups::PresumGroup::AllPresums::BPresumComputeLoads(PresumGlobalKernel).numAccess() > 0) {
+    if (paramsM0_.run <= 1 && (StrassenGroups::PresumGroup::AllPresums::APresumComputeLoads(PresumGlobalKernel).numAccess() > 0 ||
+        StrassenGroups::PresumGroup::AllPresums::BPresumComputeLoads(PresumGlobalKernel).numAccess() > 0)) {
       //TODO: Add a swizzle?
       dim3 grid = {uint((paramsM0_.get_problem_shape_n()/2)/GemmKernelM0::Mma::PresumShape::kN),
                    uint((paramsM0_.get_problem_shape_m()/2)/GemmKernelM0::Mma::PresumShape::kM),

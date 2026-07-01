@@ -163,6 +163,8 @@ struct CollectiveStrassenMma<
   static const uint kPresumComputeIterationsB = size<0>(TileShape{})/size<0>(PresumTileShapeB{});
 
   static const bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
+  static const bool is_fused_m2_m3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
+
   using CtaShape_MNK = decltype(shape_div(TileShape{}, ClusterShape{}));
   using MainloopPipeline = cutlass::PipelineTmaAsync<DispatchPolicy::Stages>;
   using PipelineState = cutlass::PipelineState<DispatchPolicy::Stages>;
@@ -1711,7 +1713,8 @@ struct CollectiveStrassenMma<
       }
       prev_read_stage = read_stage;
       warpgroup_arrive();
-      if ((is_fused || IsFusedM4M5) && sub_m_idx == 1) tiled_mma.accumulate_ = GMMA::ScaleOut::One;
+      //TODO: Fix this condition
+      if ((is_fused_m2_m3 || is_fused || IsFusedM4M5) && sub_m_idx > 0) tiled_mma.accumulate_ = GMMA::ScaleOut::One;
       else tiled_mma.accumulate_ = GMMA::ScaleOut::Zero;
       // Unroll the K mode manually to set scale D to 1
       CUTLASS_PRAGMA_UNROLL
