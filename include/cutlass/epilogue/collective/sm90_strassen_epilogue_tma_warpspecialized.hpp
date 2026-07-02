@@ -1088,6 +1088,8 @@ public:
         auto src_val = ptr_smem_ld[ld_idx];
         if (is_producer_load_needed) {
           arrs[(stage + e)/VECTOR_ELEMS] = conv_half_to_float(src_val) + arrs[(stage + e)/VECTOR_ELEMS];
+          if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+            MY_PRINTF("1107 EpiStore %d: %d %d : %d : %f %f\n", threadIdx.x, m_coord, n_coord, stage, arrs[stage + 0][0], float(src_val[0]));
         }
         ptr_smem_st[st_idx] = converter(arrs[(stage + e)/VECTOR_ELEMS]);
       }
@@ -1170,7 +1172,7 @@ public:
     auto coord_shape = conditional_return<is_im2col_D>( 
         make_coord(m_coord, n_coord),
         make_coord(m_coord, n_coord, l_coord));
-
+    constexpr bool IsFusedM2M3M6 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3() && StrassenMiGroup::hasM6(); 
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
     PostsumOp first_store_srcs[4], second_store_srcs[4];
     auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutFinal, first_store_srcs);
@@ -1610,8 +1612,9 @@ public:
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tRS_rCompute_frg); ++i) {
               auto conv = cutlass::NumericArrayConverter<float, SmemElementD, FragmentSize>{}(frg);
-              tRS_rAcc_frg_mn(r2s_v + i) = (StrassenMiGroup::hasM6() ? (conv - tRS_rAcc_frg_mn(r2s_v + i)) :
-                                                                       (tRS_rAcc_frg_mn(r2s_v + i) + conv));
+              tRS_rAcc_frg_mn(r2s_v + i) = (StrassenMiGroup::hasM6() && !IsFusedM2M3M6) ?
+                                              (conv - tRS_rAcc_frg_mn(r2s_v + i)) :
+                                              (tRS_rAcc_frg_mn(r2s_v + i) + conv);
             }
           }
 

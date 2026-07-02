@@ -239,7 +239,7 @@ public:
   static_assert(MaxThreadsPerBlock == 384, "Pingpong kernel must have 384 threads in total.");
   static const bool IsFusedM2M3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
   static const bool IsFusedM4M5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
-  static constexpr uint32_t ConsumerSubMIterations = StrassenMiGroup::numMs() == 2 ? 2 : 1;
+  static constexpr uint32_t ConsumerSubMIterations = StrassenMiGroup::numMs();// == 2 ? 2 : 1;
 
   /// Register requirement for Load and Math WGs
   static constexpr int RegsPerThread =
@@ -787,6 +787,7 @@ public:
     auto all_presumld_inputs = collective_mainloop.presumld_inputs(problem_shape_MNKL, half_problem_shape_MNKL, params.mainloop);
     auto load_inputs = collective_mainloop.get_inputs(all_inputs);
     auto load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
+    auto load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
     static_assert(cute::tuple_size_v<decltype(load_inputs)> >= 2, "Output of load_init must have at least two elements (A, B)");
 
     // Extract out partitioned A and B.
@@ -799,12 +800,12 @@ public:
     constexpr bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
     constexpr bool is_fused_m2_m3 = (StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3());
     constexpr bool is_fused_m4_m5 = (StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5());
-
+    constexpr bool is_fused_m2_m3_m6 = is_fused_m2_m3 && StrassenMiGroup::hasM6();
 
     // Get pipeline stage increments from tensor shapes
     auto k_tile_count = size<3>(gA_mkl);
     if (StrassenMiGroup::hasM0() || StrassenMiGroup::hasM1() ||
-        StrassenMiGroup::hasM6())
+        (StrassenMiGroup::hasM6() && !is_fused_m2_m3_m6))
       k_tile_count = k_tile_count/2;
 
     auto c_tile_count = CollectiveEpilogue::get_load_pipe_increment(blk_shape);
@@ -911,6 +912,15 @@ public:
           }
 
           if (StrassenMiGroup::numMs() > 1) {
+            auto get_load_inputs_for_sub_m = [&] (int load_sub_m_idx) -> decltype(load_inputs) const& {
+              if (is_fused || load_sub_m_idx == 0) {
+                return load_inputs;
+              }
+              if (load_sub_m_idx == 1) {
+                  return load_inputs2;
+              }
+              return load_inputs3;
+            };
             auto load_work_tile = [&] (decltype(work_tile_info) load_work_tile_info, int load_sub_m_idx) {
               auto load_m_coord = idx2crd(load_work_tile_info.M_idx, shape<2>(gA_mkl));
               auto load_n_coord = idx2crd(load_work_tile_info.N_idx, shape<2>(gB_nkl));
@@ -923,7 +933,8 @@ public:
                 params.mainloop, half_problem_shape_MNKL,
                 mainloop_pipeline,
                 mainloop_pipe_producer_state,
-                (is_fused || load_sub_m_idx == 0) ? load_inputs : load_inputs2,
+                (is_fused || load_sub_m_idx == 0) ? load_inputs :
+                  ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
                 load_blk_coord, load_sub_m_idx,
                 load_k_tile_iter,
                 k_tile_count,
@@ -947,6 +958,12 @@ public:
             load_work_tile(work_tile_info, 1);
             if (next_work_tile_info.is_valid()) {
               load_work_tile(next_work_tile_info, 1);
+            }
+            if (StrassenMiGroup::numMs() == 3) {
+              load_work_tile(work_tile_info, 2);
+              if (next_work_tile_info.is_valid()) {
+                load_work_tile(next_work_tile_info, 2);
+              }
             }
           } else {
             collective_mainloop.load(
@@ -1220,43 +1237,49 @@ public:
         #pragma unroll
         for (int consumer_sub_m_iter = 0; consumer_sub_m_iter < ConsumerSubMIterations; ++consumer_sub_m_iter) {
         auto sub_m_idx = consumer_sub_m_iter;
-        if (sub_m_idx == 0 || sub_m_idx == 1) {} else CUTE_GCC_UNREACHABLE;
+        if (sub_m_idx == 0 ||
+            (StrassenMiGroup::numMs() >= 2 && sub_m_idx == 1) ||
+            (StrassenMiGroup::numMs() >= 3 && sub_m_idx == 2)) {}
+        else CUTE_GCC_UNREACHABLE;
 
         // Order two Math WG's MMA one after the other, helps hide Epilogue
         math_wg_order_barrier.wait();
 
         using EpilogueTile = typename CollectiveEpilogue::EpilogueTile;
 
-        if (StrassenMiGroup::numMs() > 1) {
-          if (sub_m_idx == 0)
-            collective_mainloop.mma(
-              blk_coord, 0, problem_shape_MNKL, half_problem_shape_MNKL,
-              mainloop_pipeline,
-              mainloop_pipe_consumer_state,
-              accumulators,
-              k_tile_count,
-              warp_group_thread_idx,
-              shared_storage.tensors.mainloop,
-              shared_storage.tensors.extra_storage.presum_tensors,
-              shared_storage.tensors.extra_storage.presum_tensors2,
-              params.mainloop
-            );
-          else
-            collective_mainloop.mma(
-              blk_coord, 1, problem_shape_MNKL, half_problem_shape_MNKL,
-              mainloop_pipeline,
-              mainloop_pipe_consumer_state,
-              accumulators,
-              k_tile_count,
-              warp_group_thread_idx,
-              shared_storage.tensors.mainloop,
-              shared_storage.tensors.extra_storage.presum_tensors,
-              shared_storage.tensors.extra_storage.presum_tensors2,
-              params.mainloop
-            );
-        } else {
+        if (sub_m_idx == 0)
           collective_mainloop.mma(
-            blk_coord, sub_m_idx, problem_shape_MNKL, half_problem_shape_MNKL,
+            blk_coord, 0, problem_shape_MNKL, half_problem_shape_MNKL,
+            mainloop_pipeline,
+            mainloop_pipe_consumer_state,
+            accumulators,
+            k_tile_count,
+            warp_group_thread_idx,
+            shared_storage.tensors.mainloop,
+            shared_storage.tensors.extra_storage.presum_tensors,
+            shared_storage.tensors.extra_storage.presum_tensors2,
+            params.mainloop
+          );
+        else if (sub_m_idx == 1)
+          collective_mainloop.mma(
+            blk_coord, 1, problem_shape_MNKL, half_problem_shape_MNKL,
+            mainloop_pipeline,
+            mainloop_pipe_consumer_state,
+            accumulators,
+            k_tile_count,
+            warp_group_thread_idx,
+            shared_storage.tensors.mainloop,
+            shared_storage.tensors.extra_storage.presum_tensors,
+            shared_storage.tensors.extra_storage.presum_tensors2,
+            params.mainloop
+          );
+        else if (sub_m_idx == 2) {
+          if (StrassenMiGroup::hasM6() && is_fused_m2_m3_m6)
+            for (int i = 0; i < accumulators.size(); i++)
+              accumulators[i] = -1 * accumulators[i];
+
+          collective_mainloop.mma(
+            blk_coord, 2, problem_shape_MNKL, half_problem_shape_MNKL,
             mainloop_pipeline,
             mainloop_pipe_consumer_state,
             accumulators,
@@ -1302,6 +1325,13 @@ public:
 
         // Order two Math WG's Epilogue one after the other
         math_wg_order_barrier.wait();
+
+        if (StrassenMiGroup::hasM6() && is_fused_m2_m3_m6 && sub_m_idx == 2)
+          for (int i = 0; i < accumulators.size(); i++)
+            accumulators[i] = -1 * accumulators[i];
+
+        if (is_fused_m2_m3 && m_coord == 0 && n_coord == 0 && warp_group_thread_idx == 0)
+          MY_PRINTF("1345 %d %d %d ; %d : %f\n", is_fused, is_fused_m2_m3, StrassenMiGroup::hasM6(), sub_m_idx, accumulators[0]);
 
         if (false && StrassenMiGroup::numMs() == 2 && sub_m_idx == 1) {
           uint fused_mi = sub_m_idx;
@@ -1378,8 +1408,6 @@ public:
           load_order_barrier.arrive();
         }
 
-        if (m_coord == 0 && n_coord == 0 && warp_group_thread_idx == 0)
-          MY_PRINTF("1402 %d %d %d ; %d : %f\n", is_fused, is_fused_m2_m3, StrassenMiGroup::hasM6(), sub_m_idx, accumulators[0]);
         if (any_global_dst_valid) {
         if (!any_global_dst_final) {
           auto ret = collective_epilogue.store_m2(
@@ -1436,6 +1464,9 @@ public:
           sub_m_idx
         );
 
+        if (is_fused_m2_m3 && m_coord == 0 && n_coord == 0 && warp_group_thread_idx == 0)
+          MY_PRINTF("1402 %d %d %d ; %d : %f\n", is_fused, is_fused_m2_m3, StrassenMiGroup::hasM6(), sub_m_idx, accumulators[0]);
+
         if (false && StrassenMiGroup::numMs() == 2 && sub_m_idx == 0) {
           //Wait for all warpgroup threads to finish
           uint fused_mi = sub_m_idx;
@@ -1476,7 +1507,7 @@ public:
         // Update starting load/store pipeline states for the next tile
         // state has already been incremented by 1 tile in collective calls, advance once again for ping pong
         bool is_epi_load_needed = collective_epilogue.is_producer_load_needed();
-        if (is_epi_load_needed)
+        if (has_global_src)
           epi_load_pipe_consumer_state = epi_load_pipe_consumer_state_next_;
         epi_store_pipe_producer_state = epi_store_pipe_producer_state_next_;
 
@@ -1520,19 +1551,11 @@ public:
           scheduler.current_work_linear_idx_ - scheduler.total_grid_size_);
         if (peer_work_tile_info.is_valid()) {
           #pragma unroll
-          for (int consumer_sub_m_iter = 1; consumer_sub_m_iter < ConsumerSubMIterations; ++consumer_sub_m_iter) {
-            if (consumer_sub_m_iter == 0) {
-              math_wg_order_barrier.wait();
-              math_wg_order_barrier.arrive();
-              math_wg_order_barrier.wait();
-              math_wg_order_barrier.arrive();
-            }
-            else {
-              math_wg_order_barrier.wait();
-              math_wg_order_barrier.arrive();
-              math_wg_order_barrier.wait();
-              math_wg_order_barrier.arrive();
-            }
+          for (int consumer_sub_m_iter = 0; consumer_sub_m_iter < ConsumerSubMIterations; ++consumer_sub_m_iter) {
+            math_wg_order_barrier.wait();
+            math_wg_order_barrier.arrive();
+            math_wg_order_barrier.wait();
+            math_wg_order_barrier.arrive();
           }
         }
       }

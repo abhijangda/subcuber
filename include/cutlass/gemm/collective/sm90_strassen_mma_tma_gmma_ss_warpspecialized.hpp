@@ -324,6 +324,7 @@ struct CollectiveStrassenMma<
     // };
   };
   static const bool IsFusedM4M5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
+  static const bool IsFusedM2M3M6 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3() && StrassenMiGroup::hasM6();
 
   using AllPresums = typename StrassenMiGroup::AllPresums;
   using TensorStorage = typename SharedStorage::TensorStorage;
@@ -734,7 +735,7 @@ struct CollectiveStrassenMma<
       return make_tuple(get<StrassenMiGroup::APresums::A1S2>(load_inputs_a),
                         get<StrassenMiGroup::BPresums::B3>(load_inputs_b));
     }
-    if (StrassenMiGroup::hasM6()) {
+    if ((StrassenMiGroup::hasM6() && !IsFusedM2M3M6) || (IsFusedM2M3M6 && sub_m_idx == 2)) {
       return make_tuple(get<StrassenMiGroup::APresums::A3>(load_inputs_a),
                         get<StrassenMiGroup::BPresums::S3B2>(load_inputs_b));
     }
@@ -905,14 +906,18 @@ struct CollectiveStrassenMma<
       Tensor gA_mkl = get<0>(load_inputs);
       Tensor gB_nkl = get<1>(load_inputs);
 
-      auto& tma_load_a = (IsFusedM4M5) ? (sub_m_idx == 0 ? mainloop_params.tma_load_presum_a : mainloop_params.tma_load_presum_a) :
-                          ((StrassenMiGroup::APresumLoads().get_first_access_idx() < MmaStrassen::APresums::APresumStart) ?
-                            mainloop_params.tma_load_a :
-                            mainloop_params.tma_load_presum_a);
+      auto& tma_load_a = (IsFusedM4M5) ? mainloop_params.tma_load_presum_a :
+                          (is_fused_m2_m3 ?
+                            (sub_m_idx == 2 ? mainloop_params.tma_load_a : mainloop_params.tma_load_presum_a) :
+                            ((StrassenMiGroup::APresumLoads().get_first_access_idx() < MmaStrassen::APresums::APresumStart) ?
+                              mainloop_params.tma_load_a :
+                              mainloop_params.tma_load_presum_a));
       auto& tma_load_b = (IsFusedM4M5) ? (sub_m_idx == 0 ? mainloop_params.tma_load_presum_b : mainloop_params.tma_load_b) :
-                          ((StrassenMiGroup::BPresumLoads().get_first_access_idx() < MmaStrassen::BPresums::BPresumStart) ?
-                            mainloop_params.tma_load_b : 
-                            mainloop_params.tma_load_presum_b);
+                          (is_fused_m2_m3 ?
+                            mainloop_params.tma_load_presum_b :
+                            ((StrassenMiGroup::BPresumLoads().get_first_access_idx() < MmaStrassen::BPresums::BPresumStart) ?
+                              mainloop_params.tma_load_b : 
+                              mainloop_params.tma_load_presum_b));
 
       auto block_tma_a = tma_load_a.get_slice(cluster_local_block_id.y);
       auto block_tma_b = tma_load_b.get_slice(cluster_local_block_id.x);
