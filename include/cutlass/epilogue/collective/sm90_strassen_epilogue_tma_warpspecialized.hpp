@@ -339,6 +339,14 @@ public:
         take<0,2>(SmemLayoutD{}),
         EpilogueTile{},
         _1{}));
+
+    using TMA_D_ADD = decltype(make_tma_copy(
+      SM90_TMA_REDUCE_ADD{},
+      make_tensor(make_gmem_ptr<TmaElementD>(nullptr),
+        repeat_like(StrideD{}, int32_t(0)), StrideD{}),
+      take<0,2>(SmemLayoutD{}),
+      EpilogueTile{},
+      _1{}));
     
     // using TMA_D = decltype(make_tma_copy(
     //     CopyOpS2G{},
@@ -353,6 +361,8 @@ public:
     TMA_C tma_load_postsum_m;
     TMA_D tma_store_postsum_m;
     TMA_D tma_store_d;
+    TMA_D_ADD tma_add_postsum_m;
+    TMA_D_ADD tma_add_d;
     uint32_t tma_transaction_bytes = TmaTransactionBytes;
 
     using TMA_PresumLoad_A = decltype(make_tma_copy(
@@ -411,6 +421,13 @@ public:
         tensor_store_m,
         take<0,2>(SmemLayoutD{}),
         EpilogueTile{});
+
+    typename Params::TMA_D_ADD tma_add_postsum_m{};
+    tma_add_postsum_m = make_tma_copy_C_sm90(
+      SM90_TMA_REDUCE_ADD{},
+      tensor_store_m,
+      take<0,2>(SmemLayoutD{}),
+      EpilogueTile{});
     
     typename Params::TMA_PresumLoad_A tma_load_presumld_a{};
     Tensor tensor_presum_ld_a = make_tensor(make_gmem_ptr<TmaElementD>(ptr_presum_load_A), make_layout(make_shape(M,N,L), make_stride(get<0>(args.dD), get<1>(args.dD), get<2>(args.dD))));
@@ -421,10 +438,16 @@ public:
         PresumSmemLayoutA__{});
 
     typename Params::TMA_D tma_store_d{};
+    typename Params::TMA_D_ADD tma_add_d{};
     if constexpr (is_destination_supported) {
       Tensor tensor_d = make_tensor(make_gmem_ptr<TmaElementD>(args.ptr_D), make_layout(make_shape(M,N,L), args.dD));
       tma_store_d = make_tma_copy_C_sm90(
           CopyOpS2G{},
+          tensor_d,
+          take<0,2>(SmemLayoutD{}),
+          EpilogueTile{});
+      tma_add_d = make_tma_copy_C_sm90(
+          SM90_TMA_REDUCE_ADD{},
           tensor_d,
           take<0,2>(SmemLayoutD{}),
           EpilogueTile{});
@@ -446,6 +469,8 @@ public:
       tma_load_postsum_m,
       tma_store_postsum_m,
       tma_store_d,
+      tma_add_postsum_m,
+      tma_add_d,
       transaction_bytes,
       tma_load_presumld_a,
       tma_load_linear_m,
@@ -1008,6 +1033,25 @@ public:
     }
   }
 
+struct SM90_BULK_TMA_ADD_S2G
+{
+  CUTE_HOST_DEVICE static void
+  copy(void const* smem_ptr,
+       void      * gmem_ptr, int32_t store_bytes)
+  {
+#if defined(CUTE_ARCH_TMA_SM90_ENABLED)
+    uint32_t smem_int_ptr  = cast_smem_ptr_to_uint(smem_ptr);
+    asm volatile("cp.reduce.async.bulk.global.shared::cta.bulk_group.add.noftz.f16 [%0], [%1], %2;\n"
+                     :
+                     : "l"(gmem_ptr), "r"(smem_int_ptr), "r"(store_bytes)
+                     : "memory");
+#else
+    CUTE_INVALID_CONTROL_PATH("Trying to use BULK_COPY without CUTE_ARCH_TMA_SM90_ENABLED.");
+#endif
+  }
+};
+
+
   template<
     class ProblemShapeMNKL,
     class TileShapeMNK,
@@ -1101,7 +1145,11 @@ public:
         auto smem = &ptr_smem_st[(smem_st_index * NumThreadsPerWarpGroup)/VECTOR_ELEMS];
         // cutlass::Array<ElementD, 8>* st_ptr = (cutlass::Array<ElementD, 8>*)&postsum_m0[write_stage*STAGE_ELEMS*128 + (stage - STAGE_ELEMS)*128];
         auto st_ptr = &postsum_m0[stage*NumThreadsPerWarpGroup];
-        SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+        if (IsFusedM4M5) {
+          SM90_BULK_TMA_ADD_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+        } else {
+          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+        }
         store_pipeline.producer_commit(store_pipe_producer_state);
       }
 
@@ -1144,7 +1192,7 @@ public:
       ProblemShapeMNKL problem_shape_mnkl,
       TileShapeMNK tile_shape_MNK,
       TileCoordMNKL tile_coord_mnkl, int sub_m_idx,
-      cute::Tensor<AccEngine,AccLayout> accumulators,
+      cute::Tensor<AccEngine,AccLayout>& accumulators_ref,
       TiledMma tiled_mma,
       int thread_idx,
       TensorStorage& shared_tensors,
@@ -1154,7 +1202,9 @@ public:
     using ElementAccumulator = typename AccEngine::value_type;
     using ElementCompute_ = typename epilogue::fusion::FusionCallbacksTraits<FusionCallbacks>::ElementCompute;
     using ElementCompute = cute::conditional_t<cute::is_void_v<ElementCompute_>,ElementAccumulator,ElementCompute_>;
-
+    constexpr bool IsFusedM2M3M6 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3() && StrassenMiGroup::hasM6();
+    cute::Tensor<AccEngine,AccLayout> accumulators_copy = accumulators_ref;
+    cute::Tensor<AccEngine,AccLayout>& accumulators = IsFusedM4M5 ? accumulators_copy : accumulators_ref;
     static_assert(is_rmem<AccEngine>::value, "Accumulator must be RF resident.");
     static_assert(rank(AccLayout{}) == 3, "Accumulator must be MMA-partitioned: (MMA,MMA_M,MMA_N)");
     static_assert(rank(ProblemShapeMNKL{}) == 4, "ProblemShapeMNKL must be rank 4");
@@ -1172,12 +1222,12 @@ public:
     auto coord_shape = conditional_return<is_im2col_D>( 
         make_coord(m_coord, n_coord),
         make_coord(m_coord, n_coord, l_coord));
-    constexpr bool IsFusedM2M3M6 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3() && StrassenMiGroup::hasM6(); 
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
     PostsumOp first_store_srcs[4], second_store_srcs[4];
     auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutFinal, first_store_srcs);
     PostsumOp first_store_dest = get<1>(first_store_tuple);
     auto& tma_store_dorm = get<2>(first_store_tuple) ? params.tma_store_postsum_m : params.tma_store_d ;
+    auto& tma_add_dorm = get<2>(first_store_tuple) ? params.tma_add_postsum_m : params.tma_add_d;
     Tensor mD_mn = get<0>(first_store_tuple);
     Tensor mD = coalesce(mD_mn, take<0,2>(CtaTileMNK{}));
     Tensor gD = local_tile(mD, take<0,2>(CtaTileMNK{}), coord_shape);                                  // (CTA_M,CTA_N)
@@ -1398,7 +1448,18 @@ public:
       synchronize(); // ensure all threads have issued their async fence
       if constexpr (is_destination_supported) {
         if (issue_tma_store) {
-          copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+          if (IsFusedM4M5) {
+            if (thread_idx == 0) {
+              Tensor sD_tile = group_modes<0,2>(sD_epi(_,_,store_pipe_producer_state.index()));
+              Tensor gD_tile = group_modes<0,2>(gD_epi(_,_,epi_m,epi_n));
+              copy(tma_add_dorm,
+                   sD_tile,
+                   gD_tile);
+            }
+            // copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+          } else {
+            copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+          }
 
           if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim() && thread_idx == 0) {
             //TODO: Can distribute writes over all threads a warp similar to layoutfinal copy
