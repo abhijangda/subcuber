@@ -1219,7 +1219,9 @@ struct CollectiveStrassenMma<
         a2 = *(PresumVecTypeA*)smem_a2_ptr;
         a3 = *(PresumVecTypeA*)smem_a3_ptr;
 
-
+        if (NumMMAThreads == 256) {
+          asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
+        }
         // if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A0))
       //   PresumDetail::shared_load_128b(&a0, sharedPreSums.get(presumAComputeLoads.indzex(MmaStrassen::APresums::A0), presum_read_stage, 0));
         // if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A1))
@@ -1303,8 +1305,8 @@ struct CollectiveStrassenMma<
 
           if (NumMMAThreads == 256) {
             //Only needed in cooperative and not in pingpong?
-            cutlass::arch::fence_view_async_shared();
-            asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
+            // cutlass::arch::fence_view_async_shared();
+            // asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
           }
 
           //Do not need this before pipeline.cosumer_release would synchronize
@@ -1363,7 +1365,6 @@ struct CollectiveStrassenMma<
       for (int v = 0; v < 1; v += 1) {
         // iter_PresumA_M.reset();
         // iter_PresumA_M.row += presumIter * iter_PresumA_M.row_increment();
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
 
         PresumVecTypeB b0; b0.clear();
         PresumVecTypeB b1; b1.clear();
@@ -1379,6 +1380,10 @@ struct CollectiveStrassenMma<
         b1 = *(PresumVecTypeB*)smem_b1_ptr;
         b2 = *(PresumVecTypeB*)smem_b2_ptr;
         b3 = *(PresumVecTypeB*)smem_b3_ptr;
+
+        if (NumMMAThreads == 256) {
+          asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
+        }
 
         PresumIOToComputeTypeB presum_io_to_compute_type;
         PresumComputeToIOTypeB presum_compute_to_io_type;
@@ -1405,8 +1410,8 @@ struct CollectiveStrassenMma<
 
           if (NumMMAThreads == 256) {
             //Only needed in cooperative and not in pingpong?
-            cutlass::arch::fence_view_async_shared();
-            asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
+            // cutlass::arch::fence_view_async_shared();
+            // asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
           }
 
           // asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(128));
