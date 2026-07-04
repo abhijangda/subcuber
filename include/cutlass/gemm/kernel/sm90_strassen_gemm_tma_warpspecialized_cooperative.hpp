@@ -975,6 +975,10 @@ public:
             (StrassenMiGroup::numMs() >= 3 && sub_m_idx == 2)) {}
         else CUTE_GCC_UNREACHABLE;
 
+        if (is_fused_m2_m3 && sub_m_idx == 0) {
+          load_order_barrier.arrive();
+        }
+
         if (TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
           if (StrassenMiGroup::hasM6() && is_fused_m2_m3_m6 && sub_m_idx == 2)
             for (int i = 0; i < accumulators.size(); i++)
@@ -1054,9 +1058,7 @@ public:
           }
         }
 
-        if (has_global_src) {
-          load_order_barrier.arrive();
-        }
+        
 
         if (TileScheduler::compute_epilogue(work_tile_info, params.scheduler) && any_global_dst_valid) {
           // Epilogue and write to gD

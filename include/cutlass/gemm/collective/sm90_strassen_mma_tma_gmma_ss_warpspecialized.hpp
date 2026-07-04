@@ -1220,6 +1220,7 @@ struct CollectiveStrassenMma<
         a3 = *(PresumVecTypeA*)smem_a3_ptr;
 
         if (NumMMAThreads == 256) {
+          //Only needed in cooperative not in pingpong?
           asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
         }
         // if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A0))
@@ -1382,6 +1383,7 @@ struct CollectiveStrassenMma<
         b3 = *(PresumVecTypeB*)smem_b3_ptr;
 
         if (NumMMAThreads == 256) {
+          //Only needed in cooperative not in pingpong?
           asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
         }
 
