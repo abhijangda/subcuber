@@ -112,13 +112,27 @@ constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // M
 using ElementAccumulator  = float;                                          // Element type for internal accumulation
 using ArchTag             = cutlass::arch::Sm90;                            // Tag indicating the minimum SM that supports the intended feature
 using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
+
+#if defined(PINGPONG)
 using TileShape           = Shape<_128,_128,_64>;                           // Threadblock-level tile size
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 6 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = 6 ;
 using PresumTileShapeA    = Shape<_2, _128>;
 using PresumTileShapeB    = Shape<_2, _128>;
-using KernelSchedule = cutlass::gemm::collective::KernelScheduleAuto;       // Kernel to launch based on the default setting in the Collective Builder
+using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
+using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized;
+#elif defined(COOPERATIVE)
+using TileShape           = Shape<_128,_256,_64>;                           // Threadblock-level tile size
+using ClusterShape        = Shape<_1,_2,_1>;                                // Shape of the threadblocks in a cluster
+const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
+const uint StageCountTypeM2M6 = 4 ;
+using PresumTileShapeA    = Shape<_2, _256>;
+using PresumTileShapeB    = Shape<_2, _256>;
+using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
+using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecializedCooperative;
+#endif
+
 using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
 //StageCount = 6 is a little slower than this with swizzle = 8.
 //TODO: Stages 5 produces wrong results for C2
@@ -175,12 +189,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
-                                                                                FusedMiGroup<7, 4>>
+                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>>, //TODO: Change this to true
+                                                                                // FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                      //  ParallelMiGroups<false, FusedMiGroup<7, 4>>,
+                                                       ParallelMiGroups<false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
@@ -243,6 +257,7 @@ using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenG
                                                                        ElementA, LayoutA, ElementB, LayoutB,
                                                                        ElementC, LayoutC,
                                                                        ElementAccumulator, TileShape, ClusterShape,
+                                                                       KernelSchedule, EpilogueSchedule,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
                                                                        PresumOpts>;
@@ -569,7 +584,7 @@ bool verify(const Options &options) {
       }
     }
 
-    // //C1
+    //C1
     if (r < options.m/2 && c >= options.n/2) {
       if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
         printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
@@ -585,7 +600,7 @@ bool verify(const Options &options) {
       }
     }
 
-    // //C3
+    //C3
     if (r >= options.m/2 && c >= options.n/2) {
       if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
         printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);

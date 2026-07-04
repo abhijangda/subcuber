@@ -150,7 +150,9 @@ struct CollectiveStrassenMma<
   using PresumIOToComputeTypeA = NumericArrayConverter<PresumComputeType, ElementA, PresumVecTypeA::kElements>;
   using PresumComputeToIOTypeB = NumericArrayConverter<ElementA, PresumComputeType, PresumVecTypeB::kElements>;
   using PresumIOToComputeTypeB = NumericArrayConverter<PresumComputeType, ElementA, PresumVecTypeB::kElements>;
-  static const int kPresumThreads = 32 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
+  static const int NumMMAThreads = size(TiledMma{});
+  static constexpr int PresumStoreWarpSize = NumMMAThreads/4;
+  static const int kPresumThreads = NumMMAThreads/4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<ElementA, kPresumThreads,  
                                                              PresumShape, PresumStoreVecType, false, false>;
   using PresumGlobalIteratorB = PresumDetail::GlobalIterator<ElementB, kPresumThreads, 
@@ -1189,9 +1191,10 @@ struct CollectiveStrassenMma<
                        PresumOutputs& all_presum_outputs, Params const& mainloop_params) {
     // uint thread_idx = threadIdx.x - 128;
     if (StrassenMiGroup::hasM0() && StrassenMiGroup::AllPresums::computeAnyAPresum() && 
-        presumIter < presumComputeIterationsA*1 and thread_idx < 128) {
+        presumIter < presumComputeIterationsA*1 and thread_idx < NumMMAThreads) {
       //This code above mac_loop_iter gives some improvement.
       //Changes done after commit: 853df006e0f2bfad3313460b2fcfdabb15d31067
+      asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
 
       for (int v = 0; v < 1; v += 1) {
         // iter_PresumA_M.reset();
@@ -1298,6 +1301,12 @@ struct CollectiveStrassenMma<
           *(PresumVecTypeA*)smem_s2_ptr = presum_compute_to_io_type(s2);
           *(PresumVecTypeA*)smem_a1s2_ptr = presum_compute_to_io_type(a1s2);
 
+          if (NumMMAThreads == 256) {
+            //Only needed in cooperative and not in pingpong?
+            cutlass::arch::fence_view_async_shared();
+            asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
+          }
+
           //Do not need this before pipeline.cosumer_release would synchronize
           // asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(128));
 
@@ -1354,6 +1363,7 @@ struct CollectiveStrassenMma<
       for (int v = 0; v < 1; v += 1) {
         // iter_PresumA_M.reset();
         // iter_PresumA_M.row += presumIter * iter_PresumA_M.row_increment();
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
 
         PresumVecTypeB b0; b0.clear();
         PresumVecTypeB b1; b1.clear();
@@ -1393,6 +1403,12 @@ struct CollectiveStrassenMma<
           *(PresumVecTypeB*)smem_s3_ptr = presum_compute_to_io_type(s3);
           *(PresumVecTypeB*)smem_s3b2_ptr = presum_compute_to_io_type(s3b2);
 
+          if (NumMMAThreads == 256) {
+            //Only needed in cooperative and not in pingpong?
+            cutlass::arch::fence_view_async_shared();
+            asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
+          }
+
           // asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(128));
         }
 
@@ -1411,7 +1427,7 @@ struct CollectiveStrassenMma<
                        PresumStoreVecType& e2) {
     // uint thread_idx = threadIdx.x - 128;
     if (StrassenMiGroup::hasM0() && StrassenMiGroup::AllPresums::computeAnyAPresum() &&
-        presumIter < presumComputeIterationsA*1 and thread_idx < 128) {
+        presumIter < presumComputeIterationsA*1 and thread_idx < NumMMAThreads) {
         if (true) {
           int presum_tile = presumIter/kPresumComputeIterationsA;
           presumIter = presumIter - presum_tile*kPresumComputeIterationsA;
@@ -1420,15 +1436,14 @@ struct CollectiveStrassenMma<
           // asm volatile("wgmma.fence.sync.aligned;");
           // __syncwarp();
           // asm volatile("bar.sync %0, %1;" : : "r"(3), "r"(128));
-
-          PresumStoreVecType data[kPresumThreads/32];
+          PresumStoreVecType data[kPresumThreads/PresumStoreWarpSize];
 
           //TODO: Following code is probably wrong but it works when PresumShapeTile's row is 2 and 4
-          if (kPresumThreads < 128 /*NumThreadsPerWarpGroup*/) {
+          if (kPresumThreads < NumMMAThreads /*NumThreadsPerWarpGroup*/) {
             if (last_presum_iters) {
-              #pragma unroll (kPresumThreads/32)
-              for (int wid_ = 0; wid_ < kPresumThreads/32; wid_++) {
-                int wid = wid_*(kPresumThreads/32) + thread_idx / kPresumThreads;
+              #pragma unroll (kPresumThreads/PresumStoreWarpSize)
+              for (int wid_ = 0; wid_ < kPresumThreads/PresumStoreWarpSize; wid_++) {
+                int wid = wid_*(kPresumThreads/PresumStoreWarpSize) + thread_idx / kPresumThreads;
                 auto smem_dst_ptr = shared_presum_tensors.smem_A0.data() +
                                     presum_write_stage * PresumSingleStageSize +
                                     wid * PresumSmemSize +
@@ -1441,17 +1456,17 @@ struct CollectiveStrassenMma<
             // asm volatile("bar.cta.sync %0, %1;" : : "r"(3), "r"(128));
 
             if (last_presum_iters) {
-              #pragma unroll (kPresumThreads/32)
-              for (int wid_ = 0; wid_ < kPresumThreads/32; wid_++) {
-                int wid = wid_*(kPresumThreads/32) + thread_idx / kPresumThreads;
+              #pragma unroll (kPresumThreads/PresumStoreWarpSize)
+              for (int wid_ = 0; wid_ < kPresumThreads/PresumStoreWarpSize; wid_++) {
+                int wid = wid_*(kPresumThreads/PresumStoreWarpSize) + thread_idx / kPresumThreads;
                 arch::global_store<PresumStoreVecType, sizeof(PresumStoreVecType)>(data[wid_], ((ElementA*)iter_PresumA_M.get(0)) + wid*iter_PresumA_M.extent.row()*iter_PresumA_M.extent.column(),
                                                                                   iter_PresumA_M.validTB() && iter_PresumA_M.valid());
               }
             }
           } else {
             if (last_presum_iters) {
-              #pragma unroll (kPresumThreads/32)
-              for (int wid_ = 0; wid_ < kPresumThreads/32; wid_++) {
+              #pragma unroll (kPresumThreads/PresumStoreWarpSize)
+              for (int wid_ = 0; wid_ < kPresumThreads/PresumStoreWarpSize; wid_++) {
                 int wid = wid_;
                 auto smem_dst_ptr = shared_presum_tensors.smem_A0.data() +
                                     presum_write_stage * PresumSingleStageSize +
@@ -1465,8 +1480,8 @@ struct CollectiveStrassenMma<
             // asm volatile("bar.cta.sync %0, %1;" : : "r"(3), "r"(128));
 
             if (last_presum_iters) {
-              #pragma unroll (kPresumThreads/32)
-              for (int wid_ = 0; wid_ < kPresumThreads/32; wid_++) {
+              #pragma unroll (kPresumThreads/PresumStoreWarpSize)
+              for (int wid_ = 0; wid_ < kPresumThreads/PresumStoreWarpSize; wid_++) {
                 int wid = wid_;
                 arch::global_store<PresumStoreVecType, sizeof(PresumStoreVecType)>(data[wid_], ((ElementA*)iter_PresumA_M.get(0)) + wid*iter_PresumA_M.extent.row()*iter_PresumA_M.extent.column(),
                                                                                   iter_PresumA_M.validTB() && iter_PresumA_M.valid());
@@ -1514,14 +1529,14 @@ struct CollectiveStrassenMma<
           // __syncwarp();
           // asm volatile("bar.sync %0, %1;" : : "r"(3), "r"(128));
 
-          PresumStoreVecType data[kPresumThreads/32];
-          if (kPresumThreads < 128) {
+          PresumStoreVecType data[kPresumThreads/PresumStoreWarpSize];
+          if (kPresumThreads < NumMMAThreads) {
             // data[0].fill(ElementA(0));
             //TODO: Following code is probably wrong but it works when PresumShapeTile's row is 2 and 4
             if (last_presum_iters) {
-              #pragma unroll (kPresumThreads/32)
-              for (int wid_ = 0; wid_ < kPresumThreads/32; wid_++) {
-                int wid = wid_*(kPresumThreads/32) + thread_idx / kPresumThreads;
+              #pragma unroll (kPresumThreads/PresumStoreWarpSize)
+              for (int wid_ = 0; wid_ < kPresumThreads/PresumStoreWarpSize; wid_++) {
+                int wid = wid_*(kPresumThreads/PresumStoreWarpSize) + thread_idx / kPresumThreads;
                 auto smem_dst_ptr = shared_presum_tensors.smem_A0.data() +
                                     presum_write_stage * PresumSingleStageSize +
                                     wid * PresumSmemSize +
@@ -1534,9 +1549,9 @@ struct CollectiveStrassenMma<
             // asm volatile("bar.cta.sync %0, %1;" : : "r"(3), "r"(128));
 
             if (last_presum_iters) {
-              #pragma unroll (kPresumThreads/32)
-              for (int wid_ = 0; wid_ < kPresumThreads/32; wid_++) {
-                int wid = wid_*(kPresumThreads/32) + thread_idx / kPresumThreads;
+              #pragma unroll (kPresumThreads/PresumStoreWarpSize)
+              for (int wid_ = 0; wid_ < kPresumThreads/PresumStoreWarpSize; wid_++) {
+                int wid = wid_*(kPresumThreads/PresumStoreWarpSize) + thread_idx / kPresumThreads;
                 // if (wid == 2&& threadIdx.x%32 == 0 && m_coord < 32 && n_coord == 0)
                   // printf("1478 %d %d %d : %p %f ; %d %d\n", m_coord, presumIter, presum_tile, iter_PresumB_M.get(0), float(data[wid_][0]), iter_PresumB_M.row, iter_PresumB_M.col);
                 arch::global_store<PresumStoreVecType, sizeof(PresumStoreVecType)>(data[wid_], ((ElementB*)iter_PresumB_M.get(0)) + wid*iter_PresumB_M.extent.row()*iter_PresumB_M.extent.column(),
@@ -1545,8 +1560,8 @@ struct CollectiveStrassenMma<
             }
           } else {
             if (last_presum_iters) {
-              #pragma unroll (kPresumThreads/32)
-              for (int wid_ = 0; wid_ < kPresumThreads/32; wid_++) {
+              #pragma unroll (kPresumThreads/PresumStoreWarpSize)
+              for (int wid_ = 0; wid_ < kPresumThreads/PresumStoreWarpSize; wid_++) {
                 int wid = wid_;
                 auto smem_dst_ptr = shared_presum_tensors.smem_A0.data() +
                                     presum_write_stage * PresumSingleStageSize +
@@ -1560,8 +1575,8 @@ struct CollectiveStrassenMma<
             // asm volatile("bar.cta.sync %0, %1;" : : "r"(3), "r"(128));
 
             if (last_presum_iters) {
-              #pragma unroll (kPresumThreads/32)
-              for (int wid_ = 0; wid_ < kPresumThreads/32; wid_++) {
+              #pragma unroll (kPresumThreads/PresumStoreWarpSize)
+              for (int wid_ = 0; wid_ < kPresumThreads/PresumStoreWarpSize; wid_++) {
                 int wid = wid_;
                 // if (wid == 2&& threadIdx.x%32 == 0 && m_coord < 32 && n_coord == 0)
                   // printf("1478 %d %d %d : %p %f ; %d %d\n", m_coord, presumIter, presum_tile, iter_PresumB_M.get(0), float(data[wid_][0]), iter_PresumB_M.row, iter_PresumB_M.col);
@@ -1641,6 +1656,7 @@ struct CollectiveStrassenMma<
                   "Stride of the first mode must be 0 and the size of the mode must be NumThreadsPerWarpGroup");
 
     constexpr int MmaWarpGroups = size(TiledMma{}) / NumThreadsPerWarpGroup;
+
     Layout warp_group_thread_layout = make_layout(Int<MmaWarpGroups>{},
                                                   Int<NumThreadsPerWarpGroup>{});
 

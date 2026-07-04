@@ -141,7 +141,7 @@ static __global__ void presumcheck(uint R, uint C, Elem* A, Elem* presum) {
   for (int c = 0; c < C/1024; c++) {
     col = c*blockDim.x + threadIdx.x;
     //For B, set c == 0 && row < R. For A, set row == 0 && c < C
-    if (presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
+    if (col == 0 && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
       printf("63: %d %d: %f; %p\n", row, col,
             float(presum[2*R*C+row*C+col]),
             &presum[2*R*C+row*C+col]);
@@ -177,7 +177,8 @@ struct PresumOpt {
 template<typename StrassenGroups_,
          typename ElementA, typename LayoutA, typename ElementB, typename LayoutB,
          typename ElementC, typename LayoutC, typename ElementAccum, typename TileShape,
-         typename ClusterShape, typename StageCount,
+         typename ClusterShape, typename KernelSchedule, typename EpilogueSchedule,
+         typename StageCount,
          typename PresumTileShapeA = void, typename PresumTileShapeB = void,
          typename PresumOpt_ = void>
 class StrassenGemmKernels {
@@ -198,7 +199,7 @@ public:
     ElementAccum, ElementAccum,
     ElementC, LayoutC, AlignmentC,
     ElementC, LayoutC, AlignmentC,
-    cutlass::epilogue::TmaWarpSpecialized,
+    EpilogueSchedule,
     cutlass::epilogue::fusion::LinearCombination<
       cutlass::half_t,
       float,
@@ -217,8 +218,7 @@ public:
     typename std::conditional<StrassenMiGroup::hasAnyM(), typename StrassenMiGroup::ThreadBlockShape, DefaultTileShape>::type,
     ClusterShape,
     typename StrassenMiGroup::StageCountType,
-    // cutlass::gemm::collective::KernelScheduleAuto
-    cutlass::gemm::KernelTmaWarpSpecializedPingpong,
+    KernelSchedule,
     PresumTileShapeA,
     PresumTileShapeB,
     PresumOpt
@@ -1164,8 +1164,8 @@ public:
 
     if (false) {
       cudaDeviceSynchronize();
-      #if 0
-      uint R = 8*1024/2, C = 9*1024/2;
+      #if 1
+      uint R = 8*1024/2, C = 8*1024/2;
       ElementB* h_presum_b = new ElementB[R*C];
       ElementB* b = new ElementB[2*R*2*C];
       cudaMemcpy(h_presum_b, &paramsM0_.presum_m_b_workspace[2*R*C], R*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
@@ -1195,7 +1195,7 @@ public:
         if (to_break) break;
       }
       #endif
-      presumcheck<ElementA><<<paramsM0_.get_problem_shape_k()/2,1024>>>(paramsM0_.get_problem_shape_k(), paramsM0_.get_problem_shape_n(), paramsM0_.ptr_B, paramsM0_.presum_m_b_workspace);
+      // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k()/2,1024>>>(paramsM0_.get_problem_shape_k(), paramsM0_.get_problem_shape_n(), paramsM0_.ptr_A, paramsM0_.presum_m_b_workspace);
       cudaDeviceSynchronize();
       exit(EXIT_SUCCESS);
     }

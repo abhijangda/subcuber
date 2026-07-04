@@ -271,7 +271,7 @@ private:
   static const uint StagesC = StrassenMiGroup::hasM0() ? 2 : ((is_fused_m2_m3) ? 4 : (is_fused_m4_m5 ? 4 : 4));
   static const uint StagesD = (is_fused_m2_m3) ? 4 : (is_fused_m4_m5 ? 4 : 2);
   using EpilogueTile_MN = cute::conditional_t<StrassenMiGroup::hasM0() or StrassenMiGroup::hasM1() or StrassenMiGroup::hasM2() or StrassenMiGroup::hasM3() or is_fused_m4_m5,
-                                              cute::tuple<_64, _32>,
+                                              cute::conditional_t<cute::is_same_v<Schedule, TmaWarpSpecializedCooperative>, cute::tuple<_128, _32>, cute::tuple<_64, _32>>,
                           decltype(detail::sm90_compute_tile_shape_or_override<ElementD, EpilogueTileType, Schedule, TileShape_MNK>())>;
   using DispatchPolicy = cute::conditional_t<StrassenMiGroup::hasM0()/* or StrassenMiGroup::hasM1() or StrassenMiGroup::hasM2() or StrassenMiGroup::hasM3() or is_fused_m4_m5)*/,
                                              cutlass::epilogue::Sm90TmaWarpSpecialized<StagesC, StagesD, size<1>(EpilogueTile_MN{})/2, true, false>,

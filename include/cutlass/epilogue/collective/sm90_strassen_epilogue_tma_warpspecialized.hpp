@@ -788,7 +788,7 @@ public:
     // Pre-loop fusion callback entry point
     pld_callbacks.begin();
 
-    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<0>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
+    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
     uint STAGE_ELEMS = size<0>(EpilogueTile{}) * size<1>(EpilogueTile{});
 
     if (StrassenMiGroup::hasM5()) {
@@ -877,7 +877,7 @@ public:
     // Indexing variables
     auto [M, N, K, L] = problem_shape_mnkl;
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
-    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<0>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
+    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
     uint STAGE_ELEMS = size<0>(EpilogueTile{}) * size<1>(EpilogueTile{});
     uint NUM_STAGES = (size<0>(TileShapeMNK{}) * size<1>(TileShapeMNK{}))/STAGE_ELEMS;
     cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)epilogue_tensors.collective.smem_C.begin();
@@ -956,9 +956,9 @@ public:
 
     auto [M, N, K, L] = problem_shape_mnkl;
 
-    uint NumThreadsPerWarpGroup = 128;
+    uint NumMMAThreads = size(TiledMma{});
 
-    uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{}))/NumThreadsPerWarpGroup;
+    uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{}))/NumMMAThreads;
     uint VECTOR_ELEMS = 8;
 
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
@@ -966,24 +966,24 @@ public:
 
     if (StagesD > 1) {
       //Multiple stage using TMA
-      uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumThreadsPerWarpGroup;
+      uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumMMAThreads;
       bool issue_tma_store = thread_idx == 0;
       uint stage = 0;
       for (int e = 0; e < STAGE_ELEMS; e += VECTOR_ELEMS) {
         cutlass::Array<ElementD, 8> arr = converter(arrs[(stage + e)/VECTOR_ELEMS]);
-        ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumThreadsPerWarpGroup/VECTOR_ELEMS +
-                 thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup] = arr;
+        ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumMMAThreads/VECTOR_ELEMS +
+                 thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads] = arr;
       }
 
       for (; stage < accumulators.size(); stage += STAGE_ELEMS) {
         cutlass::arch::fence_view_async_shared();
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumThreadsPerWarpGroup));
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumMMAThreads));
 
         if (issue_tma_store) {
-          auto smem = &ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumThreadsPerWarpGroup/VECTOR_ELEMS];
+          auto smem = &ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumMMAThreads/VECTOR_ELEMS];
           // cutlass::Array<ElementD, 8>* st_ptr = (cutlass::Array<ElementD, 8>*)&postsum_m0[write_stage*STAGE_ELEMS*128 + (stage - STAGE_ELEMS)*128];
-          auto st_ptr = &postsum_m0[stage*NumThreadsPerWarpGroup];
-          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+          auto st_ptr = &postsum_m0[stage*NumMMAThreads];
+          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
           store_pipeline.producer_commit(store_pipe_producer_state);
         }
 
@@ -991,42 +991,42 @@ public:
 
         if (issue_tma_store)
           store_pipeline.producer_acquire(store_pipe_producer_state);
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumThreadsPerWarpGroup));
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumMMAThreads));
 
         if (stage + STAGE_ELEMS < accumulators.size())
           for (int e = 0; e < STAGE_ELEMS; e += VECTOR_ELEMS) {
             cutlass::Array<ElementD, 8> arr = converter(arrs[(stage + STAGE_ELEMS + e)/VECTOR_ELEMS]);
-            ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumThreadsPerWarpGroup/VECTOR_ELEMS +
-                    thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup] = arr;
+            ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumMMAThreads/VECTOR_ELEMS +
+                    thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads] = arr;
           }
       }
 
       return cute::make_tuple(load_pipe_consumer_state, store_pipe_producer_state);
     } else {
       //Single stage using TMA
-      uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumThreadsPerWarpGroup;
+      uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumMMAThreads;
       bool issue_tma_store = thread_idx == 0;
       uint stage = 0;
 
       for (; stage < accumulators.size(); stage += STAGE_ELEMS) {
         for (int e = 0; e < STAGE_ELEMS; e += VECTOR_ELEMS) {
           cutlass::Array<ElementD, 8> arr = converter(arrs[(stage + e)/VECTOR_ELEMS]);
-          ptr_smem[thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup] = arr;
+          ptr_smem[thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads] = arr;
         }
 
         cutlass::arch::fence_view_async_shared();
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumThreadsPerWarpGroup));
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumMMAThreads));
 
         if (issue_tma_store) {
           auto smem = &ptr_smem[0];
           // cutlass::Array<ElementD, 8>* st_ptr = (cutlass::Array<ElementD, 8>*)&postsum_m0[write_stage*STAGE_ELEMS*128 + (stage - STAGE_ELEMS)*128];
-          auto st_ptr = &postsum_m0[stage*NumThreadsPerWarpGroup];
-          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+          auto st_ptr = &postsum_m0[stage*NumMMAThreads];
+          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
           asm volatile("cp.async.bulk.commit_group;");
           cute::tma_store_wait<0>();
         }
 
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumThreadsPerWarpGroup));
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumMMAThreads));
       }
 
       return cute::make_tuple(load_pipe_consumer_state, store_pipe_producer_state);
@@ -1086,7 +1086,7 @@ struct SM90_BULK_TMA_ADD_S2G
 
     auto [M, N, K, L] = problem_shape_mnkl;
 
-    constexpr uint NumThreadsPerWarpGroup = 128;
+    constexpr uint NumMMAThreads = size(TiledMma{});
 
     uint VECTOR_ELEMS = 8;
 
@@ -1096,7 +1096,7 @@ struct SM90_BULK_TMA_ADD_S2G
     postsum_m0 = postsum_m0 + (dest_global_op.get_op())*(M/2)*(N/2);
 
     //Multiple stage using TMA
-    constexpr uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumThreadsPerWarpGroup;
+    constexpr uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumMMAThreads;
     bool issue_tma_store = thread_idx == 0;
     
     const bool is_producer_load_needed = src_global_op.valid() && src_global_op.is_mem_global() && src_global_op.is_layout_interim();
@@ -1118,7 +1118,7 @@ struct SM90_BULK_TMA_ADD_S2G
       if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
           MY_PRINTF("1071 EpiStore %d: %d %d : %d\n", threadIdx.x, m_coord, n_coord, stage);
       //Load smem here
-      asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumThreadsPerWarpGroup));
+      asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumMMAThreads));
       uint smem_st_index =  (store_pipe_producer_state.index()* STAGE_ELEMS);
       uint smem_ld_index =  (load_wait_state.index()* STAGE_ELEMS);
 
@@ -1126,29 +1126,31 @@ struct SM90_BULK_TMA_ADD_S2G
       for (int e = 0; e < STAGE_ELEMS; e += VECTOR_ELEMS) {
         cutlass::Array<ElementD, 8> arr = converter(arrs[(stage + e)/VECTOR_ELEMS]);
 
-        auto e_idx = thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup;
-        auto st_idx = smem_st_index * NumThreadsPerWarpGroup/VECTOR_ELEMS + e_idx;
-        auto ld_idx = smem_ld_index * NumThreadsPerWarpGroup/VECTOR_ELEMS + e_idx;
+        auto e_idx = thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads;
+        auto st_idx = smem_st_index * NumMMAThreads/VECTOR_ELEMS + e_idx;
+        auto ld_idx = smem_ld_index * NumMMAThreads/VECTOR_ELEMS + e_idx;
         auto src_val = ptr_smem_ld[ld_idx];
+        // if (StrassenMiGroup::hasM0() && thread_idx == 0 && stage == 0 && m_coord == 0 && n_coord == 0)
+        //   printf("1107 EpiStore %d %d: %d %d : %d : %f\n", threadIdx.x, NumMMAThreads, m_coord, n_coord, stage, arrs[stage + 0][0]);
         if (is_producer_load_needed) {
           arrs[(stage + e)/VECTOR_ELEMS] = conv_half_to_float(src_val) + arrs[(stage + e)/VECTOR_ELEMS];
-          if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-            MY_PRINTF("1107 EpiStore %d: %d %d : %d : %f %f\n", threadIdx.x, m_coord, n_coord, stage, arrs[stage + 0][0], float(src_val[0]));
+          // if (StrassenMiGroup::hasM0() && thread_idx == 0 && stage == 0 && m_coord == 0 && n_coord == 0)
+          //   printf("1107 EpiStore %d: %d %d : %d : %f %f\n", threadIdx.x, m_coord, n_coord, stage, arrs[stage + 0][0], float(src_val[0]));
         }
         ptr_smem_st[st_idx] = converter(arrs[(stage + e)/VECTOR_ELEMS]);
       }
 
       cutlass::arch::fence_view_async_shared();
       
-      asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumThreadsPerWarpGroup));
+      asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumMMAThreads));
       if (issue_tma_store) {
-        auto smem = &ptr_smem_st[(smem_st_index * NumThreadsPerWarpGroup)/VECTOR_ELEMS];
+        auto smem = &ptr_smem_st[(smem_st_index * NumMMAThreads)/VECTOR_ELEMS];
         // cutlass::Array<ElementD, 8>* st_ptr = (cutlass::Array<ElementD, 8>*)&postsum_m0[write_stage*STAGE_ELEMS*128 + (stage - STAGE_ELEMS)*128];
-        auto st_ptr = &postsum_m0[stage*NumThreadsPerWarpGroup];
+        auto st_ptr = &postsum_m0[stage*NumMMAThreads];
         if (IsFusedM4M5) {
-          SM90_BULK_TMA_ADD_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+          SM90_BULK_TMA_ADD_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
         } else {
-          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
         }
         store_pipeline.producer_commit(store_pipe_producer_state);
       }
@@ -1164,7 +1166,7 @@ struct SM90_BULK_TMA_ADD_S2G
       ++store_pipe_producer_state;
       if (issue_tma_store)
         store_pipeline.producer_acquire(store_pipe_producer_state);
-      asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumThreadsPerWarpGroup));
+      asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumMMAThreads));
       if (is_producer_load_needed && stage/STAGE_ELEMS + 1 > StorePipeline::UnacquiredStages) {
         if (ReuseSmemC) {
           load_pipeline.consumer_release(load_pipe_consumer_state);
@@ -1216,7 +1218,9 @@ struct SM90_BULK_TMA_ADD_S2G
     auto [M, N, K, L] = problem_shape_mnkl;
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
     const uint STAGE_ELEMS = size<0>(EpilogueTile{}) * size<1>(EpilogueTile{});
-
+    constexpr uint NumMMAThreads = size(TiledMma{});
+    // if (IsFusedM2M3 && thread_idx == 0 && m_coord == 0 && n_coord == 0)
+    //     printf("1221 %d : %f\n", sub_m_idx, accumulators[0]);
     // The tma tensor D under im2col mode only has two modes (M, N) which
     // should be local tiled with only (m_coord, n_coord).
     auto coord_shape = conditional_return<is_im2col_D>( 
@@ -1557,7 +1561,7 @@ struct SM90_BULK_TMA_ADD_S2G
               if (true) {
                 cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC + load_wait_state.index()*STAGE_ELEMS);
                 for (int i = 0; i < size(tSR_rC); i += 8) {
-                  auto frg = ptr_smem[thread_idx + (i/8)*128];
+                  auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
                   for (int j = 0; j < 8; j++)
                     tSR_rC(i + j) = frg[j];
                 }
@@ -1570,7 +1574,7 @@ struct SM90_BULK_TMA_ADD_S2G
               if (first_store_srcs[1].is_layout_interim()) {
                 cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC2 + load_wait_state.index()*(STAGE_ELEMS));
                 for (int i = 0; i < size(tSR_rC2); i += 8) {
-                  auto frg = ptr_smem[thread_idx + (i/8)*128];
+                  auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
                   for (int j = 0; j < 8; j++) {
                     tSR_rC2(i + j) = frg[j];
                   }
@@ -1641,7 +1645,7 @@ struct SM90_BULK_TMA_ADD_S2G
           if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim()) {
             //LayoutInterim
             cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators[0];
-            const uint PER_THREAD_ELEMS = (size<0>(EpilogueTile{})*size<1>(EpilogueTile{}))/NumThreadsPerWarpGroup;
+            const uint PER_THREAD_ELEMS = (size<0>(EpilogueTile{})*size<1>(EpilogueTile{}))/NumMMAThreads;
             const uint VECTOR_ELEMS = 8;
             NumericArrayConverter<ElementD, float, 8> converter;
             auto ptr_smem = (cutlass::Array<ElementD, 8>*)ptr_sD2;
@@ -1651,7 +1655,7 @@ struct SM90_BULK_TMA_ADD_S2G
             for (int e = 0; e < PER_THREAD_ELEMS; e += VECTOR_ELEMS) {
               cutlass::Array<ElementD, 8> arr = converter(arrs[(linear_store_stage*PER_THREAD_ELEMS + e)/VECTOR_ELEMS]);
               ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS/VECTOR_ELEMS +
-                 thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup] = arr;
+                 thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads] = arr;
             }
           }
 
@@ -1667,8 +1671,8 @@ struct SM90_BULK_TMA_ADD_S2G
               frg[i] = tSR_rC(i);
             }
 
-            // if (StrassenMiGroup::hasM5() && thread_idx == 1 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
-            //   printf("1548 %f %f\n", float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
+            // if (StrassenMiGroup::hasM2() && thread_idx == 0 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
+            //   printf("1548 %d : %f %f\n", sub_m_idx, float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
 
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tRS_rCompute_frg); ++i) {
