@@ -66,12 +66,10 @@ struct ExtraStorage<false, false, CollectiveMainloop, CollectiveEpilogue> {
 
     struct {
       typename CollectiveMainloop::PresumTensorStorage presum_tensors;
-      typename CollectiveMainloop::PresumTensorStorage2 presum_tensors2;
     };
 
     struct {
       typename CollectiveEpilogue::PresumTensorStorage epi_presum_tensors;
-      typename CollectiveEpilogue::PresumTensorStorage epi_presum_tensors2;
     };
   };
 };
@@ -86,12 +84,10 @@ struct ExtraStorage<false, true, CollectiveMainloop, CollectiveEpilogue> {
 
     struct {
       typename CollectiveMainloop::PresumTensorStorage presum_tensors;
-      typename CollectiveMainloop::PresumTensorStorage2 presum_tensors2;
     };
 
     struct {
       typename CollectiveEpilogue::PresumTensorStorage epi_presum_tensors;
-      typename CollectiveEpilogue::PresumTensorStorage epi_presum_tensors2;
     };
   };
 };
@@ -110,12 +106,10 @@ struct ExtraStorage<true, false, CollectiveMainloop, CollectiveEpilogue> {
 
     struct {
       typename CollectiveMainloop::PresumTensorStorage presum_tensors;
-      typename CollectiveMainloop::PresumTensorStorage2 presum_tensors2;
     };
 
     struct {
       typename CollectiveEpilogue::PresumTensorStorage epi_presum_tensors;
-      typename CollectiveEpilogue::PresumTensorStorage epi_presum_tensors2;
     };
   };
 };
@@ -132,12 +126,10 @@ struct ExtraStorage<true, true, CollectiveMainloop, CollectiveEpilogue> {
 
     struct {
       typename CollectiveMainloop::PresumTensorStorage presum_tensors;
-      typename CollectiveMainloop::PresumTensorStorage2 presum_tensors2;
     };
 
     struct {
       typename CollectiveEpilogue::PresumTensorStorage epi_presum_tensors;
-      typename CollectiveEpilogue::PresumTensorStorage epi_presum_tensors2;
     };
   };
 };
@@ -286,6 +278,7 @@ public:
       using ExtraStorage2 = ExtraStorage<(StrassenMiGroup::hasM0() && StrassenMiGroup::AllPresums::computeAnyAPresum()) ||
                                          (StrassenMiGroup::hasM1() && StrassenMiGroup::AllPresums::computeAnyBPresum()),
                                           StrassenMiGroup::numMs() == 2, CollectiveMainloop, CollectiveEpilogue>;
+      //TODO: The fused path declaration can now be removed since shared memory is not needed anyway
       ExtraStorage2 extra_storage;
     } tensors;
   };
@@ -1257,7 +1250,6 @@ public:
             warp_group_thread_idx,
             shared_storage.tensors.mainloop,
             shared_storage.tensors.extra_storage.presum_tensors,
-            shared_storage.tensors.extra_storage.presum_tensors2,
             params.mainloop
           );
         else if (sub_m_idx == 1)
@@ -1270,7 +1262,6 @@ public:
             warp_group_thread_idx,
             shared_storage.tensors.mainloop,
             shared_storage.tensors.extra_storage.presum_tensors,
-            shared_storage.tensors.extra_storage.presum_tensors2,
             params.mainloop
           );
         else if (sub_m_idx == 2) {
@@ -1287,7 +1278,6 @@ public:
             warp_group_thread_idx,
             shared_storage.tensors.mainloop,
             shared_storage.tensors.extra_storage.presum_tensors,
-            shared_storage.tensors.extra_storage.presum_tensors2,
             params.mainloop
           );
         }
