@@ -1002,7 +1002,7 @@ struct CollectiveStrassenMma<
 
             for (int wid = 0; wid < 4; wid++) {
               auto smem_dst_ptr = shared_presum_tensors.smem_A0.data() +
-                                  write_stage* PresumStages*PresumSingleStageSize +
+                                  write_stage* 4*PresumSingleStageSize +
                                   wid * PresumSingleStageSize +
                                   (0) * sizeof(PresumStoreVecType)/sizeof(ElementA);
               ElementA* st_ptr = ((ElementA*)iter_PresumA_M.get(0)) + wid*iter_PresumA_M.extent.row()*iter_PresumA_M.extent.column();
@@ -1022,7 +1022,7 @@ struct CollectiveStrassenMma<
 
             for (int wid = 0; wid < 4; wid++) {
               auto smem_dst_ptr = shared_presum_tensors.smem_A0.data() +
-                                  write_stage* PresumStages*PresumSingleStageSize +
+                                  write_stage* 4*PresumSingleStageSize +
                                   wid * PresumSingleStageSize +
                                   (0) * sizeof(PresumStoreVecType)/sizeof(ElementA);
               ElementA* st_ptr = ((ElementA*)iter_PresumB_M.get(0)) +
@@ -1060,8 +1060,8 @@ struct CollectiveStrassenMma<
           Tensor tAgA3 = block_tma_presum_ld_a.partition_S(gA3_tile);
 
           // Tensor gA0_tile2 = local_tile(gA0_tile, PresumTileShapeA{}, make_coord(presum_k_iter,_,_));
-          auto smem_ptr = shared_presum_tensors.smem_A0.data() + 0*PresumSingleStageSize + write_stage*4*PresumSingleStageSize;
-          Tensor sA0_tile = make_tensor(make_smem_ptr(smem_ptr), PresumSmemLayoutA__{});//local_tile(sPresumA0, PresumSmemShapeA__{}, make_coord(_,_,write_stage));
+          auto smem_ptr = shared_presum_tensors.smem_A0.data() + write_stage*4*PresumSingleStageSize;
+          Tensor sA0_tile = make_tensor(make_smem_ptr(smem_ptr + 0*PresumSingleStageSize), PresumSmemLayoutA__{});//local_tile(sPresumA0, PresumSmemShapeA__{}, make_coord(_,_,write_stage));
           Tensor sA1_tile = make_tensor(make_smem_ptr(smem_ptr + 1*PresumSingleStageSize), PresumSmemLayoutA__{});
           Tensor sA2_tile = make_tensor(make_smem_ptr(smem_ptr + 2*PresumSingleStageSize), PresumSmemLayoutA__{});
           Tensor sA3_tile = make_tensor(make_smem_ptr(smem_ptr + 3*PresumSingleStageSize), PresumSmemLayoutA__{});

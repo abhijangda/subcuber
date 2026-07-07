@@ -884,6 +884,7 @@ public:
         // unflushed global memory prior to this instruction
         cutlass::arch::wait_on_dependent_grids();
         bool requires_clc_query = true;
+        using StoreWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
         int sub_m_idx = 0;
         if (threadIdx.x % 32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
           MY_PRINTF("863 %d: %d %d\n", threadIdx.x, blockIdx.x, blockIdx.y);
@@ -935,7 +936,8 @@ public:
                 block_rank_in_cluster,
                 shared_storage.tensors.mainloop,
                 all_presumld_inputs,
-                shared_storage.tensors.extra_storage.presum_tensors
+                shared_storage.tensors.extra_storage.presum_tensors,
+                (StoreWarpOrderBarrier*)nullptr
               );
               mainloop_pipe_producer_state.advance(k_tile_count);
             };
@@ -971,7 +973,8 @@ public:
               block_rank_in_cluster,
               shared_storage.tensors.mainloop,
               all_presumld_inputs,
-              shared_storage.tensors.extra_storage.presum_tensors
+              shared_storage.tensors.extra_storage.presum_tensors,
+              (StoreWarpOrderBarrier*)nullptr
             );
             // Update starting pipeline state for the next tile
             mainloop_pipe_producer_state.advance(k_tile_count);
