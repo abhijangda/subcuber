@@ -813,7 +813,7 @@ public:
                 shared_storage.tensors.mainloop,
                 all_presumld_inputs,
                 shared_storage.tensors.presum_tensors,
-                &store_order_barrier
+                (UseM0M1StoreOrderBarrier) ? &store_order_barrier : (StoreWarpOrderBarrier*)nullptr
               );
               mainloop_pipe_producer_state.advance(k_tile_count);
             };
