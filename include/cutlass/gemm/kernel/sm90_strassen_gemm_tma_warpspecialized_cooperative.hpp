@@ -715,10 +715,7 @@ public:
     constexpr bool is_fused_m4_m5 = (StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5());
     constexpr bool is_fused_m2_m3_m6 = is_fused_m2_m3 && StrassenMiGroup::hasM6();
 
-    auto k_tile_count = size<3>(gA_mkl);
-    if (StrassenMiGroup::hasM0() || StrassenMiGroup::hasM1() ||
-        (StrassenMiGroup::hasM6() && !is_fused_m2_m3_m6))
-      k_tile_count = k_tile_count/2;
+    auto k_tile_count = (params.get_problem_shape_k()/2)/decltype(size<2>(blk_shape))::value;
 
     // Wait for all thread blocks in the Cluster
     cluster_wait_fn();
