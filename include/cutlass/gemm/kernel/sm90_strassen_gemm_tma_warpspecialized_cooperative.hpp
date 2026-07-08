@@ -41,6 +41,7 @@
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/kernel/tile_scheduler.hpp"
+#include "cutlass/gemm/kernel/strassen_tile_scheduler.hpp"
 #include "cutlass/pipeline/pipeline.hpp"
 #include "cute/tensor.hpp"
 #include "cutlass/trace.h"
@@ -105,12 +106,12 @@ public:
   static constexpr uint32_t TileSchedulerPipelineStageCount = DispatchPolicy::Schedule::SchedulerPipelineStageCount;
   using TileSchedulerTag = TileSchedulerTag_;
 
-  using TileScheduler = typename detail::TileSchedulerSelector<
+  using TileScheduler = typename detail::StrassenTileSchedulerSelector<
                                           TileSchedulerTag, 
                                           ArchTag, 
                                           TileShape,
-                                          ClusterShape
-                                          ,TileSchedulerPipelineStageCount
+                                          ClusterShape,
+                                          TileSchedulerPipelineStageCount
                                           >::Scheduler;
 
   using TileSchedulerArguments = typename TileScheduler::Arguments;

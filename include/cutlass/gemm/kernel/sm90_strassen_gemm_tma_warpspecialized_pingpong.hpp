@@ -813,7 +813,7 @@ public:
     if (warp_group_role == WarpGroupRole::Consumer1) {
       if constexpr (not IsSchedDynamicPersistent) {
         // Advance 2nd Math WG to the next work tile for the startup
-        scheduler.template advance_to_next_work<StrassenMiGroup> ();
+        scheduler.advance_to_next_work ();
       }
 
       // Advance 2nd Math WG pipeline states to the end of 1st Math WG
@@ -848,7 +848,7 @@ public:
               ++scheduler_pipe_throttle_consumer_state;
 
               // Query next work tile
-              scheduler_pipe_producer_state = scheduler.template advance_to_next_work<StrassenMiGroup>(scheduler_pipeline, scheduler_pipe_producer_state);
+              scheduler_pipe_producer_state = scheduler.advance_to_next_work(scheduler_pipeline, scheduler_pipe_producer_state);
             }
 
             // Fetch next work tile
@@ -943,7 +943,7 @@ public:
             };
 
             auto next_scheduler = scheduler;
-            next_scheduler.template advance_to_next_work<StrassenMiGroup>();
+            next_scheduler.advance_to_next_work();
             auto next_work_tile_info = next_scheduler.get_current_work();
 
             load_work_tile(work_tile_info, 0);
@@ -994,7 +994,7 @@ public:
           }
           else {
           // Get next work tile
-          scheduler.template advance_to_next_work<StrassenMiGroup>(StrassenMiGroup::numMs() > 1 ? NumMmaWarpGroups : 1);
+          scheduler.advance_to_next_work(StrassenMiGroup::numMs() > 1 ? NumMmaWarpGroups : 1);
           work_tile_info = scheduler.get_current_work();
           }
         } // Scheduler work fetch loop
@@ -1039,7 +1039,7 @@ public:
             // Update starting pipeline state for the next tile
             mainloop_pipe_producer_state.advance(k_tile_count);
 
-            scheduler.template advance_to_next_work<StrassenMiGroup>();
+            scheduler.advance_to_next_work();
             work_tile_info = scheduler.get_current_work();
           } // Scheduler work fetch loop
 
@@ -1142,7 +1142,7 @@ public:
                 }
               }
 
-              new_scheduler.template advance_to_next_work<StrassenMiGroup>(1);
+              new_scheduler.advance_to_next_work(1);
               work_tile_info2 = new_scheduler.get_current_work();
             }
           }
@@ -1161,7 +1161,7 @@ public:
           else {
           // Get next work tile
           //TODO: Fix this is_fused_m4_m5 condition
-          scheduler.template advance_to_next_work<StrassenMiGroup>(is_fused_m4_m5 ? 2 : 1);
+          scheduler.advance_to_next_work(is_fused_m4_m5 ? 2 : 1);
           work_tile_info = scheduler.get_current_work();
           }
         } // Scheduler work fetch loop
@@ -1226,7 +1226,7 @@ public:
         bool has_peer_work = true;
         if (StrassenMiGroup::numMs() > 1 && consumer_scratch_idx == 0) {
           auto peer_scheduler = scheduler;
-          peer_scheduler.template advance_to_next_work<StrassenMiGroup>();
+          peer_scheduler.advance_to_next_work();
           has_peer_work = peer_scheduler.get_current_work().is_valid();
         }
 
@@ -1532,7 +1532,7 @@ public:
         }
         else {
         // Get next work tile
-        scheduler.template advance_to_next_work<StrassenMiGroup>(NumMmaWarpGroups);
+        scheduler.advance_to_next_work(NumMmaWarpGroups);
         work_tile_info = scheduler.get_current_work();
         }
       } // Scheduler work fetch loop

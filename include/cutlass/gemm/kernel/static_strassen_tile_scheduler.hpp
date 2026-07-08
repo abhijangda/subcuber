@@ -190,24 +190,10 @@ public:
     return {work_idx_m, work_idx_n, static_cast<int32_t>(work_idx_l), sub_m_idx, true};
   }
 
-  template<class StrassenMiGroup>
   CUTLASS_DEVICE
   void
   advance_to_next_work(uint32_t advance_count = 1) {
-    // if (StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1()) {
-    //   if (sub_m_idx == 0) sub_m_idx = 1;
-    //   else {
-    //     sub_m_idx = 0;
-    //     current_work_linear_idx_ += total_grid_size_ * uint64_t(advance_count);  
-    //   }
-    // } else
-    {
-      if (false && StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1()) {
-        current_work_linear_idx_ += total_grid_size_/2 * uint64_t(advance_count);
-      } else {
-        current_work_linear_idx_ += total_grid_size_ * uint64_t(advance_count);
-      }
-    }
+    current_work_linear_idx_ += total_grid_size_ * uint64_t(advance_count);
   }
 
   CUTLASS_DEVICE
