@@ -1040,8 +1040,6 @@ public:
           mainloop_pipe_consumer_state.advance(k_tile_count);
         }
 
-        // if (is_fused_m2_m3_m6 && sub_m_idx == 0 && m_coord == 16 && n_coord == 0 && mma_thread_idx == 0)
-        //   printf("1009 %f\n", accumulators[0]);
         #ifdef CUTLASS_ENABLE_GDC_FOR_SM90
         if (scheduler.is_last_tile(work_tile_info)) {
           // Hint on an early release of global memory resources.

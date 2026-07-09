@@ -791,10 +791,8 @@ public:
     Tensor gB2_nkl = get<1>(load_inputs2);
 
     constexpr bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
-    constexpr bool is_fused_m2_m3 = (StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3());
     constexpr bool is_fused_m4_m5 = (StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5());
-    constexpr bool is_fused_m2_m3_m6 = is_fused_m2_m3 && StrassenMiGroup::hasM6();
-
+    
     // Get pipeline stage increments from tensor shapes
     auto k_tile_count = (params.get_problem_shape_k()/2)/decltype(size<2>(blk_shape))::value;
 
@@ -1239,6 +1237,19 @@ public:
         math_wg_order_barrier.wait();
 
         using EpilogueTile = typename CollectiveEpilogue::EpilogueTile;
+        
+        bool is_neg = false;
+
+        for (int c = 0; c < 4; c++) {
+            const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+            const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+            uint mi = StrassenMiGroup::getMi(sub_m_idx);
+            int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+            if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
+
+            is_neg = misign == -1;
+        }
 
         if (sub_m_idx == 0)
           collective_mainloop.mma(
@@ -1265,7 +1276,7 @@ public:
             params.mainloop
           );
         else if (sub_m_idx == 2) {
-          if (StrassenMiGroup::hasM6() && is_fused_m2_m3_m6)
+          if (is_neg)
             for (int i = 0; i < accumulators.size(); i++)
               accumulators[i] = -1 * accumulators[i];
 
@@ -1316,12 +1327,9 @@ public:
         // Order two Math WG's Epilogue one after the other
         math_wg_order_barrier.wait();
 
-        if (StrassenMiGroup::hasM6() && is_fused_m2_m3_m6 && sub_m_idx == 2)
+        if (is_neg)
           for (int i = 0; i < accumulators.size(); i++)
             accumulators[i] = -1 * accumulators[i];
-
-        if (is_fused_m2_m3 && m_coord == 0 && n_coord == 0 && warp_group_thread_idx == 0)
-          MY_PRINTF("1345 %d %d %d ; %d : %f\n", is_fused, is_fused_m2_m3, StrassenMiGroup::hasM6(), sub_m_idx, accumulators[0]);
 
         if (false && StrassenMiGroup::numMs() == 2 && sub_m_idx == 1) {
           uint fused_mi = sub_m_idx;
@@ -1453,9 +1461,6 @@ public:
           has_global_src,
           sub_m_idx
         );
-
-        if (is_fused_m2_m3 && m_coord == 0 && n_coord == 0 && warp_group_thread_idx == 0)
-          MY_PRINTF("1402 %d %d %d ; %d : %f\n", is_fused, is_fused_m2_m3, StrassenMiGroup::hasM6(), sub_m_idx, accumulators[0]);
 
         if (false && StrassenMiGroup::numMs() == 2 && sub_m_idx == 0) {
           //Wait for all warpgroup threads to finish

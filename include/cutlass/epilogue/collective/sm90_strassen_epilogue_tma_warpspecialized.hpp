@@ -1219,8 +1219,6 @@ struct SM90_BULK_TMA_ADD_S2G
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
     const uint STAGE_ELEMS = size<0>(EpilogueTile{}) * size<1>(EpilogueTile{});
     constexpr uint NumMMAThreads = size(TiledMma{});
-    // if (IsFusedM2M3 && thread_idx == 0 && m_coord == 0 && n_coord == 0)
-    //     printf("1221 %d : %f\n", sub_m_idx, accumulators[0]);
     // The tma tensor D under im2col mode only has two modes (M, N) which
     // should be local tiled with only (m_coord, n_coord).
     auto coord_shape = conditional_return<is_im2col_D>( 
