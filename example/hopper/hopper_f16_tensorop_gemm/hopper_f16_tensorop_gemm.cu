@@ -116,8 +116,8 @@ using KernelSchedule =     cutlass::gemm::KernelTmaWarpSpecializedPingpong;     
 using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized;
 #elif COOPERATIVE
 using TileShape           = Shape<_128,_256,_64>;                           // Threadblock-level tile size
-using ClusterShape        = Shape<_1,_2,_1>;                                // Shape of the threadblocks in a cluster
-using StageCountType = _3 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
+using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
+using StageCountType = _4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 using KernelSchedule =     cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecializedCooperative;
 #endif

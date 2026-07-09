@@ -1061,6 +1061,7 @@ public:
         // Ensure that the prefetched kernel does not touch
         // unflushed global memory prior to this instruction
         cutlass::arch::wait_on_dependent_grids();
+
         while (work_tile_info.is_valid()) {
           // Compute m_coord, n_coord, l_coord with the post-tiled m-shape and n-shape
           auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
@@ -1068,77 +1069,115 @@ public:
           auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
           auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
 
+          uint num_mis_with_gl_loads = 0;
+
           #pragma unroll (StrassenMiGroup::numMs())
           for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
             auto new_scheduler = scheduler;
             auto work_tile_info2 = new_scheduler.get_current_work();
 
-            //TODO: Fix this is_fused_m4_m5 condition and below at line 1164.
-            for (int wg = 0; wg < (is_fused_m4_m5 ? NumMmaWarpGroups : 1); wg++) {
-              if (!work_tile_info2.is_valid()) continue;
-              auto m_coord = idx2crd(work_tile_info2.M_idx, shape<2>(gA_mkl));
-              auto n_coord = idx2crd(work_tile_info2.N_idx, shape<2>(gB_nkl));
-              auto l_coord = idx2crd(work_tile_info2.L_idx, shape<4>(gB_nkl));
-              auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
+            #pragma unroll 4
+            for (int c = 0; c < 4; c++) {
+              const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+              const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+
+              uint mi = StrassenMiGroup::getMi(fused_mi);
+              int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+              if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
+
+              int read_c = 0;
+              MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
+              int postsum_src_len = 0;
               #pragma unroll 4
-              for (int c = 0; c < 4; c++) {
-                const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
-                const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
-
-                uint mi = StrassenMiGroup::getMi(fused_mi);
-                int misign = RWCTypes::MiSignByOutputIndex(c, mi);
-
-                if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
-
-                int read_c = 0;
-                MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
-                int postsum_src_len = 0;
-                #pragma unroll 4
-                for (read_c = 0; read_c < 4; read_c++) {
-                  auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                  if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
-                    postsum_srcs[postsum_src_len++] = postsum_src;
-                  }
-                }
-
-                if (postsum_src_len > 0) {
-                  load_order_barrier.wait();
-                  load_order_barrier.advance();
-                  if (false) {
-                    epi_load_pipe_producer_state =
-                    collective_epilogue.load(//TODO: Give postsum as argument
-                      epi_load_pipeline,
-                      epi_load_pipe_producer_state,
-                      problem_shape_MNKL,
-                      blk_shape,
-                      blk_coord,
-                      tiled_mma,
-                      lane_idx,
-                      shared_storage.tensors.extra_storage.epilogue,
-                      shared_storage.tensors.extra_storage.epilogue2
-                    );
-                  } else {
-                    epi_load_pipe_producer_state =
-                    collective_epilogue.load_m0(//TODO: Give postsum as argument
-                      epi_load_pipeline,
-                      epi_load_pipe_producer_state,
-                      problem_shape_MNKL,
-                      blk_shape,
-                      blk_coord, fused_mi,
-                      tiled_mma,
-                      lane_idx,
-                      shared_storage.tensors.extra_storage.epilogue,
-                      shared_storage.tensors.extra_storage.epilogue2,
-                      postsum_srcs
-                    );
-                  }
-                  // if (fused_mi < StrassenMiGroup::numMs() - 1)
-                    // asm volatile("bar.cta.sync %0, %1;" : : "r"(9 + epilogue_load_consumer_idx), "r"(NumThreadsPerWarpGroup+32));
+              for (read_c = 0; read_c < 4; read_c++) {
+                auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+                  postsum_srcs[postsum_src_len++] = postsum_src;
                 }
               }
 
-              new_scheduler.advance_to_next_work(1);
-              work_tile_info2 = new_scheduler.get_current_work();
+              if (postsum_src_len > 0) {
+                num_mis_with_gl_loads += (postsum_src_len > 0);
+                break;
+              }
+            }
+          }
+
+          #pragma unroll (StrassenMiGroup::numMs())
+          for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
+            auto new_scheduler = scheduler;
+            auto work_tile_info2 = new_scheduler.get_current_work();
+
+            bool has_global_src = false;
+
+            #pragma unroll 4
+            for (int c = 0; c < 4; c++) {
+              const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+              const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+
+              uint mi = StrassenMiGroup::getMi(fused_mi);
+              int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+              if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
+
+              int read_c = 0;
+              MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
+              int postsum_src_len = 0;
+              #pragma unroll 4
+              for (read_c = 0; read_c < 4; read_c++) {
+                auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+                  postsum_srcs[postsum_src_len++] = postsum_src;
+                }
+              }
+
+              if (postsum_src_len == 0) continue;
+
+              has_global_src = has_global_src || postsum_src_len > 0;
+
+              for (int wg = 0; wg < min(NumMmaWarpGroups, num_mis_with_gl_loads); wg++) {
+                if (!work_tile_info2.is_valid()) continue;
+
+                auto m_coord = idx2crd(work_tile_info2.M_idx, shape<2>(gA_mkl));
+                auto n_coord = idx2crd(work_tile_info2.N_idx, shape<2>(gB_nkl));
+                auto l_coord = idx2crd(work_tile_info2.L_idx, shape<4>(gB_nkl));
+                auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
+
+                load_order_barrier.wait();
+                load_order_barrier.advance();
+                if (false) {
+                  epi_load_pipe_producer_state =
+                  collective_epilogue.load(//TODO: Give postsum as argument
+                    epi_load_pipeline,
+                    epi_load_pipe_producer_state,
+                    problem_shape_MNKL,
+                    blk_shape,
+                    blk_coord,
+                    tiled_mma,
+                    lane_idx,
+                    shared_storage.tensors.extra_storage.epilogue,
+                    shared_storage.tensors.extra_storage.epilogue2
+                  );
+                } else {
+                  epi_load_pipe_producer_state =
+                  collective_epilogue.load_m0(//TODO: Give postsum as argument
+                    epi_load_pipeline,
+                    epi_load_pipe_producer_state,
+                    problem_shape_MNKL,
+                    blk_shape,
+                    blk_coord, fused_mi,
+                    tiled_mma,
+                    lane_idx,
+                    shared_storage.tensors.extra_storage.epilogue,
+                    shared_storage.tensors.extra_storage.epilogue2,
+                    postsum_srcs
+                  );
+                }
+
+                new_scheduler.advance_to_next_work(1);
+                work_tile_info2 = new_scheduler.get_current_work();
+              }
             }
           }
 
@@ -1154,9 +1193,9 @@ public:
             }
           }
           else {
+
           // Get next work tile
-          //TODO: Fix this is_fused_m4_m5 condition
-          scheduler.advance_to_next_work(is_fused_m4_m5 ? 2 : 1);
+          scheduler.advance_to_next_work(num_mis_with_gl_loads);
           work_tile_info = scheduler.get_current_work();
           }
         } // Scheduler work fetch loop
