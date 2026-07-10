@@ -791,7 +791,6 @@ public:
     Tensor gB2_nkl = get<1>(load_inputs2);
 
     constexpr bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
-    constexpr bool is_fused_m4_m5 = (StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5());
     
     // Get pipeline stage increments from tensor shapes
     auto k_tile_count = (params.get_problem_shape_k()/2)/decltype(size<2>(blk_shape))::value;
@@ -821,6 +820,8 @@ public:
 
     // Wait for all thread blocks in the Cluster
     cluster_wait_fn();
+
+    uint num_mis_with_gl_loads = StrassenMiGroup::NumMisWithGLLoads();
 
     if (warp_group_role == WarpGroupRole::Producer) {
       cutlass::arch::warpgroup_reg_dealloc<LoadRegisterRequirement>();
@@ -1069,41 +1070,8 @@ public:
           auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
           auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
 
-          uint num_mis_with_gl_loads = 0;
-
-          #pragma unroll (StrassenMiGroup::numMs())
-          for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
-            auto new_scheduler = scheduler;
-            auto work_tile_info2 = new_scheduler.get_current_work();
-
-            #pragma unroll 4
-            for (int c = 0; c < 4; c++) {
-              const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
-              const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
-
-              uint mi = StrassenMiGroup::getMi(fused_mi);
-              int misign = RWCTypes::MiSignByOutputIndex(c, mi);
-
-              if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
-
-              int read_c = 0;
-              MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
-              int postsum_src_len = 0;
-              #pragma unroll 4
-              for (read_c = 0; read_c < 4; read_c++) {
-                auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
-                  postsum_srcs[postsum_src_len++] = postsum_src;
-                }
-              }
-
-              if (postsum_src_len > 0) {
-                num_mis_with_gl_loads += (postsum_src_len > 0);
-                break;
-              }
-            }
-          }
-
+          if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+            MY_PRINTF("1106 %d %d: %d\n", m_coord, n_coord, num_mis_with_gl_loads);
           #pragma unroll (StrassenMiGroup::numMs())
           for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
             auto new_scheduler = scheduler;
@@ -1133,7 +1101,8 @@ public:
               }
 
               if (postsum_src_len == 0) continue;
-
+              if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                MY_PRINTF("1105 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
               has_global_src = has_global_src || postsum_src_len > 0;
 
               for (int wg = 0; wg < min(NumMmaWarpGroups, num_mis_with_gl_loads); wg++) {
@@ -1143,9 +1112,12 @@ public:
                 auto n_coord = idx2crd(work_tile_info2.N_idx, shape<2>(gB_nkl));
                 auto l_coord = idx2crd(work_tile_info2.L_idx, shape<4>(gB_nkl));
                 auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
-
+                if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                  MY_PRINTF("1116 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
                 load_order_barrier.wait();
                 load_order_barrier.advance();
+                if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                  MY_PRINTF("1119 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
                 if (false) {
                   epi_load_pipe_producer_state =
                   collective_epilogue.load(//TODO: Give postsum as argument
@@ -1175,6 +1147,9 @@ public:
                   );
                 }
 
+              if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                MY_PRINTF("1148 %d %d: %d\n", m_coord, n_coord, postsum_src_len);
+
                 new_scheduler.advance_to_next_work(1);
                 work_tile_info2 = new_scheduler.get_current_work();
               }
@@ -1195,7 +1170,7 @@ public:
           else {
 
           // Get next work tile
-          scheduler.advance_to_next_work(num_mis_with_gl_loads);
+          scheduler.advance_to_next_work(max(num_mis_with_gl_loads, 1));
           work_tile_info = scheduler.get_current_work();
           }
         } // Scheduler work fetch loop
@@ -1435,12 +1410,15 @@ public:
           #pragma unroll 4
           for (int read_c = 0; read_c < 4; read_c++) {
             auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-            if (postsum_src.valid() && postsum_src.is_mem_global()) {
+            bool use_tma = postsum_src.is_mem_global() && postsum_src.is_layout_final() && postsum_src.get_op() == postsum_global_dest.get_op();
+            if (postsum_src.valid() && postsum_src.is_mem_global() && !use_tma) {
               has_global_src = true;
             }
           }
         }
 
+        if (threadIdx.x%128 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1521 %d : %d\n", threadIdx.x, has_global_src);
         if (has_global_src) {
           load_order_barrier.arrive();
         }
@@ -1544,7 +1522,8 @@ public:
         if (has_global_src)
           epi_load_pipe_consumer_state = epi_load_pipe_consumer_state_next_;
         epi_store_pipe_producer_state = epi_store_pipe_producer_state_next_;
-
+        if (threadIdx.x%128 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1526 %d : %d\n", threadIdx.x, is_epi_load_needed);
         uint32_t epilogue_load_advance_chunks = (consumer_sub_m_iter + 1 < ConsumerSubMIterations) ?
           0 : ((StrassenMiGroup::numMs() > 1) ?
                (NumMmaWarpGroups - 1) :

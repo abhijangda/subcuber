@@ -593,7 +593,7 @@ public:
   CUTLASS_DEVICE
   bool
   is_producer_load_needed() const {
-    return StrassenMiGroup::RWCTypes::HasGlobalSrcLoad();
+    return StrassenMiGroup::NumMisWithGLLoads() > 0;
   }
 
   template<
@@ -666,7 +666,7 @@ public:
     class ProblemShapeMNKL
   >
   CUTLASS_DEVICE decltype(auto)
-  get_store_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, MemLayout layout, PostsumOp global_srcs[4]) {
+  get_store_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, MemLayout layout, PostsumOp global_srcs[4], bool& use_tma_reduce) {
     auto [M, N, K, L] = problem_shape_mnkl;
     Tensor postsum_m = params.tma_store_postsum_m.get_tma_tensor(make_shape(M/2,N/2,L));
     auto m0_ptr = postsum_m.data() + make_coord(0,0,_);
@@ -682,21 +682,31 @@ public:
       auto global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(i);
       int signMi = RWCTypes::MiSignByOutputIndex(i, StrassenMiGroup::getMi(sub_m_idx));
       if (global_dest.valid() && global_dest.is_mem_global() && global_dest.get_mem_layout() == layout && signMi != 0) {
+        PostsumOp src0 = RWCTypes::PostsumSrcByOutputIndex(i, 0);
+        PostsumOp src1 = RWCTypes::PostsumSrcByOutputIndex(i, 1);
         if (global_dest.is_layout_final()) {
           auto d_ptr = d.data() + make_coord((global_dest.get_op()%2)*N/2,
                                             (global_dest.get_op()/2)*M/2,_);
-          if (RWCTypes::PostsumSrcByOutputIndex(i, 0).is_mem_global())
-          //Only Global Memory are added in epilogue's store()
-            global_srcs[0] = RWCTypes::PostsumSrcByOutputIndex(i, 0);
-          if (RWCTypes::PostsumSrcByOutputIndex(i, 1).is_mem_global())
-            global_srcs[1] = RWCTypes::PostsumSrcByOutputIndex(i, 1);
+          int idx = 0;
+          //If the src op and dest op are same then use TMA Reduce instead of Load, Add and Store 
+          bool use_tma = src0.is_mem_global() && src0.is_layout_final() && src0.get_op() == global_dest.get_op();
+          if (src0.valid() && src0.is_mem_global() && !use_tma)
+            //Only Global Memory are added in epilogue's store()
+            global_srcs[idx++] = src0;
+          use_tma_reduce = use_tma;
+          use_tma = idx == 0 && src1.is_mem_global() && src1.is_layout_final() && src1.get_op() == global_dest.get_op();
+          if (src1.valid() && src1.is_mem_global() && !use_tma)
+            global_srcs[idx++] = src1;
+          use_tma_reduce = use_tma_reduce || use_tma;
           return cute::tuple(make_tensor(d_ptr, d.layout()), global_dest, false);
         } else if (global_dest.is_layout_interim()) {
           auto m_ptr = postsum_m.data() + make_coord(0,global_dest.get_op()*M/2,_);
-          if (RWCTypes::PostsumSrcByOutputIndex(i, 0).is_mem_global())
-            global_srcs[0] = RWCTypes::PostsumSrcByOutputIndex(i, 0);
-          if (RWCTypes::PostsumSrcByOutputIndex(i, 1).is_mem_global())
-            global_srcs[1] = RWCTypes::PostsumSrcByOutputIndex(i, 1);
+          int idx = 0;
+          use_tma_reduce = false;
+          if (src0.valid() && src0.is_mem_global())// && src0.get_op() != global_dest.get_op() && src0.is_layout_interim()
+            global_srcs[idx++] = src0;
+          if (src1.valid() && src1.is_mem_global())// && src1.get_op() != global_dest.get_op() && src1.is_layout_interim()
+            global_srcs[idx++] = src1;
 
           return cute::tuple(make_tensor(m_ptr, postsum_m.layout()), global_dest, true);
         }
@@ -893,7 +903,7 @@ public:
     load_pipeline.params_.transaction_bytes = STAGE_ELEMS * 2 * num_src_ops;
 
     if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-      MY_PRINTF("1030 %d %d: %d %d\n", 0/*stage*/, threadIdx.x, m_coord, n_coord);
+      MY_PRINTF("1030 %d %d: %d %d\n", threadIdx.x, is_M_load_needed, m_coord, n_coord);
 
     if (is_M_load_needed)
     CUTLASS_PRAGMA_UNROLL
@@ -1131,11 +1141,11 @@ struct SM90_BULK_TMA_ADD_S2G
         auto ld_idx = smem_ld_index * NumMMAThreads/VECTOR_ELEMS + e_idx;
         auto src_val = ptr_smem_ld[ld_idx];
         // if (StrassenMiGroup::hasM0() && thread_idx == 0 && stage == 0 && m_coord == 0 && n_coord == 0)
-        //   printf("1107 EpiStore %d %d: %d %d : %d : %f\n", threadIdx.x, NumMMAThreads, m_coord, n_coord, stage, arrs[stage + 0][0]);
+        //   MY_PRINTF("1107 EpiStore %d %d: %d %d : %d : %f\n", threadIdx.x, NumMMAThreads, m_coord, n_coord, stage, arrs[stage + 0][0]);
         if (is_producer_load_needed) {
           arrs[(stage + e)/VECTOR_ELEMS] = conv_half_to_float(src_val) + arrs[(stage + e)/VECTOR_ELEMS];
           // if (StrassenMiGroup::hasM0() && thread_idx == 0 && stage == 0 && m_coord == 0 && n_coord == 0)
-          //   printf("1107 EpiStore %d: %d %d : %d : %f %f\n", threadIdx.x, m_coord, n_coord, stage, arrs[stage + 0][0], float(src_val[0]));
+          //   MY_PRINTF("1107 EpiStore %d: %d %d : %d : %f %f\n", threadIdx.x, m_coord, n_coord, stage, arrs[stage + 0][0], float(src_val[0]));
         }
         ptr_smem_st[st_idx] = converter(arrs[(stage + e)/VECTOR_ELEMS]);
       }
@@ -1147,11 +1157,7 @@ struct SM90_BULK_TMA_ADD_S2G
         auto smem = &ptr_smem_st[(smem_st_index * NumMMAThreads)/VECTOR_ELEMS];
         // cutlass::Array<ElementD, 8>* st_ptr = (cutlass::Array<ElementD, 8>*)&postsum_m0[write_stage*STAGE_ELEMS*128 + (stage - STAGE_ELEMS)*128];
         auto st_ptr = &postsum_m0[stage*NumMMAThreads];
-        if (IsFusedM4M5) {
-          SM90_BULK_TMA_ADD_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
-        } else {
-          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
-        }
+        SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
         store_pipeline.producer_commit(store_pipe_producer_state);
       }
 
@@ -1226,7 +1232,8 @@ struct SM90_BULK_TMA_ADD_S2G
         make_coord(m_coord, n_coord, l_coord));
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
     PostsumOp first_store_srcs[4], second_store_srcs[4];
-    auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutFinal, first_store_srcs);
+    bool use_tma_first_store = false;
+    auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutFinal, first_store_srcs, use_tma_first_store);
     PostsumOp first_store_dest = get<1>(first_store_tuple);
     auto& tma_store_dorm = get<2>(first_store_tuple) ? params.tma_store_postsum_m : params.tma_store_d ;
     auto& tma_add_dorm = get<2>(first_store_tuple) ? params.tma_add_postsum_m : params.tma_add_d;
@@ -1234,7 +1241,8 @@ struct SM90_BULK_TMA_ADD_S2G
     Tensor mD = coalesce(mD_mn, take<0,2>(CtaTileMNK{}));
     Tensor gD = local_tile(mD, take<0,2>(CtaTileMNK{}), coord_shape);                                  // (CTA_M,CTA_N)
     
-    auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutInterim1D, second_store_srcs);
+    bool use_tma_second_store = false;
+    auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutInterim1D, second_store_srcs, use_tma_second_store);
     bool has_second_store = get<1>(second_store_tuple).valid();
     PostsumOp second_store_dest = get<1>(second_store_tuple);
     Tensor mD2_mn = get<0>(second_store_tuple);
@@ -1391,6 +1399,8 @@ struct SM90_BULK_TMA_ADD_S2G
                     );
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<RefSrc>(cst_args);
     bool is_producer_load_needed = first_store_srcs[0].valid() || second_store_srcs[0].valid();
+    if (threadIdx.x%128==0 && blockIdx.x==0&&blockIdx.y == 0)
+      MY_PRINTF("1396 %d : %d %d %d\n", sub_m_idx, is_producer_load_needed, first_store_srcs[0].valid(), second_store_srcs[0].valid());
     // StrassenMiGroup::hasM1() || StrassenMiGroup::hasM2() || StrassenMiGroup::hasM3() || StrassenMiGroup::hasM4() || StrassenMiGroup::hasM6();
     bool is_C_load_needed = is_source_supported && (first_store_srcs[0].valid() || second_store_srcs[0].valid());
 
@@ -1450,7 +1460,7 @@ struct SM90_BULK_TMA_ADD_S2G
       synchronize(); // ensure all threads have issued their async fence
       if constexpr (is_destination_supported) {
         if (issue_tma_store) {
-          if (IsFusedM4M5) {
+          if (use_tma_first_store) {
             if (thread_idx == 0) {
               Tensor sD_tile = group_modes<0,2>(sD_epi(_,_,store_pipe_producer_state.index()));
               Tensor gD_tile = group_modes<0,2>(gD_epi(_,_,epi_m,epi_n));
@@ -1528,9 +1538,9 @@ struct SM90_BULK_TMA_ADD_S2G
     //   // ++load_pipe_consumer_state;
     // }
     // if (StrassenMiGroup::hasM4() && thread_idx == 1 && m_coord == 0 && n_coord == 0)
-    //   printf("1630 %f\n", float(accumulators[0]));
+    //   MY_PRINTF("1630 %f\n", float(accumulators[0]));
     // if (thread_idx == 0 && StrassenMiGroup::hasM5() && m_coord == 0 && n_coord == 0)
-    //   printf("1432 %d %d ; %d %d ; %d\n", src_global_ops[0][0].valid(), src_global_ops[0][0].is_layout_interim(),
+    //   MY_PRINTF("1432 %d %d ; %d %d ; %d\n", src_global_ops[0][0].valid(), src_global_ops[0][0].is_layout_interim(),
     // src_global_ops[0][1].valid(), src_global_ops[0][1].is_layout_interim(), is_C_load_needed);
     // For each output tile
     int linear_store_stage = 0;
@@ -1648,7 +1658,7 @@ struct SM90_BULK_TMA_ADD_S2G
             NumericArrayConverter<ElementD, float, 8> converter;
             auto ptr_smem = (cutlass::Array<ElementD, 8>*)ptr_sD2;
             // if (thread_idx == 1 && m_coord == 0 && n_coord == 0 && linear_store_stage == 0)
-            //   printf("1630 %f %d\n", float(arrs[(linear_store_stage*PER_THREAD_ELEMS)/VECTOR_ELEMS][0]),
+            //   MY_PRINTF("1630 %f %d\n", float(arrs[(linear_store_stage*PER_THREAD_ELEMS)/VECTOR_ELEMS][0]),
             //           linear_store_stage);
             for (int e = 0; e < PER_THREAD_ELEMS; e += VECTOR_ELEMS) {
               cutlass::Array<ElementD, 8> arr = converter(arrs[(linear_store_stage*PER_THREAD_ELEMS + e)/VECTOR_ELEMS]);
@@ -1670,7 +1680,7 @@ struct SM90_BULK_TMA_ADD_S2G
             }
 
             // if (StrassenMiGroup::hasM2() && thread_idx == 0 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
-            //   printf("1548 %d : %f %f\n", sub_m_idx, float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
+            //   MY_PRINTF("1548 %d : %f %f\n", sub_m_idx, float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
 
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tRS_rCompute_frg); ++i) {
@@ -1688,7 +1698,7 @@ struct SM90_BULK_TMA_ADD_S2G
               frg[i] = tSR_rC2(i);
             }
             // if (thread_idx == 1 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
-              // printf("1562 %f %f\n", float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
+              // MY_PRINTF("1562 %f %f\n", float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tRS_rCompute_frg); ++i) {
               tRS_rAcc_frg_mn(r2s_v + i) = tRS_rAcc_frg_mn(r2s_v + i) +

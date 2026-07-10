@@ -172,8 +172,8 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes</*CUW<0, LayoutNone,  LayoutInterim1D,  Expr<Plus<4>>>,*/ //C1 (stored at M0) = C1+M4
-                                                                           CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>/*, Expr<Plus<2, MemGlobal, LayoutInterim1D>>*/ >,//C3 = C2+M4
-                                                                           CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>//, Expr<Plus<1, MemGlobal, LayoutInterim1D>//,
+                                                                           CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>, Expr<Plus<3, MemGlobal, LayoutFinal>>>,//C3 = C2+M4
+                                                                           CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutFinal>>//,
                                                                                                                                /*Plus<0, MemShared, LayoutInterim1D>*/
                                                                                                                                >
                                                                            >,
@@ -189,12 +189,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
-                                                                                FusedMiGroup<7, 4>>
+                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>>, //TODO: Change this to true
+                                                                                // FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                      //  ParallelMiGroups<false, FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
@@ -241,12 +241,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>>, //TODO: Change this to true
-                                                                                // FusedMiGroup<7, 4>>
+                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                                                FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                       ParallelMiGroups<false, FusedMiGroup<7, 4>>
+                                                      //  ParallelMiGroups<false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
