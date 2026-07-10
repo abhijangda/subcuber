@@ -1506,10 +1506,8 @@ struct SM90_BULK_TMA_ADD_S2G
         // producer_acquire returns when at most StagesD-1 committed stores are pending
         bool store_finished = issued_stores > StorePipeline::UnacquiredStages;
         // Let dma warp know earliest smem buffer is consumed and empty after StagesD producer commits
-        if (store_finished) {
-          if (is_producer_load_needed) {
-            load_pipeline.consumer_release(load_pipe_consumer_state);
-          }
+        if (store_finished && is_producer_load_needed) {
+          load_pipeline.consumer_release(load_pipe_consumer_state);
           ++load_pipe_consumer_state;
         }
       }

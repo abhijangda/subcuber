@@ -711,9 +711,6 @@ public:
     Tensor gB2_nkl = get<1>(load_inputs2);
 
     constexpr bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
-    constexpr bool is_fused_m2_m3 = (StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3());
-    constexpr bool is_fused_m4_m5 = (StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5());
-    constexpr bool is_fused_m2_m3_m6 = is_fused_m2_m3 && StrassenMiGroup::hasM6();
 
     auto k_tile_count = (params.get_problem_shape_k()/2)/decltype(size<2>(blk_shape))::value;
 
@@ -943,8 +940,12 @@ public:
               }
 
               if (postsum_src_len > 0) {
+                if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                  MY_PRINTF("944 %d : %d %d\n", fused_mi, m_coord, n_coord);
                 load_order_barrier.wait();
                 load_order_barrier.advance();
+                if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                  MY_PRINTF("948 %d : %d %d\n", fused_mi, m_coord, n_coord);
                 epi_load_pipe_producer_state =
                 collective_epilogue.load_m0(
                   epi_load_pipeline,
@@ -958,6 +959,8 @@ public:
                   shared_storage.tensors.epilogue,
                   postsum_srcs
                 );
+                if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                  MY_PRINTF("963 %d : %d %d\n", fused_mi, m_coord, n_coord);
               }
             }
           }
@@ -1008,15 +1011,44 @@ public:
             (StrassenMiGroup::numMs() >= 3 && sub_m_idx == 2)) {}
         else CUTE_GCC_UNREACHABLE;
 
-        if (is_fused_m2_m3 && sub_m_idx == 0) {
+        bool is_neg = false;
+        bool has_global_src = false;
+        bool any_global_dst_final = false;
+        bool any_global_dst_valid = false;
+
+        for (int c = 0; c < 4; c++) {
+          const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+          const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+          uint mi = StrassenMiGroup::getMi(sub_m_idx);
+          int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+          if (misign == 0 || (!postsum_global_dest.valid())) continue;
+
+          is_neg = misign == -1;
+
+          any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
+          any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
+
+          #pragma unroll 4
+          for (int read_c = 0; read_c < 4; read_c++) {
+            auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+            if (postsum_src.valid() && postsum_src.is_mem_global()) {
+              has_global_src = true;
+            }
+          }
+        }
+
+        if (is_neg)
+          for (int i = 0; i < accumulators.size(); i++)
+              accumulators[i] = -1 * accumulators[i];
+
+        if (has_global_src) {
           load_order_barrier.arrive();
         }
 
+        if (mma_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1044 %d : %d %d\n", sub_m_idx, m_coord, n_coord);
         if (TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
-          if (StrassenMiGroup::hasM6() && is_fused_m2_m3_m6 && sub_m_idx == 2)
-            for (int i = 0; i < accumulators.size(); i++)
-              accumulators[i] = -1 * accumulators[i];
-
           collective_mainloop.mma(
             blk_coord, sub_m_idx, problem_shape_MNKL, half_problem_shape_MNKL,
             mainloop_pipeline,
@@ -1057,36 +1089,15 @@ public:
         // TileScheduler::fixup(
         //   params.scheduler, work_tile_info, accumulators, NumMmaWarpGroups, consumer_warp_group_idx);
 
-        if (StrassenMiGroup::hasM6() && is_fused_m2_m3_m6 && sub_m_idx == 2)
+        if (is_neg)
           for (int i = 0; i < accumulators.size(); i++)
             accumulators[i] = -1 * accumulators[i];
 
         decltype(epi_load_pipe_consumer_state) epi_load_pipe_consumer_state_next = epi_load_pipe_consumer_state;
         decltype(epi_store_pipe_producer_state) epi_store_pipe_producer_state_next = epi_store_pipe_producer_state;
 
-        bool has_global_src = false;
-        bool any_global_dst_final = false;
-        bool any_global_dst_valid = false;
-
-        #pragma unroll 4
-        for (int c = 0; c < 4; c++) {
-          const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
-          uint mi = StrassenMiGroup::getMi(sub_m_idx);
-          int misign = RWCTypes::MiSignByOutputIndex(c, mi);
-
-          if (misign == 0 || (!postsum_global_dest.valid())) continue;
-
-          any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
-          any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
-
-          #pragma unroll 4
-          for (int read_c = 0; read_c < 4; read_c++) {
-            auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-            if (postsum_src.valid() && postsum_src.is_mem_global()) {
-              has_global_src = true;
-            }
-          }
-        }
+        if (mma_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1094 %d:  %d %d\n", sub_m_idx, m_coord, n_coord);
 
         if (TileScheduler::compute_epilogue(work_tile_info, params.scheduler) && any_global_dst_valid) {
           // Epilogue and write to gD
@@ -1138,6 +1149,9 @@ public:
           has_global_src,
           sub_m_idx
         );
+
+        if (mma_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1148 %d: %d %d ; %d\n", sub_m_idx, m_coord, n_coord, has_global_src);
 
         epi_load_pipe_consumer_state = get<0>(ret);
         epi_store_pipe_producer_state = get<1>(ret);

@@ -1265,6 +1265,10 @@ public:
             is_neg = misign == -1;
         }
 
+         if (is_neg)
+            for (int i = 0; i < accumulators.size(); i++)
+              accumulators[i] = -1 * accumulators[i];
+
         if (sub_m_idx == 0)
           collective_mainloop.mma(
             blk_coord, 0, problem_shape_MNKL, half_problem_shape_MNKL,
@@ -1290,10 +1294,6 @@ public:
             params.mainloop
           );
         else if (sub_m_idx == 2) {
-          if (is_neg)
-            for (int i = 0; i < accumulators.size(); i++)
-              accumulators[i] = -1 * accumulators[i];
-
           collective_mainloop.mma(
             blk_coord, 2, problem_shape_MNKL, half_problem_shape_MNKL,
             mainloop_pipeline,
