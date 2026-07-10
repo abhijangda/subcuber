@@ -1179,7 +1179,6 @@ struct CollectiveStrassenMma<
         presumIter < presumComputeIterationsA*1 and thread_idx < NumMMAThreads) {
       //This code above mac_loop_iter gives some improvement.
       //Changes done after commit: 853df006e0f2bfad3313460b2fcfdabb15d31067
-      asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
 
       for (int v = 0; v < 1; v += 1) {
         // iter_PresumA_M.reset();
@@ -1204,10 +1203,7 @@ struct CollectiveStrassenMma<
         a2 = *(PresumVecTypeA*)smem_a2_ptr;
         a3 = *(PresumVecTypeA*)smem_a3_ptr;
 
-        if (NumMMAThreads == 256) {
-          //Only needed in cooperative not in pingpong?
-          asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
-        }
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
         // if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A0))
       //   PresumDetail::shared_load_128b(&a0, sharedPreSums.get(presumAComputeLoads.indzex(MmaStrassen::APresums::A0), presum_read_stage, 0));
         // if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A1))
@@ -1366,10 +1362,7 @@ struct CollectiveStrassenMma<
         b2 = *(PresumVecTypeB*)smem_b2_ptr;
         b3 = *(PresumVecTypeB*)smem_b3_ptr;
 
-        if (NumMMAThreads == 256) {
-          //Only needed in cooperative not in pingpong?
-          asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
-        }
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
 
         PresumIOToComputeTypeB presum_io_to_compute_type;
         PresumComputeToIOTypeB presum_compute_to_io_type;
