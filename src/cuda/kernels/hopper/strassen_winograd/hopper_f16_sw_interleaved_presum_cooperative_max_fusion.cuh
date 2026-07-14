@@ -145,5 +145,3 @@ private:
 
 using HopperF16InterleavedPresumCooperativeMaxFusion_2x256_2x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<ScheduleStrassenGroups1, StrassenGemmKernels<4, Shape<_2,_256>, Shape<_2,_256>>>>;
 using HopperF16InterleavedPresumCooperativeMaxFusion_2x256_2x256_Opt_0000 = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<ScheduleStrassenGroups1, StrassenGemmKernels<4, Shape<_2,_256>, Shape<_2,_256>, cutlass::gemm::device::PresumOpt<0,0,0,0>>>>;
-using HopperF16InterleavedPresumCooperativeMaxFusion_4x256_4x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<ScheduleStrassenGroups1, StrassenGemmKernels<3, Shape<_4,_256>, Shape<_4,_256>>>>;
-using HopperF16InterleavedPresumCooperativeMaxFusion_8x256_8x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<ScheduleStrassenGroups1, StrassenGemmKernels<3, Shape<_8,_256>, Shape<_8,_256>>>>;

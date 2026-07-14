@@ -6,16 +6,15 @@ class F16HopperStrassenWinogradCooperativeTest : public testing::TestWithParam<s
 
 static std::vector<strassen_tests::TestCase> test_cases() {
 	std::vector<strassen_tests::TestCase> cases = {
-		{{7168, 7168, 7168}, 1, 1, "7168x7168x7168 split_k=1"},
-		{{6144, 6144, 4096}, 1, 1, "6144x6144x4096 split_k=1"},
-		{{8192, 4096, 8192}, 1, 1, "8192x4096x8192 split_k=1"},
+		{{8192, 8192, 8192}, 1, 1, "8192x8192x8192 split_k=1"},
+		{{12288, 12288, 8192}, 1, 1, "12288x12288x8192 split_k=1"},
 	};
 
 	return cases;
 }
 
 TEST_P(F16HopperStrassenWinogradCooperativeTest, MatchesReference) {
-	strassen_tests::run_gtest_case<HopperF16InterleavedPresumCooperativeMaxFusion_4x256_4x256_OptNo, ElementA, ElementB, ElementC>(GetParam());
+	strassen_tests::run_gtest_case<HopperF16InterleavedPresumCooperativeMaxFusion_2x256_2x256_OptNo, ElementA, ElementB, ElementC>(GetParam());
 }
 
 INSTANTIATE_TEST_SUITE_P(

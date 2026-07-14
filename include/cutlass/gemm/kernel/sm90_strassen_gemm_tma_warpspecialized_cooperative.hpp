@@ -147,7 +147,7 @@ public:
   // 1 stage ordered sequence between mainloop and epilogue producer load threads
   using LoadWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
   using StoreWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
-  static constexpr bool UseM0M1StoreOrderBarrier = CollectiveMainloop::PresumStages == 4 &&
+  static constexpr bool UseM0M1StoreOrderBarrier = false && CollectiveMainloop::PresumStages == 4 &&
                                                    ((StrassenMiGroup::hasM0() && size<0>(typename CollectiveMainloop::PresumTileShapeA{}) > 2) ||
                                                     (StrassenMiGroup::hasM1() && size<0>(typename CollectiveMainloop::PresumTileShapeB{}) > 2));
 
