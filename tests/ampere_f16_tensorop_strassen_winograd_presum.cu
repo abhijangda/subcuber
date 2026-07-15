@@ -1,4 +1,4 @@
-#include "cuda/kernels/ampere/strassen_winograd/ampere_f16_sw_interleaved_presum.cuh"
+#include "cuda/kernels/ampere/strassen_winograd/ampere_f16_sw_interleaved_presum_max_fusion.cuh"
 
 #include "base_test.cuh"
 
@@ -16,7 +16,7 @@ static std::vector<strassen_tests::TestCase> test_cases() {
 }
 
 TEST_P(F16AmpereSWPresumTest, MatchesReference) {
-	strassen_tests::run_gtest_case<AmpereF16SWInterleavedPresum, ElementInputA, ElementInputB, ElementOutput>(GetParam());
+	strassen_tests::run_gtest_case<AmpereF16SWInterleavedPresumMaxFusion, ElementInputA, ElementInputB, ElementOutput>(GetParam());
 }
 
 INSTANTIATE_TEST_SUITE_P(

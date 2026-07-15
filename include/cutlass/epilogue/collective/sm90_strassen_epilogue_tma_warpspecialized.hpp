@@ -246,7 +246,7 @@ private:
     // alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, 2*8192> smem_reg_transfer;
   };
 
-  using CollectiveStorageReuseC = cute::conditional_t<(IsFusedM2M3||IsFusedM4M5 || StrassenMiGroup::hasM5() || StrassenMiGroup::hasM4()) && UseLinearStoreLoads,
+  using CollectiveStorageReuseC = cute::conditional_t<false && (IsFusedM4M5 || StrassenMiGroup::hasM5() || StrassenMiGroup::hasM4()) && UseLinearStoreLoads,
                                                       CollectiveStorageReuseCFusedM2M3Linear,
                                                       CollectiveStorageReuseC_>;
   
@@ -277,12 +277,12 @@ public:
 
   struct SharedStorage {
     struct TensorStorage {
+      using FusionStorage = typename FusionCallbacks::SharedStorage;
+      FusionStorage thread;
+
       using CollectiveStorage = cute::conditional_t<not is_source_supported, CollectiveStorageWithoutC,
                                   cute::conditional_t<ReuseSmemC, CollectiveStorageReuseC, CollectiveStorageWithC>>;
       CollectiveStorage collective;
-
-      using FusionStorage = typename FusionCallbacks::SharedStorage;
-      FusionStorage thread;
     } tensors;
 
     using PipelineStorage = typename LoadPipeline::SharedStorage;
@@ -339,6 +339,14 @@ public:
         take<0,2>(SmemLayoutD{}),
         EpilogueTile{},
         _1{}));
+
+    using TMA_D_ADD = decltype(make_tma_copy(
+      SM90_TMA_REDUCE_ADD{},
+      make_tensor(make_gmem_ptr<TmaElementD>(nullptr),
+        repeat_like(StrideD{}, int32_t(0)), StrideD{}),
+      take<0,2>(SmemLayoutD{}),
+      EpilogueTile{},
+      _1{}));
     
     // using TMA_D = decltype(make_tma_copy(
     //     CopyOpS2G{},
@@ -353,6 +361,8 @@ public:
     TMA_C tma_load_postsum_m;
     TMA_D tma_store_postsum_m;
     TMA_D tma_store_d;
+    TMA_D_ADD tma_add_postsum_m;
+    TMA_D_ADD tma_add_d;
     uint32_t tma_transaction_bytes = TmaTransactionBytes;
 
     using TMA_PresumLoad_A = decltype(make_tma_copy(
@@ -411,6 +421,13 @@ public:
         tensor_store_m,
         take<0,2>(SmemLayoutD{}),
         EpilogueTile{});
+
+    typename Params::TMA_D_ADD tma_add_postsum_m{};
+    tma_add_postsum_m = make_tma_copy_C_sm90(
+      SM90_TMA_REDUCE_ADD{},
+      tensor_store_m,
+      take<0,2>(SmemLayoutD{}),
+      EpilogueTile{});
     
     typename Params::TMA_PresumLoad_A tma_load_presumld_a{};
     Tensor tensor_presum_ld_a = make_tensor(make_gmem_ptr<TmaElementD>(ptr_presum_load_A), make_layout(make_shape(M,N,L), make_stride(get<0>(args.dD), get<1>(args.dD), get<2>(args.dD))));
@@ -421,10 +438,16 @@ public:
         PresumSmemLayoutA__{});
 
     typename Params::TMA_D tma_store_d{};
+    typename Params::TMA_D_ADD tma_add_d{};
     if constexpr (is_destination_supported) {
       Tensor tensor_d = make_tensor(make_gmem_ptr<TmaElementD>(args.ptr_D), make_layout(make_shape(M,N,L), args.dD));
       tma_store_d = make_tma_copy_C_sm90(
           CopyOpS2G{},
+          tensor_d,
+          take<0,2>(SmemLayoutD{}),
+          EpilogueTile{});
+      tma_add_d = make_tma_copy_C_sm90(
+          SM90_TMA_REDUCE_ADD{},
           tensor_d,
           take<0,2>(SmemLayoutD{}),
           EpilogueTile{});
@@ -446,6 +469,8 @@ public:
       tma_load_postsum_m,
       tma_store_postsum_m,
       tma_store_d,
+      tma_add_postsum_m,
+      tma_add_d,
       transaction_bytes,
       tma_load_presumld_a,
       tma_load_linear_m,
@@ -568,7 +593,7 @@ public:
   CUTLASS_DEVICE
   bool
   is_producer_load_needed() const {
-    return StrassenMiGroup::RWCTypes::HasGlobalSrcLoad();
+    return StrassenMiGroup::NumMisWithGLLoads() > 0;
   }
 
   template<
@@ -641,7 +666,7 @@ public:
     class ProblemShapeMNKL
   >
   CUTLASS_DEVICE decltype(auto)
-  get_store_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, MemLayout layout, PostsumOp global_srcs[4]) {
+  get_store_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, MemLayout layout, PostsumOp global_srcs[4], bool& use_tma_reduce) {
     auto [M, N, K, L] = problem_shape_mnkl;
     Tensor postsum_m = params.tma_store_postsum_m.get_tma_tensor(make_shape(M/2,N/2,L));
     auto m0_ptr = postsum_m.data() + make_coord(0,0,_);
@@ -657,21 +682,31 @@ public:
       auto global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(i);
       int signMi = RWCTypes::MiSignByOutputIndex(i, StrassenMiGroup::getMi(sub_m_idx));
       if (global_dest.valid() && global_dest.is_mem_global() && global_dest.get_mem_layout() == layout && signMi != 0) {
+        PostsumOp src0 = RWCTypes::PostsumSrcByOutputIndex(i, 0);
+        PostsumOp src1 = RWCTypes::PostsumSrcByOutputIndex(i, 1);
         if (global_dest.is_layout_final()) {
           auto d_ptr = d.data() + make_coord((global_dest.get_op()%2)*N/2,
                                             (global_dest.get_op()/2)*M/2,_);
-          if (RWCTypes::PostsumSrcByOutputIndex(i, 0).is_mem_global())
-          //Only Global Memory are added in epilogue's store()
-            global_srcs[0] = RWCTypes::PostsumSrcByOutputIndex(i, 0);
-          if (RWCTypes::PostsumSrcByOutputIndex(i, 1).is_mem_global())
-            global_srcs[1] = RWCTypes::PostsumSrcByOutputIndex(i, 1);
+          int idx = 0;
+          //If the src op and dest op are same then use TMA Reduce instead of Load, Add and Store 
+          bool use_tma = src0.is_mem_global() && src0.is_layout_final() && src0.get_op() == global_dest.get_op();
+          if (src0.valid() && src0.is_mem_global() && !use_tma)
+            //Only Global Memory are added in epilogue's store()
+            global_srcs[idx++] = src0;
+          use_tma_reduce = use_tma;
+          use_tma = idx == 0 && src1.is_mem_global() && src1.is_layout_final() && src1.get_op() == global_dest.get_op();
+          if (src1.valid() && src1.is_mem_global() && !use_tma)
+            global_srcs[idx++] = src1;
+          use_tma_reduce = use_tma_reduce || use_tma;
           return cute::tuple(make_tensor(d_ptr, d.layout()), global_dest, false);
         } else if (global_dest.is_layout_interim()) {
           auto m_ptr = postsum_m.data() + make_coord(0,global_dest.get_op()*M/2,_);
-          if (RWCTypes::PostsumSrcByOutputIndex(i, 0).is_mem_global())
-            global_srcs[0] = RWCTypes::PostsumSrcByOutputIndex(i, 0);
-          if (RWCTypes::PostsumSrcByOutputIndex(i, 1).is_mem_global())
-            global_srcs[1] = RWCTypes::PostsumSrcByOutputIndex(i, 1);
+          int idx = 0;
+          use_tma_reduce = false;
+          if (src0.valid() && src0.is_mem_global())// && src0.get_op() != global_dest.get_op() && src0.is_layout_interim()
+            global_srcs[idx++] = src0;
+          if (src1.valid() && src1.is_mem_global())// && src1.get_op() != global_dest.get_op() && src1.is_layout_interim()
+            global_srcs[idx++] = src1;
 
           return cute::tuple(make_tensor(m_ptr, postsum_m.layout()), global_dest, true);
         }
@@ -763,7 +798,7 @@ public:
     // Pre-loop fusion callback entry point
     pld_callbacks.begin();
 
-    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<0>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
+    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
     uint STAGE_ELEMS = size<0>(EpilogueTile{}) * size<1>(EpilogueTile{});
 
     if (StrassenMiGroup::hasM5()) {
@@ -852,13 +887,14 @@ public:
     // Indexing variables
     auto [M, N, K, L] = problem_shape_mnkl;
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
-    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<0>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
+    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
     uint STAGE_ELEMS = size<0>(EpilogueTile{}) * size<1>(EpilogueTile{});
     uint NUM_STAGES = (size<0>(TileShapeMNK{}) * size<1>(TileShapeMNK{}))/STAGE_ELEMS;
     cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)epilogue_tensors.collective.smem_C.begin();
 
     bool issue_tma_load = thread_idx == 0;//cute::elect_one_sync();
     bool is_M_load_needed = src_global_ops[0].valid();
+
     int num_src_ops = 0;
     #pragma unroll 4
     for (; num_src_ops < 4; num_src_ops++)
@@ -866,10 +902,12 @@ public:
 
     load_pipeline.params_.transaction_bytes = STAGE_ELEMS * 2 * num_src_ops;
 
+    if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+      MY_PRINTF("1030 %d %d: %d %d\n", threadIdx.x, is_M_load_needed, m_coord, n_coord);
+
+    if (is_M_load_needed)
     CUTLASS_PRAGMA_UNROLL
     for (uint stage = 0; stage < size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{}); stage += STAGE_ELEMS) {
-      if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-        MY_PRINTF("1030 %d %d: %d %d\n", stage, threadIdx.x, m_coord, n_coord);
       uint64_t* tma_barrier = load_pipeline.producer_get_barrier(load_pipe_producer_state);
       load_pipeline.producer_acquire(load_pipe_producer_state);
       if (issue_tma_load && is_M_load_needed) {
@@ -887,13 +925,14 @@ public:
         }
 
         load_pipeline.producer_expect_transaction(load_pipe_producer_state);
-        if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-          MY_PRINTF("1044 %d %d: %d %d\n", stage, threadIdx.x, m_coord, n_coord);
       }
       load_pipeline.producer_commit(load_pipe_producer_state);
       ++load_pipe_producer_state;
       postsum_m0 += STAGE_ELEMS;
     }
+
+    if (thread_idx == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+      MY_PRINTF("1044 %d %d: %d %d\n", 0/*stage*/, threadIdx.x, m_coord, n_coord);
 
     return load_pipe_producer_state;
   }
@@ -927,9 +966,9 @@ public:
 
     auto [M, N, K, L] = problem_shape_mnkl;
 
-    uint NumThreadsPerWarpGroup = 128;
+    uint NumMMAThreads = size(TiledMma{});
 
-    uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{}))/NumThreadsPerWarpGroup;
+    uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{}))/NumMMAThreads;
     uint VECTOR_ELEMS = 8;
 
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
@@ -937,24 +976,24 @@ public:
 
     if (StagesD > 1) {
       //Multiple stage using TMA
-      uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumThreadsPerWarpGroup;
+      uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumMMAThreads;
       bool issue_tma_store = thread_idx == 0;
       uint stage = 0;
       for (int e = 0; e < STAGE_ELEMS; e += VECTOR_ELEMS) {
         cutlass::Array<ElementD, 8> arr = converter(arrs[(stage + e)/VECTOR_ELEMS]);
-        ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumThreadsPerWarpGroup/VECTOR_ELEMS +
-                 thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup] = arr;
+        ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumMMAThreads/VECTOR_ELEMS +
+                 thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads] = arr;
       }
 
       for (; stage < accumulators.size(); stage += STAGE_ELEMS) {
         cutlass::arch::fence_view_async_shared();
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumThreadsPerWarpGroup));
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumMMAThreads));
 
         if (issue_tma_store) {
-          auto smem = &ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumThreadsPerWarpGroup/VECTOR_ELEMS];
+          auto smem = &ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumMMAThreads/VECTOR_ELEMS];
           // cutlass::Array<ElementD, 8>* st_ptr = (cutlass::Array<ElementD, 8>*)&postsum_m0[write_stage*STAGE_ELEMS*128 + (stage - STAGE_ELEMS)*128];
-          auto st_ptr = &postsum_m0[stage*NumThreadsPerWarpGroup];
-          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+          auto st_ptr = &postsum_m0[stage*NumMMAThreads];
+          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
           store_pipeline.producer_commit(store_pipe_producer_state);
         }
 
@@ -962,47 +1001,66 @@ public:
 
         if (issue_tma_store)
           store_pipeline.producer_acquire(store_pipe_producer_state);
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumThreadsPerWarpGroup));
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumMMAThreads));
 
         if (stage + STAGE_ELEMS < accumulators.size())
           for (int e = 0; e < STAGE_ELEMS; e += VECTOR_ELEMS) {
             cutlass::Array<ElementD, 8> arr = converter(arrs[(stage + STAGE_ELEMS + e)/VECTOR_ELEMS]);
-            ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumThreadsPerWarpGroup/VECTOR_ELEMS +
-                    thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup] = arr;
+            ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS * NumMMAThreads/VECTOR_ELEMS +
+                    thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads] = arr;
           }
       }
 
       return cute::make_tuple(load_pipe_consumer_state, store_pipe_producer_state);
     } else {
       //Single stage using TMA
-      uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumThreadsPerWarpGroup;
+      uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumMMAThreads;
       bool issue_tma_store = thread_idx == 0;
       uint stage = 0;
 
       for (; stage < accumulators.size(); stage += STAGE_ELEMS) {
         for (int e = 0; e < STAGE_ELEMS; e += VECTOR_ELEMS) {
           cutlass::Array<ElementD, 8> arr = converter(arrs[(stage + e)/VECTOR_ELEMS]);
-          ptr_smem[thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup] = arr;
+          ptr_smem[thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads] = arr;
         }
 
         cutlass::arch::fence_view_async_shared();
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumThreadsPerWarpGroup));
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumMMAThreads));
 
         if (issue_tma_store) {
           auto smem = &ptr_smem[0];
           // cutlass::Array<ElementD, 8>* st_ptr = (cutlass::Array<ElementD, 8>*)&postsum_m0[write_stage*STAGE_ELEMS*128 + (stage - STAGE_ELEMS)*128];
-          auto st_ptr = &postsum_m0[stage*NumThreadsPerWarpGroup];
-          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+          auto st_ptr = &postsum_m0[stage*NumMMAThreads];
+          SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
           asm volatile("cp.async.bulk.commit_group;");
           cute::tma_store_wait<0>();
         }
 
-        asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumThreadsPerWarpGroup));
+        asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumMMAThreads));
       }
 
       return cute::make_tuple(load_pipe_consumer_state, store_pipe_producer_state);
     }
   }
+
+struct SM90_BULK_TMA_ADD_S2G
+{
+  CUTE_HOST_DEVICE static void
+  copy(void const* smem_ptr,
+       void      * gmem_ptr, int32_t store_bytes)
+  {
+#if defined(CUTE_ARCH_TMA_SM90_ENABLED)
+    uint32_t smem_int_ptr  = cast_smem_ptr_to_uint(smem_ptr);
+    asm volatile("cp.reduce.async.bulk.global.shared::cta.bulk_group.add.noftz.f16 [%0], [%1], %2;\n"
+                     :
+                     : "l"(gmem_ptr), "r"(smem_int_ptr), "r"(store_bytes)
+                     : "memory");
+#else
+    CUTE_INVALID_CONTROL_PATH("Trying to use BULK_COPY without CUTE_ARCH_TMA_SM90_ENABLED.");
+#endif
+  }
+};
+
 
   template<
     class ProblemShapeMNKL,
@@ -1038,7 +1096,7 @@ public:
 
     auto [M, N, K, L] = problem_shape_mnkl;
 
-    constexpr uint NumThreadsPerWarpGroup = 128;
+    constexpr uint NumMMAThreads = size(TiledMma{});
 
     uint VECTOR_ELEMS = 8;
 
@@ -1048,7 +1106,7 @@ public:
     postsum_m0 = postsum_m0 + (dest_global_op.get_op())*(M/2)*(N/2);
 
     //Multiple stage using TMA
-    constexpr uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumThreadsPerWarpGroup;
+    constexpr uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumMMAThreads;
     bool issue_tma_store = thread_idx == 0;
     
     const bool is_producer_load_needed = src_global_op.valid() && src_global_op.is_mem_global() && src_global_op.is_layout_interim();
@@ -1067,8 +1125,10 @@ public:
     #pragma unroll (128/STAGE_ELEMS)
     for (uint stage = 0; stage < accumulators.size(); stage += STAGE_ELEMS) {
       if (is_producer_load_needed) load_pipeline.consumer_wait(load_wait_state);
+      if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1071 EpiStore %d: %d %d : %d\n", threadIdx.x, m_coord, n_coord, stage);
       //Load smem here
-      asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumThreadsPerWarpGroup));
+      asm volatile("bar.cta.sync %0, %1;" : : "r"(6), "r"(NumMMAThreads));
       uint smem_st_index =  (store_pipe_producer_state.index()* STAGE_ELEMS);
       uint smem_ld_index =  (load_wait_state.index()* STAGE_ELEMS);
 
@@ -1076,24 +1136,28 @@ public:
       for (int e = 0; e < STAGE_ELEMS; e += VECTOR_ELEMS) {
         cutlass::Array<ElementD, 8> arr = converter(arrs[(stage + e)/VECTOR_ELEMS]);
 
-        auto e_idx = thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup;
-        auto st_idx = smem_st_index * NumThreadsPerWarpGroup/VECTOR_ELEMS + e_idx;
-        auto ld_idx = smem_ld_index * NumThreadsPerWarpGroup/VECTOR_ELEMS + e_idx;
+        auto e_idx = thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads;
+        auto st_idx = smem_st_index * NumMMAThreads/VECTOR_ELEMS + e_idx;
+        auto ld_idx = smem_ld_index * NumMMAThreads/VECTOR_ELEMS + e_idx;
         auto src_val = ptr_smem_ld[ld_idx];
+        // if (StrassenMiGroup::hasM0() && thread_idx == 0 && stage == 0 && m_coord == 0 && n_coord == 0)
+        //   MY_PRINTF("1107 EpiStore %d %d: %d %d : %d : %f\n", threadIdx.x, NumMMAThreads, m_coord, n_coord, stage, arrs[stage + 0][0]);
         if (is_producer_load_needed) {
           arrs[(stage + e)/VECTOR_ELEMS] = conv_half_to_float(src_val) + arrs[(stage + e)/VECTOR_ELEMS];
+          // if (StrassenMiGroup::hasM0() && thread_idx == 0 && stage == 0 && m_coord == 0 && n_coord == 0)
+          //   MY_PRINTF("1107 EpiStore %d: %d %d : %d : %f %f\n", threadIdx.x, m_coord, n_coord, stage, arrs[stage + 0][0], float(src_val[0]));
         }
         ptr_smem_st[st_idx] = converter(arrs[(stage + e)/VECTOR_ELEMS]);
       }
 
       cutlass::arch::fence_view_async_shared();
       
-      asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumThreadsPerWarpGroup));
+      asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumMMAThreads));
       if (issue_tma_store) {
-        auto smem = &ptr_smem_st[(smem_st_index * NumThreadsPerWarpGroup)/VECTOR_ELEMS];
+        auto smem = &ptr_smem_st[(smem_st_index * NumMMAThreads)/VECTOR_ELEMS];
         // cutlass::Array<ElementD, 8>* st_ptr = (cutlass::Array<ElementD, 8>*)&postsum_m0[write_stage*STAGE_ELEMS*128 + (stage - STAGE_ELEMS)*128];
-        auto st_ptr = &postsum_m0[stage*NumThreadsPerWarpGroup];
-        SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumThreadsPerWarpGroup * sizeof(ElementD));
+        auto st_ptr = &postsum_m0[stage*NumMMAThreads];
+        SM90_BULK_COPY_S2G().copy(smem, st_ptr, STAGE_ELEMS * NumMMAThreads * sizeof(ElementD));
         store_pipeline.producer_commit(store_pipe_producer_state);
       }
 
@@ -1108,7 +1172,7 @@ public:
       ++store_pipe_producer_state;
       if (issue_tma_store)
         store_pipeline.producer_acquire(store_pipe_producer_state);
-      asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumThreadsPerWarpGroup));
+      asm volatile("bar.cta.sync %0, %1;" : : "r"(5), "r"(NumMMAThreads));
       if (is_producer_load_needed && stage/STAGE_ELEMS + 1 > StorePipeline::UnacquiredStages) {
         if (ReuseSmemC) {
           load_pipeline.consumer_release(load_pipe_consumer_state);
@@ -1136,7 +1200,7 @@ public:
       ProblemShapeMNKL problem_shape_mnkl,
       TileShapeMNK tile_shape_MNK,
       TileCoordMNKL tile_coord_mnkl, int sub_m_idx,
-      cute::Tensor<AccEngine,AccLayout> accumulators,
+      cute::Tensor<AccEngine,AccLayout>& accumulators_ref,
       TiledMma tiled_mma,
       int thread_idx,
       TensorStorage& shared_tensors,
@@ -1146,7 +1210,9 @@ public:
     using ElementAccumulator = typename AccEngine::value_type;
     using ElementCompute_ = typename epilogue::fusion::FusionCallbacksTraits<FusionCallbacks>::ElementCompute;
     using ElementCompute = cute::conditional_t<cute::is_void_v<ElementCompute_>,ElementAccumulator,ElementCompute_>;
-
+    constexpr bool IsFusedM2M3M6 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3() && StrassenMiGroup::hasM6();
+    cute::Tensor<AccEngine,AccLayout> accumulators_copy = accumulators_ref;
+    cute::Tensor<AccEngine,AccLayout>& accumulators = IsFusedM4M5 ? accumulators_copy : accumulators_ref;
     static_assert(is_rmem<AccEngine>::value, "Accumulator must be RF resident.");
     static_assert(rank(AccLayout{}) == 3, "Accumulator must be MMA-partitioned: (MMA,MMA_M,MMA_N)");
     static_assert(rank(ProblemShapeMNKL{}) == 4, "ProblemShapeMNKL must be rank 4");
@@ -1158,23 +1224,25 @@ public:
     auto [M, N, K, L] = problem_shape_mnkl;
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
     const uint STAGE_ELEMS = size<0>(EpilogueTile{}) * size<1>(EpilogueTile{});
-
+    constexpr uint NumMMAThreads = size(TiledMma{});
     // The tma tensor D under im2col mode only has two modes (M, N) which
     // should be local tiled with only (m_coord, n_coord).
     auto coord_shape = conditional_return<is_im2col_D>( 
         make_coord(m_coord, n_coord),
         make_coord(m_coord, n_coord, l_coord));
-
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
     PostsumOp first_store_srcs[4], second_store_srcs[4];
-    auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutFinal, first_store_srcs);
+    bool use_tma_first_store = false;
+    auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutFinal, first_store_srcs, use_tma_first_store);
     PostsumOp first_store_dest = get<1>(first_store_tuple);
     auto& tma_store_dorm = get<2>(first_store_tuple) ? params.tma_store_postsum_m : params.tma_store_d ;
+    auto& tma_add_dorm = get<2>(first_store_tuple) ? params.tma_add_postsum_m : params.tma_add_d;
     Tensor mD_mn = get<0>(first_store_tuple);
     Tensor mD = coalesce(mD_mn, take<0,2>(CtaTileMNK{}));
     Tensor gD = local_tile(mD, take<0,2>(CtaTileMNK{}), coord_shape);                                  // (CTA_M,CTA_N)
     
-    auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutInterim1D, second_store_srcs);
+    bool use_tma_second_store = false;
+    auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutInterim1D, second_store_srcs, use_tma_second_store);
     bool has_second_store = get<1>(second_store_tuple).valid();
     PostsumOp second_store_dest = get<1>(second_store_tuple);
     Tensor mD2_mn = get<0>(second_store_tuple);
@@ -1331,6 +1399,8 @@ public:
                     );
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<RefSrc>(cst_args);
     bool is_producer_load_needed = first_store_srcs[0].valid() || second_store_srcs[0].valid();
+    if (threadIdx.x%128==0 && blockIdx.x==0&&blockIdx.y == 0)
+      MY_PRINTF("1396 %d : %d %d %d\n", sub_m_idx, is_producer_load_needed, first_store_srcs[0].valid(), second_store_srcs[0].valid());
     // StrassenMiGroup::hasM1() || StrassenMiGroup::hasM2() || StrassenMiGroup::hasM3() || StrassenMiGroup::hasM4() || StrassenMiGroup::hasM6();
     bool is_C_load_needed = is_source_supported && (first_store_srcs[0].valid() || second_store_srcs[0].valid());
 
@@ -1390,7 +1460,18 @@ public:
       synchronize(); // ensure all threads have issued their async fence
       if constexpr (is_destination_supported) {
         if (issue_tma_store) {
-          copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+          if (use_tma_first_store) {
+            if (thread_idx == 0) {
+              Tensor sD_tile = group_modes<0,2>(sD_epi(_,_,store_pipe_producer_state.index()));
+              Tensor gD_tile = group_modes<0,2>(gD_epi(_,_,epi_m,epi_n));
+              copy(tma_add_dorm,
+                   sD_tile,
+                   gD_tile);
+            }
+            // copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+          } else {
+            copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+          }
 
           if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim() && thread_idx == 0) {
             //TODO: Can distribute writes over all threads a warp similar to layoutfinal copy
@@ -1425,10 +1506,8 @@ public:
         // producer_acquire returns when at most StagesD-1 committed stores are pending
         bool store_finished = issued_stores > StorePipeline::UnacquiredStages;
         // Let dma warp know earliest smem buffer is consumed and empty after StagesD producer commits
-        if (store_finished) {
-          if (is_producer_load_needed) {
-            load_pipeline.consumer_release(load_pipe_consumer_state);
-          }
+        if (store_finished && is_producer_load_needed) {
+          load_pipeline.consumer_release(load_pipe_consumer_state);
           ++load_pipe_consumer_state;
         }
       }
@@ -1457,9 +1536,9 @@ public:
     //   // ++load_pipe_consumer_state;
     // }
     // if (StrassenMiGroup::hasM4() && thread_idx == 1 && m_coord == 0 && n_coord == 0)
-    //   printf("1630 %f\n", float(accumulators[0]));
+    //   MY_PRINTF("1630 %f\n", float(accumulators[0]));
     // if (thread_idx == 0 && StrassenMiGroup::hasM5() && m_coord == 0 && n_coord == 0)
-    //   printf("1432 %d %d ; %d %d ; %d\n", src_global_ops[0][0].valid(), src_global_ops[0][0].is_layout_interim(),
+    //   MY_PRINTF("1432 %d %d ; %d %d ; %d\n", src_global_ops[0][0].valid(), src_global_ops[0][0].is_layout_interim(),
     // src_global_ops[0][1].valid(), src_global_ops[0][1].is_layout_interim(), is_C_load_needed);
     // For each output tile
     int linear_store_stage = 0;
@@ -1488,7 +1567,7 @@ public:
               if (true) {
                 cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC + load_wait_state.index()*STAGE_ELEMS);
                 for (int i = 0; i < size(tSR_rC); i += 8) {
-                  auto frg = ptr_smem[thread_idx + (i/8)*128];
+                  auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
                   for (int j = 0; j < 8; j++)
                     tSR_rC(i + j) = frg[j];
                 }
@@ -1501,7 +1580,7 @@ public:
               if (first_store_srcs[1].is_layout_interim()) {
                 cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC2 + load_wait_state.index()*(STAGE_ELEMS));
                 for (int i = 0; i < size(tSR_rC2); i += 8) {
-                  auto frg = ptr_smem[thread_idx + (i/8)*128];
+                  auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
                   for (int j = 0; j < 8; j++) {
                     tSR_rC2(i + j) = frg[j];
                   }
@@ -1572,17 +1651,17 @@ public:
           if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim()) {
             //LayoutInterim
             cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators[0];
-            const uint PER_THREAD_ELEMS = (size<0>(EpilogueTile{})*size<1>(EpilogueTile{}))/NumThreadsPerWarpGroup;
+            const uint PER_THREAD_ELEMS = (size<0>(EpilogueTile{})*size<1>(EpilogueTile{}))/NumMMAThreads;
             const uint VECTOR_ELEMS = 8;
             NumericArrayConverter<ElementD, float, 8> converter;
             auto ptr_smem = (cutlass::Array<ElementD, 8>*)ptr_sD2;
             // if (thread_idx == 1 && m_coord == 0 && n_coord == 0 && linear_store_stage == 0)
-            //   printf("1630 %f %d\n", float(arrs[(linear_store_stage*PER_THREAD_ELEMS)/VECTOR_ELEMS][0]),
+            //   MY_PRINTF("1630 %f %d\n", float(arrs[(linear_store_stage*PER_THREAD_ELEMS)/VECTOR_ELEMS][0]),
             //           linear_store_stage);
             for (int e = 0; e < PER_THREAD_ELEMS; e += VECTOR_ELEMS) {
               cutlass::Array<ElementD, 8> arr = converter(arrs[(linear_store_stage*PER_THREAD_ELEMS + e)/VECTOR_ELEMS]);
               ptr_smem[store_pipe_producer_state.index() * STAGE_ELEMS/VECTOR_ELEMS +
-                 thread_idx + (e/VECTOR_ELEMS)*NumThreadsPerWarpGroup] = arr;
+                 thread_idx + (e/VECTOR_ELEMS)*NumMMAThreads] = arr;
             }
           }
 
@@ -1598,14 +1677,15 @@ public:
               frg[i] = tSR_rC(i);
             }
 
-            // if (StrassenMiGroup::hasM5() && thread_idx == 1 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
-            //   printf("1548 %f %f\n", float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
+            // if (StrassenMiGroup::hasM2() && thread_idx == 0 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
+            //   MY_PRINTF("1548 %d : %f %f\n", sub_m_idx, float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
 
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tRS_rCompute_frg); ++i) {
               auto conv = cutlass::NumericArrayConverter<float, SmemElementD, FragmentSize>{}(frg);
-              tRS_rAcc_frg_mn(r2s_v + i) = (StrassenMiGroup::hasM6() ? (conv - tRS_rAcc_frg_mn(r2s_v + i)) :
-                                                                       (tRS_rAcc_frg_mn(r2s_v + i) + conv));
+              tRS_rAcc_frg_mn(r2s_v + i) = (StrassenMiGroup::hasM6() && !IsFusedM2M3M6) ?
+                                              (conv - tRS_rAcc_frg_mn(r2s_v + i)) :
+                                              (tRS_rAcc_frg_mn(r2s_v + i) + conv);
             }
           }
 
@@ -1616,7 +1696,7 @@ public:
               frg[i] = tSR_rC2(i);
             }
             // if (thread_idx == 1 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
-              // printf("1562 %f %f\n", float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
+              // MY_PRINTF("1562 %f %f\n", float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tRS_rCompute_frg); ++i) {
               tRS_rAcc_frg_mn(r2s_v + i) = tRS_rAcc_frg_mn(r2s_v + i) +

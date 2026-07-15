@@ -1322,6 +1322,43 @@ public:
   static constexpr uint BPresumSharedBuffs() {
     return BPresumStores().numAccess();
   }
+
+  CUTLASS_HOST CUTLASS_DEVICE
+  static constexpr uint NumMisWithGLLoads() {
+    uint num_mis_with_gl_loads = 0;
+
+    #pragma unroll (numMs())
+    for (int fused_mi = 0; fused_mi < numMs(); fused_mi++) {
+      #pragma unroll 4
+      for (int c = 0; c < 4; c++) {
+        const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+        const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+
+        uint mi = getMi(fused_mi);
+        int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+        if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
+
+        int read_c = 0;
+        MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
+        int postsum_src_len = 0;
+        #pragma unroll 4
+        for (read_c = 0; read_c < 4; read_c++) {
+          auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+          if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+            postsum_srcs[postsum_src_len++] = postsum_src;
+          }
+        }
+
+        if (postsum_src_len > 0) {
+          num_mis_with_gl_loads += (postsum_src_len > 0);
+          break;
+        }
+      }
+    }
+
+    return num_mis_with_gl_loads;
+  }
 };
 
 template<int level, int kLevel1Idx, typename ThreadBlockShape, typename WarpShape, int StageCount, typename RWMTypes = RWMTypes<>, typename RWCTypes = RWCTypes<>, typename AllPresums = AllPresums<>>
