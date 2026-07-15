@@ -172,11 +172,9 @@ Current Status
 
 We are actively working on optimizing our implementation and supporting larger cases. Here is a list of all things that we are working on for now. We are obviously happy to receive contributions from the open source community.
 
-1. Add Cooperative Strassen GeMM Kernels for H100/H200: Currently, we only support Pingpong kernels because on our H200 system this kernel runs fastest on most cases. However, on H100, Cooperative kernels are fastest. We will soon support Cooperative Strassen GeMM Kernels.
+1. Add GeMM kernels for Blackwell.
 
-2. Add GeMM kernels for Blackwell.
-
-3. Overhaul Level 2 schedules to support larger Strassen family of algorithms.
+2. Overhaul Level 2 schedules to support larger Strassen family of algorithms.
 
 ## Contributing
 
