@@ -289,10 +289,10 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
                                                                     AllPresumsM1To6>
                                               >;
   using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<true, FusedMiGroup<7, 0>>,
-                                                         ParallelMiGroups<true, FusedMiGroup<7, 1, 2, 5, 3>,
+                                                         ParallelMiGroups<true, FusedMiGroup<7, 1, 2, 5, 3>>,
                                                         //  ParallelMiGroups<FusedMiGroup<7, 2>>,
-                                                                          FusedMiGroup<7, 4>>
-                                                         //ParallelMiGroups<true, FusedMiGroup<7, 4>>
+                                                                          // FusedMiGroup<7, 4>>
+                                                         ParallelMiGroups<true, FusedMiGroup<7, 4>>
                                                         //  ParallelMiGroups<FusedMiGroup<7, 5>>
                                                          >;
 #elif 1
