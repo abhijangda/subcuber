@@ -39,6 +39,10 @@ DECLARE_KERNEL_RUN_FN(run_cublaslt_f16);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f64);
 
 #ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+extern "C" int fill_hopper_f16_runner_operand(void *ptr, size_t capacity, uint64_t seed);
+#endif
+
+#ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_tile);
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_tile_128x128);
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_interleaved_presum);
@@ -170,14 +174,14 @@ static const KernelEntry kKernels[] = {
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_2x128_2x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_2x128_2x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_4x128_4x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_4x128_4x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_8x128_8x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_8x128_8x128_opt_no},
-    {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_0000},
+    {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128_4x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128_4x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_8x128_8x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_8x128_8x128_opt_no},
-    {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_no},
     {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_0000},
-    {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no},
+    {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_no},
     {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_0000},
+    {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no},
     {"volta_f32_cutlass_128x128", "volta", "f32", 0, run_volta_f32_cutlass_128x128},
     {"volta_f32_cutlass_256x128", "volta", "f32", 0, run_volta_f32_cutlass_256x128},
     {"volta_f32_sw_tile", "volta", "f32", 1, run_volta_f32_sw_tile},
@@ -275,15 +279,40 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
 
   int range_end = std::is_same<Element, cutlass::half_t>::value ? 4 : 16;
   int range_start = std::is_same<Element, cutlass::half_t>::value ? -4 : -16;
-  cutlass::reference::host::TensorFillRandomUniform(
+    if constexpr (std::is_same<Element, cutlass::half_t>::value) {
+#ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+      if (arch == "hopper") {
+        int fill_status = fill_hopper_f16_runner_operand(
+            tensor_a.device_data(), tensor_a.capacity(), 2023);
+        if (fill_status == 0) {
+          fill_status = fill_hopper_f16_runner_operand(
+              tensor_b.device_data(), tensor_b.capacity(), 2022);
+        }
+        if (fill_status != 0) {
+          return fill_status;
+        }
+      } else {
+  #endif
+        cutlass::reference::host::TensorFillRandomUniform(
+            tensor_a.host_view(), 1, Element(range_end), Element(range_start), 2);
+        cutlass::reference::host::TensorFillRandomUniform(
+            tensor_b.host_view(), 1, Element(range_end), Element(range_start), 2);
+        tensor_a.sync_device();
+        tensor_b.sync_device();
+  #ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+      }
+  #endif
+    } else {
+    cutlass::reference::host::TensorFillRandomUniform(
       tensor_a.host_view(), 1, Element(range_end), Element(range_start), 2);
-  cutlass::reference::host::TensorFillRandomUniform(
+    cutlass::reference::host::TensorFillRandomUniform(
       tensor_b.host_view(), 1, Element(range_end), Element(range_start), 2);
+    tensor_a.sync_device();
+    tensor_b.sync_device();
+    }
   cutlass::reference::host::TensorFill(tensor_c.host_view());
   cutlass::reference::host::TensorFill(tensor_d.host_view());
 
-  tensor_a.sync_device();
-  tensor_b.sync_device();
   tensor_c.sync_device();
   tensor_d.sync_device();
 
@@ -327,7 +356,10 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
       int rc = kernel.run(buffers, m, n, k, warmup, iterations, runner_streams,
               num_streams, split_k, &avg_ms);
       last_rc = rc;
-      std::this_thread::sleep_for(std::chrono::seconds((dtype != "f32") ? 10 : 5));
+      bool has_more_benchmarks = split_k < last_split_k || &kernel != &candidates.back();
+      if (has_more_benchmarks) {
+        std::this_thread::sleep_for(std::chrono::seconds((dtype != "f32") ? 10 : 5));
+      }
       if (rc != 0 || !std::isfinite(avg_ms)) {
         if (!tune_split_k) {
           std::cout << std::left << std::setw(52) << kernel.name << std::right

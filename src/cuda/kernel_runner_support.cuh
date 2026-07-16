@@ -312,7 +312,7 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
   int device_id = 0;
   cutlass::KernelHardwareInfo hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Kernel>(device_id);
   StrideA stride_a = cutlass::make_cute_packed_stride(StrideA{}, {m, k, 1});
-  StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {k, n, 1});
+  StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {n, k, 1});
   StrideC stride_c = cutlass::make_cute_packed_stride(StrideC{}, {m, n, 1});
   StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {m, n, 1});
 
@@ -340,7 +340,7 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
 
   int swizzles[7] = {2, 2, 1, 1, 1, 1, 1};
   Gemm gemm;
-  status = gemm.initialize(args, swizzles, workspace.get(), streams[0]);
+  status = gemm.initialize(args, swizzles, workspace.get());
   if (status != cutlass::Status::kSuccess) {
     return kernel_runner_status_to_error(status);
   }
@@ -444,7 +444,7 @@ int kernel_runner_run_gemm_cutlass3(KernelRunnerBuffers buffers, int m, int n, i
   int device_id = 0;
   cutlass::KernelHardwareInfo hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Kernel>(device_id);
   StrideA stride_a = cutlass::make_cute_packed_stride(StrideA{}, {m, k, 1});
-  StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {k, n, 1});
+  StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {n, k, 1});
   StrideC stride_c = cutlass::make_cute_packed_stride(StrideC{}, {m, n, 1});
   StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {m, n, 1});
 
