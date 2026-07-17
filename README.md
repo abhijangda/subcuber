@@ -104,6 +104,25 @@ Optional filtering:
 	--kernel_regex='presum'
 ```
 
+The fp16 MoE grouped GEMM treats `m` as the number of routed token rows per
+expert, `k` as the input hidden size, and `n` as the output hidden size. Each
+expert uses a separate `k` by `n` weight matrix, so the total number of token
+rows is `m * experts`. Because all experts have the same shape, the runner uses
+one fp16 `cublasGemmStridedBatchedEx` call. Run it at Strassen level 0:
+
+```bash
+./build/kernel_runner \
+	--m=4096 --n=4096 --k=4096 \
+	--dtype=f16 --gpu_arch=hopper --strassen_level=0 \
+	--iterations=10 --warmup=2 --streams=1 \
+	--experts=8 --kernel_regex='cublas_grouped_moe'
+```
+
+`--groups=N` is accepted as an alias for `--experts=N`.
+When an explicit expert count is greater than one, the runner benchmarks only
+grouped or batched MoE kernels. With one expert, it also benchmarks regular GEMM
+kernels for comparison.
+
 For the full usage line:
 
 ```bash
