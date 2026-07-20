@@ -113,6 +113,8 @@ using ElementAccumulator  = float;                                          // E
 using ArchTag             = cutlass::arch::Sm90;                            // Tag indicating the minimum SM that supports the intended feature
 using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
 
+using ProblemShape = Shape<int,int,int>; // M,N,K
+
 #if defined(PINGPONG)
 using TileShape           = Shape<_128,_128,_64>;                           // Threadblock-level tile size
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
@@ -306,6 +308,7 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
 #endif
 
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups,
+                                                                       ProblemShape,
                                                                        ElementA, LayoutA, ElementB, LayoutB,
                                                                        ElementC, LayoutC,
                                                                        ElementAccumulator, TileShape, ClusterShape,

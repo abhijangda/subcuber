@@ -118,6 +118,8 @@ using ElementAccumulator  = float;                                          // E
 using ArchTag             = cutlass::arch::Sm90;                            // Tag indicating the minimum SM that supports the intended feature
 using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
 
+using ProblemShape = cutlass::gemm::GroupProblemShape<Shape<int,int,int>>; // <M,N,K> per group
+
 #if defined(PINGPONG)
 using TileShape           = Shape<_128,_128,_64>;                           // Threadblock-level tile size
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
@@ -311,8 +313,9 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
 #endif
 
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups,
-                                                                       ElementA, LayoutA, ElementB, LayoutB,
-                                                                       ElementC, LayoutC,
+                                                                       ProblemShape,
+                                                                       ElementA, LayoutA *, ElementB, LayoutB *,
+                                                                       ElementC, LayoutC *,
                                                                        ElementAccumulator, TileShape, ClusterShape,
                                                                        KernelSchedule, EpilogueSchedule,
                                                                        cute::Int<StageCountTypeM0>,
@@ -332,10 +335,10 @@ using DeviceGemmReference = cutlass::reference::device::Gemm<
   ElementAccumulator,
   ElementAccumulator>;
 
-using StrideA = typename Gemm::GemmKernel::StrideA;
-using StrideB = typename Gemm::GemmKernel::StrideB;
-using StrideC = typename Gemm::GemmKernel::StrideC;
-using StrideD = typename Gemm::GemmKernel::StrideD;
+using StrideA = typename Gemm::GemmKernel::InternalStrideA;
+using StrideB = typename Gemm::GemmKernel::InternalStrideB;
+using StrideC = typename Gemm::GemmKernel::InternalStrideC;
+using StrideD = typename Gemm::GemmKernel::InternalStrideD;
 
 //
 // Data members
@@ -407,7 +410,7 @@ struct Options {
 
   Options():
     help(false),
-    m(5120), n(4096), k(4096),
+    m(5120), n(4096), k(4096), groups(1),
     alpha(1.f), beta(0.f),
     reference_check(true),
     iterations(1000),
@@ -470,6 +473,10 @@ struct Options {
       idx++; 
     }
     for (int ii = idx; ii < 7; ii++) swizzles[ii] = 1;
+
+    if (groups > 0) {
+      problem_sizes_host.assign(groups, {m, n, k});
+    }
   }
 
   /// Prints the usage statement.
@@ -749,7 +756,7 @@ typename Gemm::Arguments args_from_options(const Options &options)
     fusion_args.dBeta = {cute::_0{}, cute::_0{}, 1};
   }
 
-  if (host_problem_shapes_available) {
+  if (true) {
     arguments = typename Gemm::Arguments {
       cutlass::gemm::GemmUniversalMode::kGrouped,
       {options.groups, problem_sizes.get(), options.problem_sizes_host.data()},
@@ -959,7 +966,7 @@ int run(Options &options)
     // Compute average runtime and GFLOPs.
     float elapsed_ms = timer.elapsed_millis();
     result.avg_runtime_ms = double(elapsed_ms) / double(options.iterations);
-    result.gflops = options.gflops(result.avg_runtime_ms / 1000.0);
+    result.gflops = options.gflops(result.avg_runtime_ms / 1000.0, options.problem_sizes_host);
 
     std::string raster = "Heuristic";
 

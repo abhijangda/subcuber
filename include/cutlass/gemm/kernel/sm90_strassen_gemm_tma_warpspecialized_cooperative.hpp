@@ -223,24 +223,24 @@ public:
     {}
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_m() const {
+    int get_problem_shape_m(int idx = 0) const {
       return get<0>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_n() const {
+    int get_problem_shape_n(int idx = 0) const {
       return get<1>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_k() const {
+    int get_problem_shape_k(int idx = 0) const {
       return get<2>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    ProblemShape get_half_problem_shape() const {
-      return ProblemShape{get_problem_shape_m()/2, get_problem_shape_n()/2,
-                          get_problem_shape_k()/2};
+    ProblemShape get_half_problem_shape(int idx = 0) const {
+      return ProblemShape{get_problem_shape_m(idx)/2, get_problem_shape_n(idx)/2,
+                          get_problem_shape_k(idx)/2};
     }
 
     template<typename Other>
@@ -270,38 +270,38 @@ public:
     int run = 0;
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_m() const {
+    int get_problem_shape_m(int idx = 0) const {
       return get<0>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_n() const {
+    int get_problem_shape_n(int idx = 0) const {
       return get<1>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_k() const {
+    int get_problem_shape_k(int idx = 0) const {
       return get<2>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_A() const {
-      return get_problem_shape_k();
+    int get_stride_A(int idx = 0) const {
+      return get_problem_shape_k(idx);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_B() const {
-      return get_problem_shape_n();
+    int get_stride_B(int idx = 0) const {
+      return get_problem_shape_n(idx);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_MA() const {
-      return get_problem_shape_k()/2;
+    int get_stride_MA(int idx = 0) const {
+      return get_problem_shape_k(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_MB() const {
-      return get_problem_shape_n()/2;
+    int get_stride_MB(int idx = 0) const {
+      return get_problem_shape_n(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
@@ -315,23 +315,23 @@ public:
     }
 
     CUTLASS_HOST_DEVICE
-    ProblemShape get_half_problem_shape() const {
-      return ProblemShape{get_problem_shape_m()/2, get_problem_shape_n()/2,
-                          get_problem_shape_k()/2};
+    ProblemShape get_half_problem_shape(int idx = 0) const {
+      return ProblemShape{get_problem_shape_m(idx)/2, get_problem_shape_n(idx)/2,
+                          get_problem_shape_k(idx)/2};
     }
 
     CUTLASS_HOST_DEVICE
-    ElementA* get_ptr_A() const {
+    ElementA* get_ptr_A(int idx = 0) const {
       return ptr_A;
     }
 
     CUTLASS_HOST_DEVICE
-    ElementB* get_ptr_B() const {
+    ElementB* get_ptr_B(int idx = 0) const {
       return ptr_B;
     }
 
     CUTLASS_HOST_DEVICE
-    ElementD* get_ptr_D() const {
+    ElementD* get_ptr_D(int idx = 0) const {
       return ptr_D;
     }
   };

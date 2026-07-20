@@ -175,6 +175,7 @@ struct PresumOpt {
 };
 
 template<typename StrassenGroups_,
+         typename ProblemShape,
          typename ElementA, typename LayoutA, typename ElementB, typename LayoutB,
          typename ElementC, typename LayoutC, typename ElementAccum, typename TileShape,
          typename ClusterShape, typename KernelSchedule, typename EpilogueSchedule,
@@ -227,7 +228,7 @@ public:
   template<typename StrassenMiGroup, typename DefaultTileShape>
   using GemmKernel = cutlass::gemm::kernel::StrassenGemmUniversal<
     StrassenMiGroup,
-    Shape<int,int,int>, // Indicates ProblemShape
+    ProblemShape, // Indicates ProblemShape
     typename CollectiveMainloop<StrassenMiGroup, DefaultTileShape>::CollectiveOp,
     typename CollectiveEpilogue<StrassenMiGroup, DefaultTileShape>::CollectiveOp
   >;
@@ -365,6 +366,22 @@ public:
   // Params const& params() const {
   //   return params_;
   // }
+  
+  template<typename ArgsOrParams>
+  static auto get_vector_of_problems(ArgsOrParams const &args) {
+    using ProblemShape = std::remove_cvref_t<decltype(args.problem_shape)>;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      std::vector<typename ProblemShape::UnderlyingProblemShape> problems;
+      for (int i = 0; i < args.problem_shape.groups(); i++) {
+        problems.push_back(args.problem_shape.get_host_problem_shape(i));
+      }
+      return problems;
+    } else {
+      std::vector<ProblemShape> problems;
+      problems.push_back(args.problem_shape);
+      return problems;
+    }
+  }
 
   /// Determines whether the GEMM can execute the given problem.
   static Status
@@ -379,17 +396,23 @@ public:
         bool has_A_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyAPresum(MmaStrassen::PresumCompute);
         bool has_B_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyBPresum(MmaStrassen::PresumCompute);
         using PresumOpt = typename GemmKernelM0::Mma::PresumOpt;
-        const int presum_a_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogA != UINT32_MAX ?
-                                                    PresumOpt::FixedPresumTileMultilplierLogA :
-                                                    GemmKernelM0::Mma::get_presum_log_multiplier(args.get_problem_shape_k(), args.get_problem_shape_n());
-        const int presum_b_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogB != UINT32_MAX ?
-                                                    PresumOpt::FixedPresumTileMultilplierLogB :
-                                                    GemmKernelM0::Mma::get_presum_log_multiplier(args.get_problem_shape_k(), args.get_problem_shape_m());
-        const int total_presum_iterations = std::max(GemmKernelM0::Mma::kPresumComputeIterationsA*has_A_presums*(1<<presum_a_log_tile_multiplier),
-                                                     GemmKernelM0::Mma::kPresumComputeIterationsB*has_B_presums*(1<<presum_b_log_tile_multiplier));
-        int required_k = total_presum_iterations * size<2>(typename GemmKernelM0::Mma::TileShape{});
-        if (args.get_problem_shape_k()/2 < required_k)
-          return Status::kErrorInvalidProblem;
+        auto problems = get_vector_of_problems(args);
+        for (int i = 0; i < problems.size(); i++) {
+          const int k = cute::get<2>(problems[i]);
+          const int m = cute::get<0>(problems[i]);
+          const int n = cute::get<1>(problems[i]);
+          const int presum_a_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogA != UINT32_MAX ?
+                                                      PresumOpt::FixedPresumTileMultilplierLogA :
+                                                      GemmKernelM0::Mma::get_presum_log_multiplier(k, n);
+          const int presum_b_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogB != UINT32_MAX ?
+                                                      PresumOpt::FixedPresumTileMultilplierLogB :
+                                                      GemmKernelM0::Mma::get_presum_log_multiplier(k, m);
+          const int total_presum_iterations = std::max(GemmKernelM0::Mma::kPresumComputeIterationsA*has_A_presums*(1<<presum_a_log_tile_multiplier),
+                                                       GemmKernelM0::Mma::kPresumComputeIterationsB*has_B_presums*(1<<presum_b_log_tile_multiplier));
+          int required_k = total_presum_iterations * size<2>(typename GemmKernelM0::Mma::TileShape{});
+          if (k/2 < required_k)
+            return Status::kErrorInvalidProblem;
+        }
       }
       return Status::kSuccess;
     }
@@ -399,17 +422,57 @@ public:
   }
 
   static size_t get_presum_a_workspace_size(Arguments const &args) {
-    return (StrassenGroups::Group0::AllPresums::numAPresumYes()) *
-            sizeof(ElementA) * args.get_problem_shape_m()/2 * args.get_problem_shape_k()/2;
+    auto workspace_size = [](auto const &problem_shape) {
+      return StrassenGroups::Group0::AllPresums::numAPresumYes() * sizeof(ElementA) *
+             size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<2>(problem_shape) / 2);
+    };
+
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return total_workspace_size;
+    }
+    else {
+      return workspace_size(args.problem_shape);
+    }
   }
 
   static size_t get_presum_b_workspace_size(Arguments const &args) {
-    return (StrassenGroups::Group0::AllPresums::numBPresumYes()) *
-            sizeof(ElementB) * args.get_problem_shape_n()/2 * args.get_problem_shape_k()/2;
+    auto workspace_size = [](auto const &problem_shape) {
+      return StrassenGroups::Group0::AllPresums::numBPresumYes() * sizeof(ElementB) *
+             size_t(cute::get<1>(problem_shape) / 2) * size_t(cute::get<2>(problem_shape) / 2);
+    };
+
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return total_workspace_size;
+    }
+    else {
+      return workspace_size(args.problem_shape);
+    }
   }
 
   static size_t get_postsum_m_workspace_size(Arguments const &args) {
-    return 7*(args.get_problem_shape_m()/2 * args.get_problem_shape_n()/2) * sizeof(ElementB);
+    auto workspace_size = [](auto const &problem_shape) {
+      return 7 * size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<1>(problem_shape) / 2) *
+             sizeof(ElementC);
+    };
+
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return total_workspace_size;
+    }
+    else {
+      return workspace_size(args.problem_shape);
+    }
   }
 
   /// Gets the workspace size
@@ -1129,13 +1192,16 @@ public:
     if (paramsM0_.run <= 1 && (StrassenGroups::PresumGroup::AllPresums::APresumComputeLoads(PresumGlobalKernel).numAccess() > 0 ||
         StrassenGroups::PresumGroup::AllPresums::BPresumComputeLoads(PresumGlobalKernel).numAccess() > 0)) {
       //TODO: Add a swizzle?
-      dim3 grid = {uint((paramsM0_.get_problem_shape_n()/2)/GemmKernelM0::Mma::PresumShape::kN),
-                   uint((paramsM0_.get_problem_shape_m()/2)/GemmKernelM0::Mma::PresumShape::kM),
-                   1};
-      KernelPresumGlobalCompute<typename StrassenGroups::PresumGroup, GemmKernelM0, 128><<<grid, 128, 0, streams[0]>>>(paramsM0_);
-      auto result = cudaDeviceSynchronize();
-      if (result != cudaSuccess)
-      {printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(result)); return Status::kErrorInternal;}
+      auto problems = get_vector_of_problems(paramsM0_);
+      for (int problem_idx = 0; problem_idx < problems.size(); problem_idx++) {
+        dim3 grid = {uint((paramsM0_.get_problem_shape_n(problem_idx)/2)/GemmKernelM0::Mma::PresumShape::kN),
+                     uint((paramsM0_.get_problem_shape_m(problem_idx)/2)/GemmKernelM0::Mma::PresumShape::kM),
+                     1};
+        KernelPresumGlobalCompute<typename StrassenGroups::PresumGroup, GemmKernelM0, 128><<<grid, 128, 0, streams[0]>>>(paramsM0_, problem_idx);
+        auto result = cudaDeviceSynchronize();
+        if (result != cudaSuccess)
+        {printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(result)); return Status::kErrorInternal;}
+      }
       paramsM0_.run += 1;
     }
 
@@ -1169,7 +1235,7 @@ public:
       ElementB* h_presum_b = new ElementB[R*C];
       ElementB* b = new ElementB[2*R*2*C];
       cudaMemcpy(h_presum_b, &paramsM0_.presum_m_b_workspace[2*R*C], R*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
-      cudaMemcpy(b, paramsM0_.get_ptr_B(), 2*R*2*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
+      cudaMemcpy(b, paramsM0_.get_ptr_B(0), 2*R*2*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
 
       for (int c = 0; c < C; c++) {
         bool to_break = false;
