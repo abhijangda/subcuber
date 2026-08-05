@@ -42,7 +42,7 @@
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/kernel/gemm_universal_decl.h"
 #include "cutlass/gemm/kernel/tile_scheduler.hpp"
-#include "cutlass/gemm/group_array_problem_shape.hpp"
+#include "cutlass/gemm/strassen_group_array_problem_shape.hpp"
 #include "cutlass/pipeline/pipeline.hpp"
 #include "cute/tensor.hpp"
 #include "cutlass/trace.h"
@@ -149,14 +149,23 @@ public:
     TileScheduler_
   >;
 
-  using TileScheduler = typename detail::TileSchedulerSelector<
-    SchedulerTag,
-    ArchTag,
-    TileShape,
-    ClusterShape,
-    8, // SchedulerPipelineStageCount -- Grouped GEMM scheduler will benefit from a larger number of stages.
-    cute::conditional_t<cute::is_same_v<SchedulerTag, void>, void, ProblemShape> // Use void for default scheduler.
-  >::Scheduler;
+  using TileScheduler = typename detail::StrassenTileSchedulerSelector<
+                                          SchedulerTag, 
+                                          ArchTag, 
+                                          TileShape,
+                                          ClusterShape,
+                                          8, // SchedulerPipelineStageCount -- Grouped GEMM scheduler will benefit from a larger number of stages
+                                          cute::conditional_t<cute::is_same_v<SchedulerTag, void>, void, ProblemShape>
+                                          >::Scheduler;
+
+  // using TileScheduler = typename detail::TileSchedulerSelector<
+  //   SchedulerTag,
+  //   ArchTag,
+  //   TileShape,
+  //   ClusterShape,
+  //   8, // SchedulerPipelineStageCount -- Grouped GEMM scheduler will benefit from a larger number of stages.
+  //   cute::conditional_t<cute::is_same_v<SchedulerTag, void>, void, ProblemShape> // Use void for default scheduler.
+  // >::Scheduler;
 
   using TileSchedulerArguments = typename TileScheduler::Arguments;
   using TileSchedulerParams = typename TileScheduler::Params;
@@ -181,6 +190,9 @@ public:
   // 1 stage ordered sequence between mainloop and epilogue producer load threads
   using LoadWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
 
+  static const bool DoesPresum = (StrassenMiGroup::hasM0() && StrassenMiGroup::AllPresums::computeAnyAPresum()) ||
+                                 (StrassenMiGroup::hasM1() && StrassenMiGroup::AllPresums::computeAnyBPresum());
+
   // Kernel level shared memory storage
   struct SharedStorage {
     struct TensorStorage : cute::aligned_struct<128, _1> {
@@ -188,6 +200,7 @@ public:
       using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
 
       MainloopTensorStorage mainloop;
+      typename CollectiveMainloop::PresumTensorStorage presum_tensors;
       EpilogueTensorStorage epilogue;
     } tensors;
 
@@ -276,8 +289,11 @@ public:
     ElementB** ptr_B;
     ElementD** ptr_D;
     ElementA* presum_m_a_workspace;
+    uint64_t* presum_a_batch_indices;
     ElementB* presum_m_b_workspace;
+    uint64_t* presum_b_batch_indices;
     ElementD* postsum_m_workspace;
+    uint64_t* postsum_m_batch_indices;
 
     void* workspace{nullptr};
 
@@ -329,9 +345,10 @@ public:
     }
 
     CUTLASS_HOST_DEVICE
-    ProblemShape get_half_problem_shape(int problem_idx) const {
-      return ProblemShape{get_problem_shape_m(problem_idx)/2, get_problem_shape_n(problem_idx)/2,
-                          get_problem_shape_k(problem_idx)/2};
+    std::remove_cvref_t<ProblemShape> get_half_problem_shape(int problem_idx) const {
+      return std::remove_cvref_t<ProblemShape>{get_problem_shape_m(problem_idx)/2,
+                                               get_problem_shape_n(problem_idx)/2,
+                                               get_problem_shape_k(problem_idx)/2};
     }
 
     CUTLASS_HOST_DEVICE
@@ -348,6 +365,21 @@ public:
     ElementD* get_ptr_D(int problem_idx) const {
       return ptr_D[problem_idx];
     }
+
+    CUTLASS_HOST_DEVICE
+    ElementA* get_ptr_presum_A(int problem_idx) const {
+      return presum_m_a_workspace + presum_a_batch_indices[problem_idx];
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementB* get_ptr_presum_B(int problem_idx) const {
+      return presum_m_b_workspace + presum_b_batch_indices[problem_idx];
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementD* get_postsum_ptr(int problem_idx) const {
+      return postsum_m_workspace ;//+ postsum_m_batch_indices[problem_idx];
+    }
   };
 
   //
@@ -357,7 +389,7 @@ public:
   // Convert to underlying arguments. In this case, a simple copy for the aliased type.
   static
   Params
-  to_underlying_arguments(Arguments const& args, ElementA* presum_m_a, ElementB* presum_m_b, ElementD* postsum_m, void* workspace) {
+  to_underlying_arguments(Arguments const& args, ElementA* presum_m_a, uint64_t* presum_a_batch_indices, ElementB* presum_m_b, uint64_t* presum_b_batch_indices, ElementD* postsum_m, uint64_t* postsum_m_batch_indices, void* workspace) {
     CUTLASS_TRACE_HOST("to_underlying_arguments():");
 
     ProblemShape problem_shapes = args.problem_shape;
@@ -414,14 +446,16 @@ public:
     return {
       args.mode,
       problem_shapes,
-      CollectiveMainloop::to_underlying_arguments(problem_shapes, presum_m_a, presum_m_b, args.mainloop, mainloop_workspace),
-      CollectiveEpilogue::to_underlying_arguments(problem_shapes, args.epilogue, postsum_m, epilogue_workspace),
+      CollectiveMainloop::to_underlying_arguments(problem_shapes, presum_m_a, presum_a_batch_indices, presum_m_b, presum_b_batch_indices, args.mainloop, mainloop_workspace),
+      CollectiveEpilogue::to_underlying_arguments(problem_shapes, args.epilogue, postsum_m, postsum_m_batch_indices, epilogue_workspace),
       hw_info,
       scheduler,
       const_cast<ElementA**>(args.mainloop.ptr_A),
       const_cast<ElementB**>(args.mainloop.ptr_B),
       const_cast<ElementD**>(args.epilogue.ptr_D),
-      presum_m_a, presum_m_b, postsum_m,
+      presum_m_a, presum_a_batch_indices,
+      presum_m_b, presum_b_batch_indices,
+      postsum_m, postsum_m_batch_indices,
       workspace
     };
   }
@@ -670,8 +704,9 @@ public:
     EpiStorePipeline epi_store_pipeline(epi_store_pipeline_params);
 
     typename LoadWarpOrderBarrier::Params params_load_order_barrier;
-    params_load_order_barrier.group_id = producer_warp_role == ProducerWarpRole::Mainloop ? 0 : 1;
-    params_load_order_barrier.group_size = NumThreadsPerWarp;
+    params_load_order_barrier.group_id = (warp_group_role == WarpGroupRole::Consumer0 ||
+                                          warp_group_role == WarpGroupRole::Consumer1) ? 0 : 1;
+    params_load_order_barrier.group_size = NumMmaThreads;
     LoadWarpOrderBarrier load_order_barrier(shared_storage.pipelines.load_order, params_load_order_barrier);
 
     // Initialize starting pipeline states for the collectives
@@ -686,6 +721,8 @@ public:
     PipelineState mainloop_pipe_producer_state = cutlass::make_producer_start_state<MainloopPipeline>();
     PipelineState epi_load_pipe_producer_state = cutlass::make_producer_start_state<EpiLoadPipeline>();
     PipelineState epi_store_pipe_producer_state = cutlass::make_producer_start_state<EpiStorePipeline>();
+
+    using RWCTypes = typename StrassenMiGroup::RWCTypes;
 
     auto cluster_wait_fn = [] () {
       // We need this to guarantee that the Pipeline init is visible
@@ -718,19 +755,31 @@ public:
 
     // Optionally append 1s until problem shape is rank-4 in case it is only rank-3 (MNK)
     auto problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(work_tile_info.L_idx), 1);
+    // auto half_problem_shape_MNKL = append<4>(params.get_half_problem_shape(work_tile_info.L_idx), 1);
 
     // Prepare and partition the input tensors. Expects a tuple of tensors where:
     // get<0>(load_inputs) is the tma tensor A after local tiling so that it has shape (BLK_M,BLK_K,m,k,l)
     // get<1>(load_inputs) is the tma tensor B after local tiling so that it has shape (BLK_N,BLK_K,n,k,l)
-    auto load_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+  //  auto load_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+
+    auto all_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+    // auto all_presumld_inputs = collective_mainloop.presumld_inputs(problem_shape_MNKL, half_problem_shape_MNKL, params.mainloop);
+    auto load_inputs = collective_mainloop.get_inputs(all_inputs);
+    auto load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
+    auto load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+
     static_assert(cute::tuple_size_v<decltype(load_inputs)> >= 2, "Output of load_init must have at least two elements (A, B)");
 
     // Extract out partitioned A and B.
     Tensor gA_mkl = get<0>(load_inputs);
     Tensor gB_nkl = get<1>(load_inputs);
 
+    constexpr bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
+    if (threadIdx.x == 0)
+      MY_PRINTF("746 %d %d\n", blockIdx.x, blockIdx.y);
+
     // Get pipeline stage increments from tensor shapes
-    auto k_tile_count = size<3>(gA_mkl);
+    auto k_tile_count = (params.get_problem_shape_k(work_tile_info.L_idx)/2)/decltype(size<2>(blk_shape))::value;
 
     if (warp_group_role == WarpGroupRole::Producer) {
       cutlass::arch::warpgroup_reg_dealloc<LoadRegisterRequirement>();
@@ -751,12 +800,15 @@ public:
       }
       // Mainloop Producer Warp
       else if (producer_warp_role == ProducerWarpRole::Mainloop) {
+        if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+            MY_PRINTF("769 %d %d\n", work_tile_info.M_idx, work_tile_info.N_idx);
         int32_t curr_batch = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl)); // Usually just returns work_tile_info.L_idx;
         int32_t const mock_l_coord = 0;
         int32_t const sm_idx = blockIdx.x + (blockIdx.y * gridDim.x);
         int32_t const sm_count = params.hw_info.sm_count;
-
-        // Fetch a copy of tensormaps for the CTA
+                   if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                MY_PRINTF("775 %d %d\n", work_tile_info.M_idx, work_tile_info.N_idx);
+        // Fetch a copy ofcurr_batch tensormaps for the CTA
         auto input_tensormaps = collective_mainloop.tensormaps_init(params.mainloop, shared_storage.tensormaps.mainloop, sm_count, sm_idx);
 
         // Update tensormap for the initial batch for the CTA
@@ -772,7 +824,7 @@ public:
         // Entire warp must do this (i.e. it's aligned)
         collective_mainloop.tensormaps_cp_fence_release(shared_storage.tensormaps.mainloop, input_tensormaps);
 
-        bool do_load_order_arrive = true;
+        // bool do_load_order_arrive = true;
         bool did_batch_change = true;
         do {
           if (!TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
@@ -785,41 +837,93 @@ public:
             continue;
           }
 
+          if (threadIdx.x%32 == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+            MY_PRINTF("803 %d %d\n", work_tile_info.M_idx, work_tile_info.N_idx);
           // Compute m_coord, n_coord, l_coord with the post-tiled m-shape and n-shape
           auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
+          if (threadIdx.x%32 == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+            MY_PRINTF("810 %d %d\n", work_tile_info.M_idx, work_tile_info.N_idx);
           auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
           auto blk_coord = make_coord(m_coord, n_coord, _, mock_l_coord);
 
           // Get the number of K tiles to compute for this work as well as the starting K tile offset of the work.
-          auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape);
-          auto work_k_tile_start = TileScheduler::get_work_k_tile_start(work_tile_info);
+          auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape)/2;
+          auto work_k_tile_start = 0;//TileScheduler::get_work_k_tile_start(work_tile_info);
           auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
 
           if (did_batch_change) {
             load_inputs = collective_mainloop.tensors_perform_update(load_inputs, params.mainloop, problem_shape_MNKL, curr_batch);
             collective_mainloop.tensormaps_fence_acquire(input_tensormaps);
           }
+          if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+            MY_PRINTF("817 %d : %d %d\n", StrassenMiGroup::getMi(), m_coord, n_coord);
 
-          collective_mainloop.load(
-            params.mainloop,
-            mainloop_pipeline,
-            mainloop_pipe_producer_state,
-            load_inputs,
-            input_tensormaps,
-            blk_coord,
-            k_tile_iter, work_k_tile_count,
-            lane_idx,
-            block_rank_in_cluster,
-            shared_storage.tensors.mainloop
-          );
-          // Pipeline state is only advanced if there are K tiles to compute
-          mainloop_pipe_producer_state.advance(work_k_tile_count);
+          if (StrassenMiGroup::numMs() > 1) {
+            if (threadIdx.x%32 == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+                MY_PRINTF("826 %d %d\n", m_coord, n_coord);
+            auto load_work_tile = [&] (decltype(work_tile_info) load_work_tile_info, int load_sub_m_idx) {
+              if (threadIdx.x%32 == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+                MY_PRINTF("829 %d %d\n", m_coord, n_coord);
+              auto load_m_coord = idx2crd(load_work_tile_info.M_idx, shape<2>(gA_mkl));
+              auto load_n_coord = idx2crd(load_work_tile_info.N_idx, shape<2>(gB_nkl));
+              auto load_l_coord = idx2crd(load_work_tile_info.L_idx, shape<4>(gB_nkl));
+              auto load_blk_coord = make_coord(load_m_coord, load_n_coord, _, load_l_coord);
+              auto load_k_tile_iter = cute::make_coord_iterator(shape<3>(gA_mkl));
+              load_k_tile_iter.coord += (is_fused && load_sub_m_idx == 1) ? work_k_tile_count : 0;
 
-          // Signal for the epilogue load warp to begin
-          if (do_load_order_arrive) {
-            load_order_barrier.arrive();
-            do_load_order_arrive = false;
+              if (threadIdx.x%32 == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+                MY_PRINTF("1133 %d : %d : %d %d\n", work_k_tile_count, load_sub_m_idx, load_m_coord, load_n_coord);
+
+              collective_mainloop.load(
+                params.mainloop,
+                problem_shape_MNKL,
+                mainloop_pipeline,
+                mainloop_pipe_producer_state,
+                (is_fused || load_sub_m_idx == 0) ? load_inputs :
+                  ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
+                input_tensormaps,
+                load_blk_coord, load_sub_m_idx,
+                load_k_tile_iter, work_k_tile_count,
+                lane_idx,
+                block_rank_in_cluster,
+                shared_storage.tensors.presum_tensors,
+                shared_storage.tensors.mainloop
+              );
+              // Pipeline state is only advanced if there are K tiles to compute
+              mainloop_pipe_producer_state.advance(work_k_tile_count);
+            };
+
+            load_work_tile(work_tile_info, 0);
+            load_work_tile(work_tile_info, 1);
+            if (StrassenMiGroup::numMs() == 3) {
+              load_work_tile(work_tile_info, 2);
+            }
+          } else {
+            if (threadIdx.x%32 == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+                MY_PRINTF("863 %d %d\n", m_coord, n_coord);
+            collective_mainloop.load(
+              params.mainloop,
+              problem_shape_MNKL,
+              mainloop_pipeline,
+              mainloop_pipe_producer_state,
+              load_inputs,
+              input_tensormaps,
+              blk_coord, 0,
+              k_tile_iter, work_k_tile_count,
+              lane_idx,
+              block_rank_in_cluster,
+              shared_storage.tensors.presum_tensors,
+              shared_storage.tensors.mainloop
+            );
+            // Pipeline state is only advanced if there are K tiles to compute
+            mainloop_pipe_producer_state.advance(work_k_tile_count);
           }
+
+          // // Signal for the epilogue load warp to begin
+          // if (do_load_order_arrive) {
+          //   load_order_barrier.arrive();
+          //   do_load_order_arrive = false;
+          // }
 
           // Get next work tile
           auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, tile_scheduler_pipeline, tile_scheduler_pipe_consumer_state);
@@ -873,7 +977,7 @@ public:
             auto blk_coord = make_coord(m_coord, n_coord, _, mock_l_coord);
 
             // Get the number of K tiles to compute for this work as well as the starting K tile offset of the work.
-            auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape);
+            auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape)/2;
             auto work_k_tile_start = TileScheduler::get_work_k_tile_start(work_tile_info);
             auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
 
@@ -918,6 +1022,7 @@ public:
         int32_t const sm_idx = blockIdx.x + (blockIdx.y * gridDim.x);
         int32_t const sm_count = params.hw_info.sm_count;
 
+        // Since load requires linear we do not need to do this
         auto epi_load_tensormap = get<0>(collective_epilogue.load_init(params.epilogue, shared_storage.tensormaps.epilogue, sm_count, sm_idx));
 
         bool did_batch_change = true;
@@ -936,8 +1041,7 @@ public:
         __syncwarp();
         collective_epilogue.template tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue, epi_load_tensormap, 0);
 
-        load_order_barrier.wait();
-
+        // load_order_barrier.wait();
         do {
           int32_t curr_batch = work_tile_info.L_idx;
 
@@ -949,31 +1053,76 @@ public:
               problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(work_tile_info.L_idx), 1);
             }
 
-            // Compute m_coord, n_coord, l_coord with the post-tiled m-shape and n-shape
-            auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
-            auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
-            auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
-            auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
+            #pragma unroll (StrassenMiGroup::numMs())
+            for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
+              // Compute m_coord, n_coord, l_coord with the post-tiled m-shape and n-shape
+              auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
+              auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
+              auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
+              auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
 
-            if (did_batch_change) {
-              collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_load_tensormap);
+              if (did_batch_change) {
+                collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_load_tensormap);
+              }
+
+              bool wait = work_tile_info.is_valid() && curr_batch != next_work_tile_info.L_idx;
+
+              #pragma unroll 4
+              for (int c = 0; c < 4; c++) {
+                const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+                const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+
+                uint mi = StrassenMiGroup::getMi(fused_mi);
+                int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+                if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
+
+                MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
+                int postsum_src_len = 0;
+                #pragma unroll 4
+                for (int read_c = 0; read_c < 4; read_c++) {
+                  auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+                  if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+                    postsum_srcs[postsum_src_len++] = postsum_src;
+                  }
+                }
+
+                if (postsum_src_len > 0) {
+                  if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                    MY_PRINTF("944 %d : %d %d\n", fused_mi, m_coord, n_coord);
+                  load_order_barrier.wait();
+                  load_order_barrier.advance();
+                  epi_load_pipe_producer_state =
+                  collective_epilogue.load_m0(
+                    epi_load_pipeline,
+                    epi_load_pipe_producer_state,
+                    problem_shape_MNKL,
+                    blk_shape,
+                    blk_coord, fused_mi,
+                    tiled_mma,
+                    lane_idx,
+                    shared_storage.tensors.epilogue,
+                    shared_storage.tensors.epilogue,
+                    postsum_srcs
+                  );
+                  if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+                    MY_PRINTF("963 %d : %d %d\n", fused_mi, m_coord, n_coord);
+                }
+              }
+              // epi_load_pipe_producer_state = collective_epilogue.load(
+              //   epi_load_pipeline,
+              //   epi_load_pipe_producer_state,
+              //   problem_shape_MNKL,
+              //   blk_shape,
+              //   blk_coord,
+              //   tiled_mma,
+              //   lane_idx,
+              //   shared_storage.tensors.epilogue,
+              //   epi_load_tensormap,
+              //   work_tile_info.reduction_subtile_idx(),
+              //   wait
+              // );
             }
-
-            bool wait = work_tile_info.is_valid() && curr_batch != next_work_tile_info.L_idx;
-
-            epi_load_pipe_producer_state = collective_epilogue.load(
-              epi_load_pipeline,
-              epi_load_pipe_producer_state,
-              problem_shape_MNKL,
-              blk_shape,
-              blk_coord,
-              tiled_mma,
-              lane_idx,
-              shared_storage.tensors.epilogue,
-              epi_load_tensormap,
-              work_tile_info.reduction_subtile_idx(),
-              wait
-            );
           }
 
           work_tile_info = next_work_tile_info;
@@ -1016,6 +1165,7 @@ public:
 
       // Index of warp group within consumer warp groups
       int consumer_warp_group_idx = warp_group_role == WarpGroupRole::Consumer0 ? 0 : 1;
+      const int mma_thread_idx = (threadIdx.x - 128) % NumMmaThreads;
 
       int32_t const sm_idx = blockIdx.x + (blockIdx.y * gridDim.x);
       int32_t const sm_count = params.hw_info.sm_count;
@@ -1056,22 +1206,72 @@ public:
         auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
         auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
         auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
-        auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape);
+        auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape)/2;
+
+        // if (mma_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+        //     printf("817 %d : %d %d\n", StrassenMiGroup::getMi(), m_coord, n_coord);
 
         // Allocate the accumulators for the (M,N) blk_shape
         //
         // MSVC CTAD breaks if we say "Tensor" here, so we use "auto" instead.
         auto accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape));               // (MMA,MMA_M,MMA_N)
 
+        #pragma unroll
+        for (int consumer_sub_m_iter = 0; consumer_sub_m_iter < ConsumerSubMIterations; ++consumer_sub_m_iter) {
+        auto sub_m_idx = consumer_sub_m_iter;
+        if (sub_m_idx == 0 ||
+          (StrassenMiGroup::numMs() >= 2 && sub_m_idx == 1) ||
+          (StrassenMiGroup::numMs() >= 3 && sub_m_idx == 2)) {}
+        else CUTE_GCC_UNREACHABLE;
+
+        bool is_neg = false;
+        bool has_global_src = false;
+        bool any_global_dst_final = false;
+        bool any_global_dst_valid = false;
+
+        for (int c = 0; c < 4; c++) {
+          const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+          const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+          uint mi = StrassenMiGroup::getMi(sub_m_idx);
+          int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+          if (misign == 0 || (!postsum_global_dest.valid())) continue;
+
+          is_neg = misign == -1;
+
+          any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
+          any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
+
+          #pragma unroll 4
+          for (int read_c = 0; read_c < 4; read_c++) {
+            auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+            if (postsum_src.valid() && postsum_src.is_mem_global()) {
+              has_global_src = true;
+            }
+          }
+        }
+
+        if (is_neg)
+          for (int i = 0; i < accumulators.size(); i++)
+              accumulators[i] = -1 * accumulators[i];
+
+        if (has_global_src) {
+          load_order_barrier.arrive();
+        }
+
         if (TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
 
           collective_mainloop.mma(
+            problem_shape_MNKL,
+            blk_coord,
+            sub_m_idx,
             mainloop_pipeline,
             mainloop_pipe_consumer_state,
             accumulators,
             work_k_tile_count,
             mma_thread_idx,
             shared_storage.tensors.mainloop,
+            shared_storage.tensors.presum_tensors,
             params.mainloop
           );
 
@@ -1087,36 +1287,82 @@ public:
         }
 
         // Perform reduction across splits, if needed
-        TileScheduler::fixup(
-          params.scheduler, work_tile_info, accumulators, NumMmaWarpGroups, consumer_warp_group_idx);
+        // TileScheduler::fixup(
+        //   params.scheduler, work_tile_info, accumulators, NumMmaWarpGroups, consumer_warp_group_idx);
 
         if (did_batch_change) {
           collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_store_tensormap);
         }
 
-        if (TileScheduler::compute_epilogue(work_tile_info, params.scheduler)) {
+        if (is_neg)
+          for (int i = 0; i < accumulators.size(); i++)
+            accumulators[i] = -1 * accumulators[i];
 
+        decltype(epi_load_pipe_consumer_state) epi_load_pipe_consumer_state_next = epi_load_pipe_consumer_state;
+        decltype(epi_store_pipe_producer_state) epi_store_pipe_producer_state_next = epi_store_pipe_producer_state;
+
+        if (TileScheduler::compute_epilogue(work_tile_info, params.scheduler) && any_global_dst_valid) {
+          if (mma_thread_idx == 0 && StrassenMiGroup::hasM2() && sub_m_idx == 0 && n_coord == 2)
+            MY_PRINTF("1278 %d %d %d %d ; %d %d\n", threadIdx.x, StrassenMiGroup::getMi(sub_m_idx), m_coord, n_coord, work_tile_info.M_idx, work_tile_info.N_idx);
           // Epilogue and write to gD
-          auto [epi_load_pipe_consumer_state_next, epi_store_pipe_producer_state_next] =
-          collective_epilogue.store(
-            epi_load_pipeline,
-            epi_load_pipe_consumer_state,
-            epi_store_pipeline,
-            epi_store_pipe_producer_state,
-            problem_shape_MNKL,
-            blk_shape,
-            blk_coord,
-            accumulators,
-            tiled_mma,
-            mma_thread_idx,
-            shared_storage.tensors.epilogue,
-            epi_store_tensormap,
-            work_tile_info.reduction_subtile_idx()
-          );
+          if (!any_global_dst_final) {
+            auto ret = collective_epilogue.store_m2(
+              epi_load_pipeline,
+              epi_load_pipe_consumer_state,
+              epi_store_pipeline,
+              epi_store_pipe_producer_state,
+              problem_shape_MNKL, sub_m_idx,
+              blk_shape,
+              blk_coord,
+              accumulators,
+              tiled_mma,
+              mma_thread_idx,
+              shared_storage.tensors.epilogue,
+              shared_storage.tensors.epilogue
+            );
+            epi_load_pipe_consumer_state_next = get<0>(ret);
+            epi_store_pipe_producer_state_next = get<1>(ret);
+          } else {
+            auto ret =
+            collective_epilogue.store(
+              epi_load_pipeline,
+              epi_load_pipe_consumer_state,
+              epi_store_pipeline,
+              epi_store_pipe_producer_state,
+              problem_shape_MNKL,
+              blk_shape,
+              blk_coord, sub_m_idx,
+              accumulators,
+              tiled_mma,
+              mma_thread_idx,
+              shared_storage.tensors.epilogue,
+              epi_store_tensormap,
+              work_tile_info.reduction_subtile_idx()
+            );
 
-          epi_load_pipe_consumer_state = epi_load_pipe_consumer_state_next;
-          epi_store_pipe_producer_state = epi_store_pipe_producer_state_next;
+            epi_load_pipe_consumer_state_next = get<0>(ret);
+            epi_store_pipe_producer_state_next = get<1>(ret);
+          }
+          if (mma_thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+            MY_PRINTF("1315 %d : %d %d %d\n", threadIdx.x, StrassenMiGroup::getMi(sub_m_idx), m_coord, n_coord);
           do_store_tail = true;
+        }
+
+        // auto ret = collective_epilogue.store_tail(
+        //   epi_load_pipeline,
+        //   epi_load_pipe_consumer_state_next,
+        //   epi_store_pipeline,
+        //   epi_store_pipe_producer_state_next,
+        //   has_global_src
+        // );
+
+        // epi_load_pipe_consumer_state = get<0>(ret);
+        // epi_store_pipe_producer_state = get<1>(ret);
+        epi_load_pipe_consumer_state = epi_load_pipe_consumer_state_next;
+        epi_store_pipe_producer_state = epi_store_pipe_producer_state_next;
+
+        if (threadIdx.x%256 == 0)// && blockIdx.x == 0 && blockIdx.y == 0)
+          MY_PRINTF("1174 %d : %d %d %d\n", work_k_tile_count, sub_m_idx, m_coord, n_coord);
         }
 
         // Get next work tile
@@ -1157,7 +1403,8 @@ public:
           epi_load_pipeline,
           epi_load_pipe_consumer_state,
           epi_store_pipeline,
-          epi_store_pipe_producer_state
+          epi_store_pipe_producer_state,
+          collective_epilogue.is_producer_load_needed()
         );
       }
     } // Consumer Warp Groups End

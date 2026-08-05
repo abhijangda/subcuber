@@ -118,7 +118,7 @@ using ElementAccumulator  = float;                                          // E
 using ArchTag             = cutlass::arch::Sm90;                            // Tag indicating the minimum SM that supports the intended feature
 using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
 
-using ProblemShape = cutlass::gemm::GroupProblemShape<Shape<int,int,int>>; // <M,N,K> per group
+using ProblemShape = cutlass::gemm::StrassenGroupProblemShape<Shape<int,int,int>>; // <M,N,K> per group
 
 #if defined(PINGPONG)
 using TileShape           = Shape<_128,_128,_64>;                           // Threadblock-level tile size
@@ -145,8 +145,8 @@ using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
 //TODO: Stages 5 produces wrong results for C2
 
 using AllPresumsKernel = AllPresums<>;
-                          // using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
-                          //                PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
+// using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
+                                    // PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
 using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
                                    PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
@@ -196,12 +196,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>>, //TODO: Change this to true
-                                                                                // FusedMiGroup<7, 4>>
+                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                                                FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                       ParallelMiGroups<false, FusedMiGroup<7, 4>>
+                                                      //  ParallelMiGroups<false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
@@ -248,7 +248,7 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                      ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
                                                                                 FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
@@ -712,10 +712,10 @@ void initialize(const Options &options) {
   beta_device.reset(options.groups);
   beta_device.copy_from_host(ptr_beta_host.data());
 
-  initialize_block(block_A, seed + 2021);
-  initialize_block(block_B, seed + 2022);
-  initialize_block(block_C, seed + 2023);
-  initialize_block(block_D, seed + 2024);
+  initialize_block(block_A, seed + 2021, false, false);
+  initialize_block(block_B, seed + 2022, false, false);
+  // initialize_block(block_C, seed + 2023, false, false);
+  // initialize_block(block_D, seed + 2024, false, false);
   block_alpha.copy_from_host(alpha_host.data());
   block_beta.copy_from_host(beta_host.data());
 }
@@ -727,6 +727,7 @@ typename Gemm::Arguments args_from_options(const Options &options)
   // to use a GPU other than that with device ID 0.
   int device_id = 0;
   cutlass::KernelHardwareInfo kernel_hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Gemm::GemmKernel>(device_id);
+  // kernel_hw_info.sm_count = ;
 
   typename Gemm::Arguments arguments;
   decltype(arguments.epilogue.thread) fusion_args;
@@ -761,7 +762,7 @@ typename Gemm::Arguments args_from_options(const Options &options)
       cutlass::gemm::GemmUniversalMode::kGrouped,
       {options.groups, problem_sizes.get(), options.problem_sizes_host.data()},
       {ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get()},
-      {fusion_args, ptr_C.get(), stride_C.get(), ptr_D.get(), stride_D.get()},
+      {fusion_args, nullptr, nullptr, ptr_D.get(), stride_D.get()},
       kernel_hw_info
     };
   }
@@ -786,6 +787,7 @@ bool verify(const Options &options) {
   bool passed = true;
   for (int32_t i = 0; i < options.groups; ++i) {
     auto problem = options.problem_sizes_host.at(i);
+    printf("Checking problem %d\n", i);
     auto M = get<0>(problem);
     auto N = get<1>(problem);
     auto K = get<2>(problem);

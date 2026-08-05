@@ -155,8 +155,8 @@ static __global__ void postsumcheck(Elem* postsum) {
   
   for (int c = 0; c < 4; c++) {
     uint col = c*blockDim.x + threadIdx.x;
-    if (row < 8*1024/2 && col < 8*1024/2 && row == 0 && c == 0)// && float(postsum[0*R*C + row*C + col]) != 0.0f)
-      printf("63: %d %d: M4 %f M2 %f\n", row, col,
+    if (row < 8*1024/2 && col < 8*1024/2 && float(postsum[1*R*C + row*C + col]) != 4096.0f)
+      printf("63: %d %d: M0 %f M2 %f\n", row, col,
              float(postsum[0*R*C + row*C + col]), float(postsum[1*R*C + row*C + col]));
             // &presum[row*512+threadIdx.x]);
   }
@@ -421,6 +421,15 @@ public:
     }
   }
 
+  static size_t get_grouped_gemm_index_size(Arguments const &args) {
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      return (args.problem_shape.num_groups * sizeof(uint64_t)+(256-1))/256 * 256;
+    }
+    else {
+      return 0;
+    }
+  }
+
   static size_t get_presum_a_workspace_size(Arguments const &args) {
     auto workspace_size = [](auto const &problem_shape) {
       return StrassenGroups::Group0::AllPresums::numAPresumYes() * sizeof(ElementA) *
@@ -436,6 +445,26 @@ public:
     }
     else {
       return workspace_size(args.problem_shape);
+    }
+  }
+
+  static std::vector<size_t> get_presum_a_batch_indices(Arguments const &args) {
+    auto workspace_size = [](auto const &problem_shape) {
+      return StrassenGroups::Group0::AllPresums::numAPresumYes() * sizeof(ElementA) *
+             size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<2>(problem_shape) / 2);
+    };
+
+    std::vector<size_t> vec;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        vec.push_back(total_workspace_size/sizeof(ElementA));
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return vec;
+    }
+    else {
+      return vec;
     }
   }
 
@@ -457,6 +486,26 @@ public:
     }
   }
 
+  static std::vector<size_t> get_presum_b_batch_indices(Arguments const &args) {
+    auto workspace_size = [](auto const &problem_shape) {
+      return StrassenGroups::Group0::AllPresums::numBPresumYes() * sizeof(ElementB) *
+             size_t(cute::get<1>(problem_shape) / 2) * size_t(cute::get<2>(problem_shape) / 2);
+    };
+
+    std::vector<size_t> vec;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        vec.push_back(total_workspace_size/sizeof(ElementB));
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return vec;
+    }
+    else {
+      return vec;
+    }
+  }
+
   static size_t get_postsum_m_workspace_size(Arguments const &args) {
     auto workspace_size = [](auto const &problem_shape) {
       return 7 * size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<1>(problem_shape) / 2) *
@@ -475,6 +524,27 @@ public:
     }
   }
 
+
+  static std::vector<size_t> get_postsum_m_batch_indices(Arguments const &args) {
+    auto workspace_size = [](auto const &problem_shape) {
+      return 7 * size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<1>(problem_shape) / 2) *
+             sizeof(ElementC);
+    };
+
+    std::vector<size_t> vec;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        vec.push_back(total_workspace_size/sizeof(ElementD));
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return vec;
+    }
+    else {
+      return vec;
+    }
+  }
+
   /// Gets the workspace size
   static size_t
   get_workspace_size(Arguments const& args) {
@@ -483,8 +553,10 @@ public:
       workspace_bytes += sizeof(int) * size_t(cute::size<0>(TileShape{})) * size_t(cute::size<1>(TileShape{}));
     }
 
-    workspace_bytes += get_presum_a_workspace_size(args) + get_presum_b_workspace_size(args) +
-                       get_postsum_m_workspace_size(args) + GemmKernel::get_workspace_size(args);
+    workspace_bytes += get_presum_a_workspace_size(args) + get_grouped_gemm_index_size(args) +
+                       get_presum_b_workspace_size(args) + get_grouped_gemm_index_size(args) +
+                       get_postsum_m_workspace_size(args) + get_grouped_gemm_index_size(args) +
+                       GemmKernel::get_workspace_size(args);
 
     CUTLASS_TRACE_HOST("  workspace_bytes: " << workspace_bytes);
 
@@ -631,9 +703,28 @@ public:
                                               GemmKernelM4, GemmKernelM5, GemmKernelM6>;
 
     ElementA* presum_a_workspace = (ElementA*)workspace;
-    ElementA* presum_b_workspace = (ElementA*)presum_a_workspace + get_presum_a_workspace_size(args)/sizeof(ElementA);
-    ElementC* postsum_m_workspace = (ElementC*)presum_b_workspace + get_presum_b_workspace_size(args)/sizeof(ElementB);
-    int* sem_workspace = (int*)(postsum_m_workspace + get_postsum_m_workspace_size(args)/sizeof(ElementC));
+    uint64_t* presum_a_batch_indices = (uint64_t*)((ElementA*)presum_a_workspace + get_presum_a_workspace_size(args)/sizeof(ElementA));
+    ElementA* presum_b_workspace = (ElementA*)presum_a_workspace + (get_presum_a_workspace_size(args) + get_grouped_gemm_index_size(args))/sizeof(ElementA);
+    uint64_t* presum_b_batch_indices = (uint64_t*)((ElementA*)presum_b_workspace + get_presum_b_workspace_size(args)/sizeof(ElementB));
+    ElementC* postsum_m_workspace = (ElementC*)presum_b_workspace + (get_presum_b_workspace_size(args) + get_grouped_gemm_index_size(args))/sizeof(ElementB);
+    uint64_t* postsum_m_batch_indices = (uint64_t*)(postsum_m_workspace + get_grouped_gemm_index_size(args)/sizeof(ElementC));
+    int* sem_workspace = (int*)(((ElementC*)postsum_m_batch_indices) + (get_postsum_m_workspace_size(args)+get_grouped_gemm_index_size(args))/sizeof(ElementC));
+
+    if (presum_a_batch_indices != nullptr) {
+      cudaMemcpy(presum_a_batch_indices, get_presum_a_batch_indices(args).data(),
+                 get_grouped_gemm_index_size(args)*sizeof(size_t), cudaMemcpyHostToDevice);
+    }
+
+    if (presum_b_batch_indices != nullptr) {
+      cudaMemcpy(presum_b_batch_indices, get_presum_b_batch_indices(args).data(),
+                 get_grouped_gemm_index_size(args)*sizeof(size_t), cudaMemcpyHostToDevice);
+    }
+
+    if (postsum_m_batch_indices != nullptr) {
+      cudaMemcpy(postsum_m_batch_indices, get_postsum_m_batch_indices(args).data(),
+                 get_grouped_gemm_index_size(args)*sizeof(size_t), cudaMemcpyHostToDevice);
+    }
+
     int swizzle_idx = 0;
     auto args0 = args, args1 = args, args2 = args, args3 = args, args4 = args, args5 = args, args6 = args;
     args0.scheduler.max_swizzle_size = swizzles[swizzle_idx++];
@@ -659,8 +750,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -673,8 +766,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -687,8 +782,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -701,8 +798,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -715,8 +814,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -729,8 +830,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -743,8 +846,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -768,7 +873,9 @@ public:
     typename GemmKernelM5::Params& params5,
     typename GemmKernelM6::Arguments const args6,
     typename GemmKernelM6::Params& params6,
-    ElementA* presum_m_a, ElementB* presum_m_b, ElementC* postsum_m,
+    ElementA* presum_m_a, uint64_t* presum_a_batch_indices,
+    ElementB* presum_m_b, uint64_t* presum_b_batch_indices,
+    ElementC* postsum_m, uint64_t* postsum_m_batch_indices,
     void* sem_workspace,
     cudaStream_t stream = nullptr,
     CudaHostAdapter* cuda_adapter = nullptr) {
@@ -807,13 +914,20 @@ public:
     }
 
     // Initialize the Params structure
-    params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_m_b, postsum_m, sem_workspace);
+    params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_a_batch_indices,
+      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_a_batch_indices,
+      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_a_batch_indices,
+      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_a_batch_indices,
+      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_a_batch_indices,
+      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_a_batch_indices,
+      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_a_batch_indices,
+      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
 
     // Don't set the function attributes - require the CudaHostAdapter to set it.
     if constexpr (kEnableCudaHostAdapter) {
@@ -1194,8 +1308,9 @@ public:
       //TODO: Add a swizzle?
       auto problems = get_vector_of_problems(paramsM0_);
       for (int problem_idx = 0; problem_idx < problems.size(); problem_idx++) {
-        dim3 grid = {uint((paramsM0_.get_problem_shape_n(problem_idx)/2)/GemmKernelM0::Mma::PresumShape::kN),
-                     uint((paramsM0_.get_problem_shape_m(problem_idx)/2)/GemmKernelM0::Mma::PresumShape::kM),
+        auto const& problem = problems[problem_idx];
+        dim3 grid = {uint((cute::get<1>(problem)/2)/GemmKernelM0::Mma::PresumShape::kN),
+                     uint((cute::get<0>(problem)/2)/GemmKernelM0::Mma::PresumShape::kM),
                      1};
         KernelPresumGlobalCompute<typename StrassenGroups::PresumGroup, GemmKernelM0, 128><<<grid, 128, 0, streams[0]>>>(paramsM0_, problem_idx);
         auto result = cudaDeviceSynchronize();
@@ -1228,44 +1343,6 @@ public:
       // cudaStreamSynchronize(streams[(stream_idx-1)%num_streams]);
     }
 
-    if (false) {
-      cudaDeviceSynchronize();
-      #if 1
-      uint R = 8*1024/2, C = 8*1024/2;
-      ElementB* h_presum_b = new ElementB[R*C];
-      ElementB* b = new ElementB[2*R*2*C];
-      cudaMemcpy(h_presum_b, &paramsM0_.presum_m_b_workspace[2*R*C], R*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
-      cudaMemcpy(b, paramsM0_.get_ptr_B(0), 2*R*2*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
-
-      for (int c = 0; c < C; c++) {
-        bool to_break = false;
-        float accum = 0;
-        for (int r = 0; r < R; r++) {
-          auto b0 = b[r*2*C+c];
-          auto b1 = b[r*2*C+C+c];
-          auto b2 = b[(R+r)*2*C+c];
-          auto b3 = b[(R+r)*2*C+C+c];
-
-          auto b31 = b3-b1;
-          auto b10 = b1-b0;
-          auto s3 = b31+b0;
-          accum += float(h_presum_b[r*C+c]);
-          if (s3 != h_presum_b[r*C+c]) {
-            printf("910 %d, %d : %f %f : = %f %f %f %f\n", r,c, float(s3), float(h_presum_b[r*C+c]), float(b0), float(b1), float(b2), float(b3));
-            to_break = true;
-            break;
-          }
-        }
-        printf("916 %f\n", accum);
-        break;
-        if (to_break) break;
-      }
-      #endif
-      // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k()/2,1024>>>(paramsM0_.get_problem_shape_k(), paramsM0_.get_problem_shape_n(), paramsM0_.ptr_A, paramsM0_.presum_m_b_workspace);
-      cudaDeviceSynchronize();
-      exit(EXIT_SUCCESS);
-    }
-// postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
     if ((!only_m or valid_ms[1] == 1) && ParallelGroup1::HasAKernel()) {
       result = run_parallel<ParallelGroup1>(paramsM0_, paramsM1_, paramsM2_, paramsM3_, paramsM4_, paramsM5_, paramsM6_,
                                             streams[(stream_idx++)%num_streams], cuda_adapter, launch_with_pdl);
@@ -1292,6 +1369,48 @@ public:
       }
       // cudaStreamSynchronize(streams[(stream_idx-1)%num_streams]);
     }
+
+    if (false) {
+      cudaDeviceSynchronize();
+      #if 1
+      uint R = 8*1024/2, C = 8*1024/2;
+      ElementB* h_presum_b = new ElementB[R*C];
+      ElementB* b = new ElementB[2*R*2*C];
+      auto errr = cudaMemcpy(h_presum_b, &paramsM0_.presum_m_b_workspace[2*R*C], R*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
+      if (errr != cudaSuccess) printf("1248 %s\n", cudaGetErrorString(errr));
+      // errr = cudaMemcpy(b, paramsM0_.get_ptr_B(0), 2*R*2*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
+      // if (errr != cudaSuccess) printf("1250 %s\n", cudaGetErrorString(errr));
+
+      for (int c = 0; c < C; c++) {
+        bool to_break = false;
+        float accum = 0;
+        for (int r = 0; r < R; r++) {
+          // auto b0 = b[r*2*C+c];
+          // auto b1 = b[r*2*C+C+c];
+          // auto b2 = b[(R+r)*2*C+c];
+          // auto b3 = b[(R+r)*2*C+C+c];
+
+          // auto b31 = b3-b1;
+          // auto b10 = b1-b0;
+          // auto s3 = b31+b0;
+          accum += float(h_presum_b[r*C+c]);
+          // if (s3 != h_presum_b[r*C+c]) {
+          //   printf("910 %d, %d : %f %f : = %f %f %f %f\n", r,c, float(s3), float(h_presum_b[r*C+c]), float(b0), float(b1), float(b2), float(b3));
+          //   to_break = true;
+          //   break;
+          // }
+        }
+        printf("916 %f\n", accum);
+        break;
+        if (to_break) break;
+      }
+      #endif
+      // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k()/2,1024>>>(paramsM0_.get_problem_shape_k(), paramsM0_.get_problem_shape_n(), paramsM0_.ptr_A, paramsM0_.presum_m_b_workspace);
+      cudaDeviceSynchronize();
+      exit(EXIT_SUCCESS);
+    }
+    // postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
+
     if ((!only_m or valid_ms[4] == 1) && ParallelGroup4::HasAKernel()) {
       result = run_parallel<ParallelGroup4>(paramsM0_, paramsM1_, paramsM2_, paramsM3_, paramsM4_, paramsM5_, paramsM6_,
                                             streams[(stream_idx++)%num_streams], cuda_adapter, launch_with_pdl);

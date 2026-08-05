@@ -64,14 +64,14 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
   );
 
   PresumGlobalIteratorA iter_PresumA_M(
-    params.presum_m_a_workspace, params.get_stride_MA(problem_idx),
+    params.get_ptr_presum_A(problem_idx), params.get_stride_MA(problem_idx),
     {halfM, halfK},
     {threadblock_tile_offset.m() * PresumShapeA::kM, threadblock_tile_offset.n() * PresumShapeA::kN * presum_multiplier_a},
     block_idx, {0, 0}, thread_idx, {1*halfM, 0}, {2*halfM, 0}, {3*halfM, 0}
   );
 
   PresumGlobalIteratorB iter_PresumB_M(
-    params.presum_m_b_workspace, params.get_stride_MB(problem_idx),
+    params.get_ptr_presum_B(problem_idx), params.get_stride_MB(problem_idx),
     {halfK, halfN},
     {threadblock_tile_offset.m() * PresumShapeB::kM * presum_multiplier_b, threadblock_tile_offset.n() * PresumShapeB::kN},
     block_idx, {0, 0}, thread_idx, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}

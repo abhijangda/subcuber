@@ -42,7 +42,7 @@
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/kernel/gemm_universal_decl.h"
 #include "cutlass/gemm/kernel/tile_scheduler.hpp"
-#include "cutlass/gemm/group_array_problem_shape.hpp"
+#include "cutlass/gemm/strassen_group_array_problem_shape.hpp"
 #include "cutlass/pipeline/pipeline.hpp"
 #include "cute/tensor.hpp"
 #include "cutlass/trace.h"

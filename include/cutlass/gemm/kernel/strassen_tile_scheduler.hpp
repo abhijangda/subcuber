@@ -44,6 +44,7 @@
 
 #include "cutlass/gemm/kernel/sm90_tile_scheduler.hpp"
 #include "cutlass/gemm/kernel/sm90_strassen_tile_scheduler.hpp"
+#include "cutlass/gemm/kernel/sm90_strassen_tile_scheduler_group.hpp"
 
 #include "cutlass/gemm/kernel/sm100_static_tile_scheduler.hpp" 
 
@@ -157,7 +158,7 @@ struct StrassenTileSchedulerSelector<
     , SchedulerPipelineStageCount              
     , GroupProblemShape
   > {
-  using Scheduler = PersistentTileSchedulerSm90Group<GroupProblemShape, SchedulerPipelineStageCount>;
+  using Scheduler = StrassenPersistentTileSchedulerSm90Group<GroupProblemShape, SchedulerPipelineStageCount>;
 };
 
 template <class TileShape, class ClusterShape, uint32_t SchedulerPipelineStageCount>
