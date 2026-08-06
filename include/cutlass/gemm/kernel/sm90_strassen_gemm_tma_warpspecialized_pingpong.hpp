@@ -411,6 +411,21 @@ public:
     ElementD* get_ptr_D(int idx = 0) const {
       return ptr_D;
     }
+
+    CUTLASS_HOST_DEVICE
+    ElementA* get_ptr_presum_A(int problem_idx) const {
+      return presum_m_a_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementB* get_ptr_presum_B(int problem_idx) const {
+      return presum_m_b_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementD* get_postsum_ptr(int problem_idx) const {
+      return postsum_m_workspace;
+    }
   };
 
   //
