@@ -97,7 +97,7 @@ Supported values:
 
 ```text
 --dtype=f32|f16|fp64
---gpu_arch=volta|ampere|hopper
+--gpu_arch=volta|ampere|hopper|blackwell
 --strassen_level=0|1|2|all
 ```
 

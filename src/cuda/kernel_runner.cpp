@@ -102,6 +102,8 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f64_cutlass_128x64);
 DECLARE_KERNEL_RUN_FN(run_hopper_f64_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_cutlass_256x128);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f32_cutlass_128x128);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f32_cutlass_256x128);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_2x128_2x128_opt_no);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_2x128_2x128_opt_0000);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no);
@@ -270,6 +272,8 @@ static std::string normalize_arch(std::string arch) {
   if (arch == "sm70" || arch == "70" || arch == "compute_70") return "volta";
   if (arch == "sm80" || arch == "80" || arch == "compute_80") return "ampere";
   if (arch == "sm90" || arch == "sm90a" || arch == "90" || arch == "90a" || arch == "compute_90a") return "hopper";
+  if (arch == "sm100" || arch == "sm100a" || arch == "sm_100" || arch == "sm_100a" ||
+      arch == "100" || arch == "100a" || arch == "compute_100" || arch == "compute_100a") return "blackwell";
   return arch;
 }
 
@@ -316,7 +320,7 @@ static bool get_required_string_arg(int argc, char **argv, const char *name, std
 }
 
 static void usage(char const *program) {
-  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX]\n";
+  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX]\n";
 }
 
 static bool tunes_split_k(KernelEntry const &kernel) {
@@ -577,7 +581,7 @@ int main(int argc, char **argv) {
   if (!valid_args || m <= 0 || n <= 0 || k <= 0 || expert_count <= 0 ||
       iterations <= 0 || warmup < 0 ||
       streams <= 0 || streams > max_streams || (dtype != "f32" && dtype != "f16" && dtype != "f64") ||
-      (arch != "volta" && arch != "ampere" && arch != "hopper") ||
+      (arch != "volta" && arch != "ampere" && arch != "hopper" && arch != "blackwell") ||
       (!all_strassen_levels && strassen_level != 0 && strassen_level != 1 && strassen_level != 2)) {
     usage(argv[0]);
     return 1;
