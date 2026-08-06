@@ -853,7 +853,7 @@ public:
 
           if (did_batch_change) {
             load_inputs = collective_mainloop.tensors_perform_update(load_inputs, params.mainloop, problem_shape_MNKL, curr_batch);
-            collective_mainloop.tensormaps_fence_acquire(input_tensormaps);
+            collective_mainloop.tensormaps_fence_acquire(shared_storage.tensormaps.mainloop, input_tensormaps);
           }
           if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
             MY_PRINTF("817 %d : %d %d\n", StrassenMiGroup::getMi(), m_coord, n_coord);

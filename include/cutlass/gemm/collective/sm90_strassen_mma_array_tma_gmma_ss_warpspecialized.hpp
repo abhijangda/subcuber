@@ -236,7 +236,7 @@ struct CollectiveStrassenMma<
       cute::array_aligned<typename TiledMma::ValTypeB, cute::cosize_v<SmemLayoutB>> smem_B;
     } tensors;
 
-    struct TensorMapStorage : cute::aligned_struct<128, _0> {
+    struct TensorMapStorage1 : cute::aligned_struct<128, _0> {
       cute::TmaDescriptor smem_tensormap_A;
       cute::TmaDescriptor smem_tensormap_B;
       cute::TmaDescriptor smem_tensormap_presum_A;
@@ -245,7 +245,16 @@ struct CollectiveStrassenMma<
       cute::TmaDescriptor smem_tensormap_load_presum_compute_B;
       cute::TmaDescriptor smem_tensormap_store_presum_compute_A;
       cute::TmaDescriptor smem_tensormap_store_presum_compute_B;
-    } tensormaps;
+    };
+
+    struct TensorMapStorage2 : cute::aligned_struct<128, _0> {
+      cute::TmaDescriptor smem_tensormap_A;
+      cute::TmaDescriptor smem_tensormap_B;
+      cute::TmaDescriptor smem_tensormap_presum_A;
+      cute::TmaDescriptor smem_tensormap_presum_B;
+    };
+
+    using TensorMapStorage = cute::conditional_t<is_fused, TensorMapStorage1, TensorMapStorage2>;
 
     using PipelineStorage = typename MainloopPipeline::SharedStorage;
     PipelineStorage pipeline;
@@ -1855,23 +1864,26 @@ struct CollectiveStrassenMma<
       Tensor pPresumB_tensormap = make_tensor(mainloop_params.tma_load_presum_b.get_tma_descriptor(), Int<1>{}, Int<1>{});
       Tensor sPresumB_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_presum_B), Int<1>{}, Int<1>{});
 
-      Tensor pLoad_Presum_Compute_A = make_tensor(mainloop_params.tma_load_presumld_a.get_tma_descriptor(), Int<1>{}, Int<1>{});
-      Tensor sLoad_Presum_Compute_A_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_load_presum_compute_A), Int<1>{}, Int<1>{});
-      Tensor pLoad_Presum_Compute_B = make_tensor(mainloop_params.tma_load_presumld_b.get_tma_descriptor(), Int<1>{}, Int<1>{});
-      Tensor sLoad_Presum_Compute_B_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_load_presum_compute_B), Int<1>{}, Int<1>{});
-      Tensor pStore_Presum_Compute_A = make_tensor(mainloop_params.tma_store_presumld_a.get_tma_descriptor(), Int<1>{}, Int<1>{});
-      Tensor sStore_Presum_Compute_A_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_store_presum_compute_A), Int<1>{}, Int<1>{});
-      Tensor pStore_Presum_Compute_B = make_tensor(mainloop_params.tma_store_presumld_b.get_tma_descriptor(), Int<1>{}, Int<1>{});
-      Tensor sStore_Presum_Compute_B_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_store_presum_compute_B), Int<1>{}, Int<1>{});
-
       copy(recast<uint128_t>(pA_tensormap), recast<uint128_t>(sA_tensormap));
       copy(recast<uint128_t>(pB_tensormap), recast<uint128_t>(sB_tensormap));
       copy(recast<uint128_t>(pPresumA_tensormap), recast<uint128_t>(sPresumA_tensormap));
       copy(recast<uint128_t>(pPresumB_tensormap), recast<uint128_t>(sPresumB_tensormap));
-      copy(recast<uint128_t>(pLoad_Presum_Compute_A), recast<uint128_t>(sLoad_Presum_Compute_A_tensormap));
-      copy(recast<uint128_t>(pLoad_Presum_Compute_B), recast<uint128_t>(sLoad_Presum_Compute_B_tensormap));
-      copy(recast<uint128_t>(pStore_Presum_Compute_A), recast<uint128_t>(sStore_Presum_Compute_A_tensormap));
-      copy(recast<uint128_t>(pStore_Presum_Compute_B), recast<uint128_t>(sStore_Presum_Compute_B_tensormap));
+
+      if constexpr (requires { shared_tensormaps.smem_tensormap_load_presum_compute_A; }) {
+        Tensor pLoad_Presum_Compute_A = make_tensor(mainloop_params.tma_load_presumld_a.get_tma_descriptor(), Int<1>{}, Int<1>{});
+        Tensor sLoad_Presum_Compute_A_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_load_presum_compute_A), Int<1>{}, Int<1>{});
+        Tensor pLoad_Presum_Compute_B = make_tensor(mainloop_params.tma_load_presumld_b.get_tma_descriptor(), Int<1>{}, Int<1>{});
+        Tensor sLoad_Presum_Compute_B_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_load_presum_compute_B), Int<1>{}, Int<1>{});
+        Tensor pStore_Presum_Compute_A = make_tensor(mainloop_params.tma_store_presumld_a.get_tma_descriptor(), Int<1>{}, Int<1>{});
+        Tensor sStore_Presum_Compute_A_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_store_presum_compute_A), Int<1>{}, Int<1>{});
+        Tensor pStore_Presum_Compute_B = make_tensor(mainloop_params.tma_store_presumld_b.get_tma_descriptor(), Int<1>{}, Int<1>{});
+        Tensor sStore_Presum_Compute_B_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_store_presum_compute_B), Int<1>{}, Int<1>{});
+
+        copy(recast<uint128_t>(pLoad_Presum_Compute_A), recast<uint128_t>(sLoad_Presum_Compute_A_tensormap));
+        copy(recast<uint128_t>(pLoad_Presum_Compute_B), recast<uint128_t>(sLoad_Presum_Compute_B_tensormap));
+        copy(recast<uint128_t>(pStore_Presum_Compute_A), recast<uint128_t>(sStore_Presum_Compute_A_tensormap));
+        copy(recast<uint128_t>(pStore_Presum_Compute_B), recast<uint128_t>(sStore_Presum_Compute_B_tensormap));
+      }
     }
     __syncwarp();
 
@@ -1897,14 +1909,16 @@ struct CollectiveStrassenMma<
     cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_presum_B,
                             mainloop_params.ptr_presum_B + mainloop_params.presum_b_batch_indices[next_batch]);
 
-    cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_load_presum_compute_A,
-                                                    mainloop_params.ptr_A[next_batch]);
-    cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_load_presum_compute_B,
-                                                    mainloop_params.ptr_B[next_batch]);
-    cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_store_presum_compute_A,
-                mainloop_params.ptr_presum_A + mainloop_params.presum_a_batch_indices[next_batch]);
-    cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_store_presum_compute_B,
-                mainloop_params.ptr_presum_B + mainloop_params.presum_b_batch_indices[next_batch]);
+    if constexpr (requires { shared_tensormaps.smem_tensormap_load_presum_compute_A; }) {
+      cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_load_presum_compute_A,
+                                                      mainloop_params.ptr_A[next_batch]);
+      cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_load_presum_compute_B,
+                                                      mainloop_params.ptr_B[next_batch]);
+      cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_store_presum_compute_A,
+                  mainloop_params.ptr_presum_A + mainloop_params.presum_a_batch_indices[next_batch]);
+      cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_store_presum_compute_B,
+                  mainloop_params.ptr_presum_B + mainloop_params.presum_b_batch_indices[next_batch]);
+      }
   }
 
   // Replace dim and strides for the global tensor - used only for Grouped GEMM (to be done by single thread)
@@ -1976,15 +1990,6 @@ struct CollectiveStrassenMma<
                                              prob_shape_presum_B, prob_stride_presum_B);
     cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_load_presum_a, tensor_presum_a,
                                              prob_shape_presum_A, prob_stride_presum_A);
-    cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_load_presumld_a, tensor_a,
-                                             prob_shape_load_presum_compute_A, prob_stride_load_presum_compute_A);
-    cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_load_presumld_b, tensor_load_presum_b,
-                                             prob_shape_load_presum_compute_B, prob_stride_load_presum_compute_B);
-    cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_store_presumld_a, tensor_presum_a,
-                         prob_shape_store_presum_compute_A, prob_stride_store_presum_compute_A);
-    cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_store_presumld_b, tensor_store_presum_b,
-                         prob_shape_store_presum_compute_B, prob_stride_store_presum_compute_B);
-
     // Convert strides to byte strides
     for (uint64_t& stride : prob_stride_A) {
       stride = (stride * sizeof_bits_v<InternalElementA>) / 8;
@@ -1998,18 +2003,7 @@ struct CollectiveStrassenMma<
     for (uint64_t& stride : prob_stride_presum_B) {
       stride = (stride * sizeof_bits_v<InternalElementB>) / 8;
     }
-    for (uint64_t& stride : prob_stride_load_presum_compute_A) {
-      stride = (stride * sizeof_bits_v<InternalElementA>) / 8;
-    }
-    for (uint64_t& stride : prob_stride_load_presum_compute_B) {
-      stride = (stride * sizeof_bits_v<InternalElementB>) / 8;
-    }
-    for (uint64_t& stride : prob_stride_store_presum_compute_A) {
-      stride = (stride * sizeof_bits_v<InternalElementA>) / 8;
-    }
-    for (uint64_t& stride : prob_stride_store_presum_compute_B) {
-      stride = (stride * sizeof_bits_v<InternalElementB>) / 8;
-    }
+
     cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_A,
                                                             prob_shape_A,
                                                             prob_stride_A);
@@ -2023,19 +2017,42 @@ struct CollectiveStrassenMma<
                                 prob_shape_presum_B,
                                 prob_stride_presum_B);
 
-    cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_load_presum_compute_A,
-                                prob_shape_load_presum_compute_A,
-                                prob_stride_load_presum_compute_A);
-    cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_load_presum_compute_B,
-                                prob_shape_load_presum_compute_B,
-                                prob_stride_load_presum_compute_B);
-    cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_store_presum_compute_A,
-                  prob_shape_store_presum_compute_A,
-                  prob_stride_store_presum_compute_A);
-    cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_store_presum_compute_B,
-                  prob_shape_store_presum_compute_B,
-                  prob_stride_store_presum_compute_B);
+    if constexpr (requires { shared_tensormaps.smem_tensormap_load_presum_compute_A; }) {
+      cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_load_presumld_a, tensor_a,
+                                              prob_shape_load_presum_compute_A, prob_stride_load_presum_compute_A);
+      cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_load_presumld_b, tensor_load_presum_b,
+                                              prob_shape_load_presum_compute_B, prob_stride_load_presum_compute_B);
+      cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_store_presumld_a, tensor_presum_a,
+                          prob_shape_store_presum_compute_A, prob_stride_store_presum_compute_A);
+      cute::detail::fill_tma_gmem_shape_stride(mainloop_params.tma_store_presumld_b, tensor_store_presum_b,
+                          prob_shape_store_presum_compute_B, prob_stride_store_presum_compute_B);
 
+      for (uint64_t& stride : prob_stride_load_presum_compute_A) {
+        stride = (stride * sizeof_bits_v<InternalElementA>) / 8;
+      }
+      for (uint64_t& stride : prob_stride_load_presum_compute_B) {
+        stride = (stride * sizeof_bits_v<InternalElementB>) / 8;
+      }
+      for (uint64_t& stride : prob_stride_store_presum_compute_A) {
+        stride = (stride * sizeof_bits_v<InternalElementA>) / 8;
+      }
+      for (uint64_t& stride : prob_stride_store_presum_compute_B) {
+        stride = (stride * sizeof_bits_v<InternalElementB>) / 8;
+      }
+
+      cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_load_presum_compute_A,
+                                  prob_shape_load_presum_compute_A,
+                                  prob_stride_load_presum_compute_A);
+      cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_load_presum_compute_B,
+                                  prob_shape_load_presum_compute_B,
+                                  prob_stride_load_presum_compute_B);
+      cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_store_presum_compute_A,
+                    prob_shape_store_presum_compute_A,
+                    prob_stride_store_presum_compute_A);
+      cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_store_presum_compute_B,
+                    prob_shape_store_presum_compute_B,
+                    prob_stride_store_presum_compute_B);
+    }
   }
 
   template <class InputTensorMaps, class ProblemShape_MNKL>
@@ -2074,24 +2091,31 @@ struct CollectiveStrassenMma<
     tma_descriptor_cp_fence_release(get<1>(input_tensormaps), shared_tensormaps.smem_tensormap_B);
     tma_descriptor_cp_fence_release(get<2>(input_tensormaps), shared_tensormaps.smem_tensormap_presum_A);
     tma_descriptor_cp_fence_release(get<3>(input_tensormaps), shared_tensormaps.smem_tensormap_presum_B);
-    tma_descriptor_cp_fence_release(get<4>(input_tensormaps), shared_tensormaps.smem_tensormap_load_presum_compute_A);
-    tma_descriptor_cp_fence_release(get<5>(input_tensormaps), shared_tensormaps.smem_tensormap_load_presum_compute_B);
-    tma_descriptor_cp_fence_release(get<6>(input_tensormaps), shared_tensormaps.smem_tensormap_store_presum_compute_A);
-    tma_descriptor_cp_fence_release(get<7>(input_tensormaps), shared_tensormaps.smem_tensormap_store_presum_compute_B);
+
+    if constexpr (requires { shared_tensormaps.smem_tensormap_load_presum_compute_A; }) {
+      tma_descriptor_cp_fence_release(get<4>(input_tensormaps), shared_tensormaps.smem_tensormap_load_presum_compute_A);
+      tma_descriptor_cp_fence_release(get<5>(input_tensormaps), shared_tensormaps.smem_tensormap_load_presum_compute_B);
+      tma_descriptor_cp_fence_release(get<6>(input_tensormaps), shared_tensormaps.smem_tensormap_store_presum_compute_A);
+      tma_descriptor_cp_fence_release(get<7>(input_tensormaps), shared_tensormaps.smem_tensormap_store_presum_compute_B);
+    }
   }
 
   // The entire warp must call this function collectively (that is, the instructions are aligned)
   template <class InputTensorMaps>
   CUTLASS_DEVICE
-  void tensormaps_fence_acquire(InputTensorMaps const& input_tensormaps) {
+  void tensormaps_fence_acquire(
+    TensorMapStorage& shared_tensormaps,
+    InputTensorMaps const& input_tensormaps) {
     cute::tma_descriptor_fence_acquire(get<0>(input_tensormaps));
     cute::tma_descriptor_fence_acquire(get<1>(input_tensormaps));
     cute::tma_descriptor_fence_acquire(get<2>(input_tensormaps));
     cute::tma_descriptor_fence_acquire(get<3>(input_tensormaps));
-    cute::tma_descriptor_fence_acquire(get<4>(input_tensormaps));
-    cute::tma_descriptor_fence_acquire(get<5>(input_tensormaps));
-    cute::tma_descriptor_fence_acquire(get<6>(input_tensormaps));
-    cute::tma_descriptor_fence_acquire(get<7>(input_tensormaps));
+    if constexpr (requires { shared_tensormaps.smem_tensormap_load_presum_compute_A; }) {
+      cute::tma_descriptor_fence_acquire(get<4>(input_tensormaps));
+      cute::tma_descriptor_fence_acquire(get<5>(input_tensormaps));
+      cute::tma_descriptor_fence_acquire(get<6>(input_tensormaps));
+      cute::tma_descriptor_fence_acquire(get<7>(input_tensormaps));
+    }
   }
 
   template <class InputTensors, class ProblemShape_MNKL>
