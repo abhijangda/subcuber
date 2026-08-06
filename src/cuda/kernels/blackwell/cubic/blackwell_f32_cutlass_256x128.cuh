@@ -1,48 +1,50 @@
 #pragma once
 
-#include "cutlass/gemm/device/gemm.h"
 #include "cutlass/cutlass.h"
+#include "cutlass/arch/mma_sm100.h"
+#include "cutlass/gemm/device/gemm_universal_adapter.h"
+#include "cutlass/gemm/kernel/gemm_universal.hpp"
+#include "cutlass/gemm/collective/collective_builder.hpp"
+#include "cutlass/epilogue/dispatch_policy.hpp"
+#include "cutlass/epilogue/collective/collective_builder.hpp"
 
-#include "cutlass/util/host_tensor.h"
-#include "cutlass/util/reference/device/gemm.h"
-#include "cutlass/util/reference/host/tensor_compare.h"
-#include "cutlass/util/reference/host/tensor_copy.h"
-#include "cutlass/util/reference/host/tensor_fill.h"
-#include "cutlass/util/tensor_view_io.h"
-
-#ifndef SPLIT_K
-#define SPLIT_K 1
-#endif
+#include "cute/tensor.hpp"
 
 class BlackwellF32Cutlass256x128 {
-  using EpilogueOp = cutlass::epilogue::thread::LinearCombination<
-    float,
-    1,
-    float,
-    float>;
+  using Layout = cutlass::layout::RowMajor;
+  using TileShape = cute::Shape<cute::_256, cute::_128, cute::_16>;
+  using ClusterShape = cute::Shape<cute::_1, cute::_1, cute::_1>;
 
-  using RowMajor = cutlass::layout::RowMajor;
-  using ThreadBlockShape = cutlass::gemm::GemmShape<256, 128, 8>;
-  using WarpShape = cutlass::gemm::GemmShape<64, 64, 8>;
-  using InstructionShape = cutlass::gemm::GemmShape<1, 1, 1>;
-  static constexpr bool splitK = SPLIT_K;
+  using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
+      cutlass::arch::Sm100,
+      cutlass::arch::OpClassSimt,
+      float, Layout, 1,
+      float, Layout, 1,
+      float,
+      TileShape,
+      ClusterShape,
+      cutlass::gemm::collective::StageCount<3>,
+      cutlass::gemm::KernelMultistage>::CollectiveOp;
+
+  using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
+      cutlass::arch::Sm100,
+      cutlass::arch::OpClassSimt,
+      TileShape,
+      ClusterShape,
+      cutlass::epilogue::collective::EpilogueTileAuto,
+      float,
+      float,
+      float, Layout, 1,
+      float, Layout, 1,
+      cutlass::epilogue::EpilogueSimtVectorized>::CollectiveOp;
+
+  using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
+      cute::Shape<int, int, int, int>,
+      CollectiveMainloop,
+      CollectiveEpilogue>;
 
 public:
-  using CutlassGemm = cutlass::gemm::device::Gemm<float,
-                                                  RowMajor,
-                                                  float,
-                                                  RowMajor,
-                                                  float,
-                                                  RowMajor,
-                                                  float,
-                                                  cutlass::arch::OpClassSimt,
-                                                  cutlass::arch::Sm80,
-                                                  ThreadBlockShape,
-                                                  WarpShape,
-                                                  InstructionShape,
-                                                  EpilogueOp,
-                                                  cutlass::gemm::threadblock::GemmIdentityThreadblockSwizzle<8>,
-                                                  3, 1, 1, splitK>;
+  using CutlassGemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
   using Arguments = typename CutlassGemm::Arguments;
 

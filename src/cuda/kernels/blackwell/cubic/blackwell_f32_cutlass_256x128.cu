@@ -35,4 +35,4 @@ cutlass::Status BlackwellF32Cutlass256x128::operator()(Arguments const &args, vo
   return status;
 }
 
-STRASSEN_RUNNER_EXPORT_GEMM_CUTLASS2(run_blackwell_f32_cutlass_256x128, BlackwellF32Cutlass256x128)
+STRASSEN_RUNNER_EXPORT_GEMM_CUTLASS3(run_blackwell_f32_cutlass_256x128, BlackwellF32Cutlass256x128)

@@ -579,18 +579,26 @@ int kernel_runner_run_gemm_cutlass3(KernelRunnerBuffers buffers, int m, int n, i
   using StrideC = typename Kernel::StrideC;
   using StrideD = typename Kernel::StrideD;
   using Arguments = typename Gemm::Arguments;
-  using RasterOrderOptions = typename Gemm::RasterOrderOptions;
+  using RasterOrderOptions = typename Kernel::TileScheduler::RasterOrderOptions;
 
   int device_id = 0;
-  cutlass::KernelHardwareInfo hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Kernel>(device_id);
+  cutlass::KernelHardwareInfo hw_info;
+  hw_info.device_id = device_id;
+  hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(device_id);
   StrideA stride_a = cutlass::make_cute_packed_stride(StrideA{}, {m, k, 1});
   StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {n, k, 1});
   StrideC stride_c = cutlass::make_cute_packed_stride(StrideC{}, {m, n, 1});
   StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {m, n, 1});
+  typename Kernel::ProblemShape problem_shape;
+  if constexpr (cute::rank(typename Kernel::ProblemShape{}) == 4) {
+    problem_shape = {m, n, k, 1};
+  } else {
+    problem_shape = {m, n, k};
+  }
 
   Arguments args(
       cutlass::gemm::GemmUniversalMode::kGemm,
-      {m, n, k},
+      problem_shape,
       {reinterpret_cast<ElementA const *>(buffers.a), stride_a,
        reinterpret_cast<ElementB const *>(buffers.b), stride_b},
       {{1.0f, 0.0f}, reinterpret_cast<ElementC const *>(buffers.c), stride_c,
