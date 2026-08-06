@@ -231,47 +231,57 @@ struct StrassenGemm {
     }
 
     CUTLASS_HOST_DEVICE
-    typename Mma::IteratorA::Element* get_ptr_A() const {
+    typename Mma::IteratorA::Element* get_ptr_A(int) const {
       return ref_A.data();
     }
 
     CUTLASS_HOST_DEVICE
-    typename Mma::IteratorB::Element* get_ptr_B() const {
+    typename Mma::IteratorB::Element* get_ptr_B(int) const {
       return ref_B.data();
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_k() const {
+    typename Mma::IteratorA::Element* get_ptr_presum_A(int) const {
+      return presum_m_a_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    typename Mma::IteratorB::Element* get_ptr_presum_B(int) const {
+      return presum_m_b_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    int get_problem_shape_k(int) const {
       return problem_size.k();
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_m() const {
+    int get_problem_shape_m(int) const {
       return problem_size.m();
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_n() const {
+    int get_problem_shape_n(int) const {
       return problem_size.n();
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_A() const {
+    int get_stride_A(int) const {
       return ref_A.stride(0);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_B() const {
+    int get_stride_B(int) const {
       return ref_B.stride(0);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_MA() const {
+    int get_stride_MA(int) const {
       return layout_MA.stride(0);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_MB() const {
+    int get_stride_MB(int) const {
       return layout_MB.stride(0);
     }
 
