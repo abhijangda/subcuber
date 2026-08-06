@@ -147,7 +147,7 @@ public:
   // 1 stage ordered sequence between mainloop and epilogue producer load threads
   using LoadWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
   using StoreWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
-  static constexpr bool UseM0M1StoreOrderBarrier = false && CollectiveMainloop::PresumStages == 4 &&
+  static constexpr bool UseM0M1StoreOrderBarrier = CollectiveMainloop::PresumStages == 4 &&
                                                    ((StrassenMiGroup::hasM0() && size<0>(typename CollectiveMainloop::PresumTileShapeA{}) > 2) ||
                                                     (StrassenMiGroup::hasM1() && size<0>(typename CollectiveMainloop::PresumTileShapeB{}) > 2));
 
@@ -333,6 +333,21 @@ public:
     CUTLASS_HOST_DEVICE
     ElementD* get_ptr_D(int idx = 0) const {
       return ptr_D;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementA* get_ptr_presum_A(int problem_idx) const {
+      return presum_m_a_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementB* get_ptr_presum_B(int problem_idx) const {
+      return presum_m_b_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementD* get_postsum_ptr(int problem_idx) const {
+      return postsum_m_workspace;
     }
   };
 

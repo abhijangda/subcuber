@@ -914,20 +914,37 @@ public:
     }
 
     // Initialize the Params structure
-    params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_a_batch_indices,
-      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
-    params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_a_batch_indices,
-      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
-    params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_a_batch_indices,
-      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
-    params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_a_batch_indices,
-      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
-    params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_a_batch_indices,
-      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
-    params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_a_batch_indices,
-      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
-    params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_a_batch_indices,
-      presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    if constexpr (requires { args0.problem_shape.num_groups; }) {
+      params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    } else {
+      params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+    }
 
     // Don't set the function attributes - require the CudaHostAdapter to set it.
     if constexpr (kEnableCudaHostAdapter) {
