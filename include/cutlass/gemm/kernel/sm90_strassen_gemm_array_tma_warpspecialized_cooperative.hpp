@@ -1053,6 +1053,10 @@ public:
               problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(work_tile_info.L_idx), 1);
             }
 
+            if (did_batch_change) {
+              collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_load_tensormap);
+            }
+
             #pragma unroll (StrassenMiGroup::numMs())
             for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
               // Compute m_coord, n_coord, l_coord with the post-tiled m-shape and n-shape
@@ -1060,10 +1064,6 @@ public:
               auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
               auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
               auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
-
-              if (did_batch_change) {
-                collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_load_tensormap);
-              }
 
               bool wait = work_tile_info.is_valid() && curr_batch != next_work_tile_info.L_idx;
 

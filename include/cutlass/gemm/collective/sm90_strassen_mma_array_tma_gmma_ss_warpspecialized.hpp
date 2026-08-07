@@ -254,7 +254,9 @@ struct CollectiveStrassenMma<
       cute::TmaDescriptor smem_tensormap_presum_B;
     };
 
-    using TensorMapStorage = cute::conditional_t<is_fused, TensorMapStorage1, TensorMapStorage2>;
+    using TensorMapStorage = cute::conditional_t<(StrassenMiGroup::hasM0() && StrassenMiGroup::AllPresums::computeAnyAPresum()) ||
+                                                 (StrassenMiGroup::hasM1() && StrassenMiGroup::AllPresums::computeAnyBPresum()),
+                                                 TensorMapStorage1, TensorMapStorage2>;
 
     using PipelineStorage = typename MainloopPipeline::SharedStorage;
     PipelineStorage pipeline;
@@ -1853,7 +1855,9 @@ struct CollectiveStrassenMma<
     cute::TmaDescriptor* tma_desc_store_presum_compute_a = &gmem_tensormap[sm_idx + 6 * sm_count];
     cute::TmaDescriptor* tma_desc_store_presum_compute_b = &gmem_tensormap[sm_idx + 7 * sm_count];
 
-    if (cute::elect_one_sync()) {
+    const bool t1 = threadIdx.x%32 == 0, t2 = threadIdx.x%32 == 1;
+
+    if (t1) {
       // Bringing tensormaps from params to smem for modification later
       Tensor pA_tensormap = make_tensor(mainloop_params.tma_load_a.get_tma_descriptor(), Int<1>{}, Int<1>{});
       Tensor sA_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_A), Int<1>{}, Int<1>{});
@@ -1868,7 +1872,9 @@ struct CollectiveStrassenMma<
       copy(recast<uint128_t>(pB_tensormap), recast<uint128_t>(sB_tensormap));
       copy(recast<uint128_t>(pPresumA_tensormap), recast<uint128_t>(sPresumA_tensormap));
       copy(recast<uint128_t>(pPresumB_tensormap), recast<uint128_t>(sPresumB_tensormap));
+    }
 
+    if (t2) {
       if constexpr (requires { shared_tensormaps.smem_tensormap_load_presum_compute_A; }) {
         Tensor pLoad_Presum_Compute_A = make_tensor(mainloop_params.tma_load_presumld_a.get_tma_descriptor(), Int<1>{}, Int<1>{});
         Tensor sLoad_Presum_Compute_A_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_load_presum_compute_A), Int<1>{}, Int<1>{});
@@ -1885,6 +1891,7 @@ struct CollectiveStrassenMma<
         copy(recast<uint128_t>(pStore_Presum_Compute_B), recast<uint128_t>(sStore_Presum_Compute_B_tensormap));
       }
     }
+
     __syncwarp();
 
     return cute::make_tuple(tma_desc_a, tma_desc_b, tma_desc_presum_a, tma_desc_presum_b,
