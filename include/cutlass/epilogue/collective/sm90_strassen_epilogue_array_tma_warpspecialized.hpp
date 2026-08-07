@@ -708,7 +708,7 @@ public:
     // Indexing variables
     auto [M, N, K, L] = problem_shape_mnkl;
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
-    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + params.postsum_m_batch_indices[l_coord] + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
+    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (l_coord == 0 ? 0 : params.postsum_m_batch_indices[l_coord]) + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
     uint STAGE_ELEMS = size<0>(EpilogueTile{}) * size<1>(EpilogueTile{});
     uint NUM_STAGES = (size<0>(TileShapeMNK{}) * size<1>(TileShapeMNK{}))/STAGE_ELEMS;
     cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)epilogue_tensors.collective.smem_C.begin();
@@ -815,7 +815,7 @@ public:
     uint VECTOR_ELEMS = 8;
 
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
-    postsum_m0 = postsum_m0 + params.postsum_m_batch_indices[l_coord] + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
+    postsum_m0 = postsum_m0 + (l_coord == 0 ? 0 : params.postsum_m_batch_indices[l_coord]) + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
 
     if (StagesD > 1) {
       //Multiple stage using TMA
@@ -926,7 +926,7 @@ public:
 
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
 
-    postsum_m0 = postsum_m0 + params.postsum_m_batch_indices[l_coord] + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
+    postsum_m0 = postsum_m0 + (l_coord == 0 ? 0 : params.postsum_m_batch_indices[l_coord]) + (m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{});
     postsum_m0 = postsum_m0 + (dest_global_op.get_op())*(M/2)*(N/2);
 
     //Multiple stage using TMA
@@ -1076,7 +1076,7 @@ public:
           use_tma_reduce = use_tma_reduce || use_tma;
           return cute::tuple(make_tensor(d_ptr, d.layout()), global_dest, false);
         } else if (global_dest.is_layout_interim()) {
-          auto m_ptr = postsum_m.data() + make_coord(params.postsum_m_batch_indices[batch],global_dest.get_op()*M/2,_);
+          auto m_ptr = postsum_m.data() + make_coord(batch == 0 ? 0 : params.postsum_m_batch_indices[batch],global_dest.get_op()*M/2,_);
           int idx = 0;
           use_tma_reduce = false;
           if (src0.valid() && src0.is_mem_global())// && src0.get_op() != global_dest.get_op() && src0.is_layout_interim()
