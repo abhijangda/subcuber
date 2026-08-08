@@ -76,6 +76,18 @@ index 3be30af7..4f60d73a 100644
  //////////////////////////////////////////////////////////////////////////////
  ///////////////////////////// BULK COPY //////////////////////////////////////
  //////////////////////////////////////////////////////////////////////////////
+diff --git a/include/cutlass/gemm/gemm_enumerated_types.h b/include/cutlass/gemm/gemm_enumerated_types.h
+index 8961735b..f03e333d 100644
+--- a/include/cutlass/gemm/gemm_enumerated_types.h
++++ b/include/cutlass/gemm/gemm_enumerated_types.h
+@@ -60,6 +60,7 @@ enum class GemmUniversalMode {
+   kBatched,
+   kArray,
+   kGrouped,
++  kMoE,
+   kInvalid
+ };
+ 
 diff --git a/include/cutlass/layout/tensor.h b/include/cutlass/layout/tensor.h
 index 9e8a354e..6d32dc9a 100644
 --- a/include/cutlass/layout/tensor.h

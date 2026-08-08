@@ -149,7 +149,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 0 //TMA Reduce
+#if 1 //TMA Reduce
 using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
@@ -242,12 +242,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
-                                                                                FusedMiGroup<7, 4>>
+                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>>, //TODO: Change this to true
+                                                                                // FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                      //  ParallelMiGroups<false, FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
@@ -558,7 +558,7 @@ void initialize(const Options &options) {
 
   initialize_block(block_A, seed + 2023, false, false);
   initialize_block(block_B, seed + 2022, false, false);
-  initialize_block(block_C, seed + 2021);
+  // initialize_block(block_C, seed + 2021);
 }
 
 /// Populates a Gemm::Arguments structure from the given commandline options
@@ -573,7 +573,7 @@ typename Gemm::Arguments args_from_options(const Options &options)
     cutlass::gemm::GemmUniversalMode::kGemm,
     {options.m, options.n, options.k},
     {block_A.get(), stride_A, block_B.get(), stride_B},
-    {{options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D},
+    {{options.alpha, options.beta}, nullptr, stride_C, block_D.get(), stride_D},
     kernel_hw_info
   );
 

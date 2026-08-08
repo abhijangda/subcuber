@@ -129,12 +129,16 @@ public:
   static_assert(ArchTag::kMinComputeCapability >= 90);
 
   static constexpr bool IsGroupedGemmKernel = !cute::is_same_v<InternalStrideA, StrideA>;
+  static constexpr bool IsMoEGemmKernel = cute::is_same_v<
+    ProblemShape,
+    StrassenMoEProblemShape<typename ProblemShape::UnderlyingProblemShape>
+  >;
   static constexpr uint32_t MinTensorMapWorkspaceAlignment = 64;
 
   static_assert(
     cute::is_void_v<TileScheduler_>
     or (
-      IsGroupedGemmKernel
+      (IsGroupedGemmKernel || IsMoEGemmKernel)
       and cute::is_any_of_v<TileScheduler_, GroupScheduler>
     ),
     "Ptr-Array Cooperative and Grouped Gemm Cooperative kernel only supports the default scheduler.");
@@ -142,7 +146,7 @@ public:
   using SchedulerTag = cute::conditional_t<
     cute::is_void_v<TileScheduler_>,
     cute::conditional_t<
-      IsGroupedGemmKernel,
+      IsGroupedGemmKernel || IsMoEGemmKernel,
       GroupScheduler,     // Special grouped gemm scheduler
       void                // Default scheduler for non-grouped kernels
     >,
@@ -434,7 +438,7 @@ public:
     workspace_offset = round_nearest(workspace_offset, MinTensorMapWorkspaceAlignment);
 
     TileSchedulerParams scheduler;
-    if constexpr (IsGroupedGemmKernel) {
+    if constexpr (IsGroupedGemmKernel || IsMoEGemmKernel) {
       scheduler = TileScheduler::to_underlying_arguments(
       problem_shapes, TileShape{}, ClusterShape{}, hw_info, args.scheduler, scheduler_workspace);
     }
@@ -463,9 +467,23 @@ public:
   static bool
   can_implement(Arguments const& args) {
     bool implementable = true;
-    if constexpr (IsGroupedGemmKernel) {
+    if constexpr (IsGroupedGemmKernel || IsMoEGemmKernel) {
       // Group GEMM currently only supports rank-3 problem shapes
-      implementable &= (args.mode == GemmUniversalMode::kGrouped && rank(typename ProblemShape::UnderlyingProblemShape{}) == 3);
+      bool const is_grouped = args.mode == GemmUniversalMode::kGrouped;
+      bool const is_moe = args.mode == GemmUniversalMode::kMoE;
+      implementable &= ((is_grouped || is_moe) && rank(typename ProblemShape::UnderlyingProblemShape{}) == 3);
+
+      if (is_moe) {
+        implementable &= args.problem_shape.is_host_problem_shape_available();
+        if (implementable && args.problem_shape.groups() > 0) {
+          auto const first_problem = args.problem_shape.get_host_problem_shape(0);
+          for (int group_idx = 1; group_idx < args.problem_shape.groups(); ++group_idx) {
+            auto const problem = args.problem_shape.get_host_problem_shape(group_idx);
+            implementable &= get<1>(problem) == get<1>(first_problem) &&
+                             get<2>(problem) == get<2>(first_problem);
+          }
+        }
+      }
     }
     else {
       implementable &= (args.mode == GemmUniversalMode::kArray && rank(typename ProblemShape::UnderlyingProblemShape{}) == 4);
@@ -550,7 +568,7 @@ public:
     }
     args.raster_order = params.scheduler.raster_order_ == TileScheduler::RasterOrder::AlongN ? TileScheduler::RasterOrderOptions::AlongN : TileScheduler::RasterOrderOptions::AlongM;
     dim3 grid_shape;
-    if constexpr (IsGroupedGemmKernel) {
+    if constexpr (IsGroupedGemmKernel || IsMoEGemmKernel) {
       grid_shape = TileScheduler::get_grid_shape(params.scheduler, params.problem_shape, TileShape{}, ClusterShape{}, params.hw_info, args);
     }
     else {
@@ -809,7 +827,7 @@ public:
                    if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                 MY_PRINTF("775 %d %d\n", work_tile_info.M_idx, work_tile_info.N_idx);
         // Fetch a copy ofcurr_batch tensormaps for the CTA
-        auto input_tensormaps = collective_mainloop.tensormaps_init(params.mainloop, shared_storage.tensormaps.mainloop, sm_count, sm_idx);
+        auto input_tensormaps = collective_mainloop.tensormaps_init(problem_shape_MNKL, params.mainloop, shared_storage.tensormaps.mainloop, sm_count, sm_idx);
 
         // Update tensormap for the initial batch for the CTA
         collective_mainloop.tensormaps_perform_update(

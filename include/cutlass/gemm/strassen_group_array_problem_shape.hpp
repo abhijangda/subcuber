@@ -92,6 +92,47 @@ struct StrassenGroupProblemShape {
 };
 
 template <class ProblemShape_>
+struct StrassenMoEProblemShape {
+  using UnderlyingProblemShape = ProblemShape_;
+  int32_t num_groups = 1;
+  UnderlyingProblemShape* problem_shapes = nullptr;
+  UnderlyingProblemShape const* host_problem_shapes = nullptr;
+
+  CUTLASS_HOST_DEVICE
+  int32_t groups() const { return num_groups; }
+
+  CUTLASS_HOST_DEVICE
+  UnderlyingProblemShape const
+  get_problem_shape(int32_t group_idx) const {
+    return problem_shapes[group_idx];
+  }
+
+  CUTLASS_HOST_DEVICE
+  UnderlyingProblemShape const
+  get_half_problem_shape(int32_t group_idx) const {
+    return UnderlyingProblemShape{get<0>(problem_shapes[group_idx])/2, get<1>(problem_shapes[group_idx])/2, get<2>(problem_shapes[group_idx])};
+  }
+
+  CUTLASS_HOST_DEVICE
+  UnderlyingProblemShape const
+  get_host_problem_shape(int32_t group_idx) const {
+    return host_problem_shapes != nullptr ? host_problem_shapes[group_idx] : UnderlyingProblemShape{};
+  }
+
+  CUTLASS_HOST_DEVICE
+  UnderlyingProblemShape const
+  get_half_host_problem_shape(int32_t group_idx) const {
+    return host_problem_shapes != nullptr ? host_problem_shapes[group_idx] : UnderlyingProblemShape{};
+  }
+
+  CUTLASS_HOST_DEVICE
+  bool
+  is_host_problem_shape_available() const {
+    return host_problem_shapes != nullptr;
+  }
+};
+
+template <class ProblemShape_>
 class StrassenArrayProblemShape {
 public:
   using UnderlyingProblemShape = ProblemShape_;

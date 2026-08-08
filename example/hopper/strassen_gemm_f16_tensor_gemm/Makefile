@@ -28,7 +28,10 @@ strassen_winograd_presum4_hopper_grouped_gemm_pingpong: hopper_grouped_gemm.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DPINGPONG
 
 strassen_winograd_presum4_hopper_grouped_gemm_cooperative: hopper_grouped_gemm.cu
-	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE -DGROUPED
+
+strassen_winograd_presum4_hopper_moe_gemm_cooperative: hopper_grouped_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE -DMOE
 
 cublas_fp16_gemm_bench: cublas_fp16_gemm_bench.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< -o $@ -lcublas -lcublasLt -lcudart

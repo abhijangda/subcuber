@@ -66,7 +66,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -86,6 +87,7 @@ struct CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<
       (cute::is_any_of_v<KernelScheduleType,
                          KernelTmaWarpSpecialized,
@@ -210,7 +212,8 @@ struct CollectiveStrassenBuilder<
       PresumGmemTiledCopyB,
       PresumSmemLayoutAtomB,
       PresumSmemCopyAtomB,
-      PresumOpt_
+      PresumOpt_,
+      ProblemShape_
     >;
 };
 
@@ -232,7 +235,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -252,6 +256,7 @@ struct CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<
       (cute::is_same_v<KernelScheduleType,  KernelTmaWarpSpecialized> ||
        cute::is_same_v<KernelScheduleType,  KernelTmaWarpSpecializedPingpong> ||
@@ -444,7 +449,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -464,6 +470,7 @@ struct CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<
       cute::is_any_of_v<KernelScheduleType,
                         KernelTmaWarpSpecializedFP8FastAccum,
@@ -568,7 +575,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -588,6 +596,7 @@ struct CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<cute::is_same_v<KernelScheduleType, KernelTma> &&
                      not detail::is_use_rmem_A<ElementA, GmemLayoutATag, ElementB, GmemLayoutBTag>()>
 > {
@@ -670,7 +679,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct [[deprecated("Use one of KernelCpAsyncWarpSpecialized schedules instead")]]
 CollectiveStrassenBuilder<
@@ -691,6 +701,7 @@ CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<
       cute::is_same_v<KernelScheduleType, KernelMultistage>>
 > {
@@ -712,7 +723,8 @@ CollectiveStrassenBuilder<
     KernelCpAsyncWarpSpecialized,
     PresumTileShapeA_,
     PresumTileShapeB_,
-    PresumOpt_
+    PresumOpt_,
+    ProblemShape_
   >::CollectiveOp;
 };
 
@@ -734,7 +746,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -754,6 +767,7 @@ struct CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<
       (cute::is_same_v<KernelScheduleType, KernelCpAsyncWarpSpecialized> ||
        cute::is_same_v<KernelScheduleType, KernelCpAsyncWarpSpecializedCooperative> ||
@@ -852,7 +866,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -872,6 +887,7 @@ struct CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<
       (cute::is_same_v<KernelScheduleType, KernelCpAsyncWarpSpecialized> ||
        cute::is_same_v<KernelScheduleType, KernelCpAsyncWarpSpecializedCooperative> ||
@@ -970,7 +986,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -990,6 +1007,7 @@ struct CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<cute::is_same_v<KernelScheduleType, KernelScheduleAuto>>
 > {
   static_assert(is_static<TileShape_MNK>::value);
@@ -1040,7 +1058,8 @@ static constexpr bool IsMixedWidthInput = IsDifferentWidth || (IsDifferentWidth 
       KernelSchedule,
       PresumTileShapeA_,
       PresumTileShapeB_,
-      PresumOpt_
+      PresumOpt_,
+      ProblemShape_
     >::CollectiveOp;
 };
 
@@ -1062,7 +1081,8 @@ template <
   class KernelScheduleType,
   class PresumTileShapeA_,
   class PresumTileShapeB_,
-  class PresumOpt_
+  class PresumOpt_,
+  class ProblemShape_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -1082,6 +1102,7 @@ struct CollectiveStrassenBuilder<
     PresumTileShapeA_,
     PresumTileShapeB_,
     PresumOpt_,
+    ProblemShape_,
     cute::enable_if_t<
       (cute::is_same_v<KernelScheduleType, KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum> or
        cute::is_same_v<KernelScheduleType, KernelPtrArrayTmaWarpSpecializedCooperativeFP8BlockScaledAccum> or

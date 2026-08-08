@@ -127,7 +127,7 @@ constexpr int stages_member(DispatchPolicy) {
 
 
 template<typename Elem>
-static __global__ void presumcheck(uint R, uint C, Elem* A, Elem* presum) {
+static __global__ void presumcheck(uint R, uint C, Elem* presum) {
   int row = blockIdx.x;
   int col = threadIdx.x;
   // if (threadIdx.x == 0)
@@ -222,7 +222,8 @@ public:
     KernelSchedule,
     PresumTileShapeA,
     PresumTileShapeB,
-    PresumOpt
+    PresumOpt,
+    ProblemShape
   >;
 
   template<typename StrassenMiGroup, typename DefaultTileShape>
@@ -1389,7 +1390,7 @@ public:
 
     if (false) {
       cudaDeviceSynchronize();
-      #if 1
+      #if 0
       uint R = 8*1024/2, C = 8*1024/2;
       ElementB* h_presum_b = new ElementB[R*C];
       ElementB* b = new ElementB[2*R*2*C];
@@ -1422,7 +1423,8 @@ public:
         if (to_break) break;
       }
       #endif
-      // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k()/2,1024>>>(paramsM0_.get_problem_shape_k(), paramsM0_.get_problem_shape_n(), paramsM0_.ptr_A, paramsM0_.presum_m_b_workspace);
+      // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k(0)/2,1024>>>(paramsM0_.get_problem_shape_k(0), paramsM0_.get_problem_shape_n(0), paramsM0_.presum_m_b_workspace);
+      presumcheck<ElementA><<<8192/2,1024>>>(8192, 8192, paramsM0_.presum_m_b_workspace);
       cudaDeviceSynchronize();
       exit(EXIT_SUCCESS);
     }

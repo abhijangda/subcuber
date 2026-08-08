@@ -55,6 +55,7 @@ template <
   class PresumTileShapeA = void,
   class PresumTileShapeB = void,
   class PresumOpt = void,
+  class ProblemShape = void,
   class Enable = void
 >
 struct CollectiveStrassenBuilder {
