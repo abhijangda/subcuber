@@ -1110,7 +1110,7 @@ public:
               #pragma unroll 4
               for (read_c = 0; read_c < 4; read_c++) {
                 auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim_linear()) {
                   postsum_srcs[postsum_src_len++] = postsum_src;
                 }
               }
@@ -1376,12 +1376,12 @@ public:
             #pragma unroll 4
             for (read_c = 0; read_c < 4; read_c++) {
               postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-              if (postsum_src.valid() && postsum_src.is_mem_shared() && postsum_src.is_layout_interim()) {
+              if (postsum_src.valid() && postsum_src.is_mem_shared() && postsum_src.is_layout_interim_linear()) {
                 break;
               }
             }
 
-            if (postsum_src.valid() && postsum_src.is_layout_interim()) {
+            if (postsum_src.valid() && postsum_src.is_layout_interim_linear()) {
               NumericArrayConverter<float, ElementD, 8> converter;
               //Read from this shared memory
               cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators;

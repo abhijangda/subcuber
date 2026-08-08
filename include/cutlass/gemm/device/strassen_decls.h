@@ -500,8 +500,13 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  constexpr bool is_layout_interim() const {
-    return mem_layout == LayoutInterim1D || mem_layout == LayoutInterim;
+  constexpr bool is_layout_interim_linear() const {
+    return mem_layout == LayoutInterim1D;
+  }
+
+  CUTLASS_HOST_DEVICE
+  constexpr bool is_layout_interim_matrix() const {
+    return mem_layout == LayoutInterim;
   }
 
   CUTLASS_HOST_DEVICE
@@ -1345,7 +1350,7 @@ public:
         #pragma unroll 4
         for (read_c = 0; read_c < 4; read_c++) {
           auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-          if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+          if (postsum_src.valid() && postsum_src.is_mem_global() && (postsum_src.is_layout_interim_linear() || postsum_src.is_layout_interim_matrix())) {
             postsum_srcs[postsum_src_len++] = postsum_src;
           }
         }

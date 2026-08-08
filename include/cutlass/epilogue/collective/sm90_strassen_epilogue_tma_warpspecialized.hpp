@@ -699,13 +699,13 @@ public:
             global_srcs[idx++] = src1;
           use_tma_reduce = use_tma_reduce || use_tma;
           return cute::tuple(make_tensor(d_ptr, d.layout()), global_dest, false);
-        } else if (global_dest.is_layout_interim()) {
+        } else if (global_dest.is_layout_interim_linear()) {
           auto m_ptr = postsum_m.data() + make_coord(0,global_dest.get_op()*M/2,_);
           int idx = 0;
           use_tma_reduce = false;
-          if (src0.valid() && src0.is_mem_global())// && src0.get_op() != global_dest.get_op() && src0.is_layout_interim()
+          if (src0.valid() && src0.is_mem_global())// && src0.get_op() != global_dest.get_op() && src0.is_layout_interim_linear()
             global_srcs[idx++] = src0;
-          if (src1.valid() && src1.is_mem_global())// && src1.get_op() != global_dest.get_op() && src1.is_layout_interim()
+          if (src1.valid() && src1.is_mem_global())// && src1.get_op() != global_dest.get_op() && src1.is_layout_interim_linear()
             global_srcs[idx++] = src1;
 
           return cute::tuple(make_tensor(m_ptr, postsum_m.layout()), global_dest, true);
@@ -1109,7 +1109,7 @@ struct SM90_BULK_TMA_ADD_S2G
     constexpr uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{})) / NumMMAThreads;
     bool issue_tma_store = thread_idx == 0;
     
-    const bool is_producer_load_needed = src_global_op.valid() && src_global_op.is_mem_global() && src_global_op.is_layout_interim();
+    const bool is_producer_load_needed = src_global_op.valid() && src_global_op.is_mem_global() && src_global_op.is_layout_interim_linear();
 
     cutlass::Array<ElementD, 8>* ptr_smem_st = (cutlass::Array<ElementD, 8>*)epilogue_tensors.collective.smem_D.begin();
                                             // ((is_producer_load_needed) ?
@@ -1473,7 +1473,7 @@ struct SM90_BULK_TMA_ADD_S2G
             copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
           }
 
-          if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim() && thread_idx == 0) {
+          if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim_linear() && thread_idx == 0) {
             //TODO: Can distribute writes over all threads a warp similar to layoutfinal copy
             ElementD* postsum_m0 = reinterpret_cast<ElementD*>(params.ptr_postsum_m) + second_store_dest.get_op()*(N/2)*(M/2);
             postsum_m0 = &postsum_m0[(m_coord*((N/2)/size<1>(TileShapeMNK{})) + n_coord)*size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{})];
@@ -1538,8 +1538,8 @@ struct SM90_BULK_TMA_ADD_S2G
     // if (StrassenMiGroup::hasM4() && thread_idx == 1 && m_coord == 0 && n_coord == 0)
     //   MY_PRINTF("1630 %f\n", float(accumulators[0]));
     // if (thread_idx == 0 && StrassenMiGroup::hasM5() && m_coord == 0 && n_coord == 0)
-    //   MY_PRINTF("1432 %d %d ; %d %d ; %d\n", src_global_ops[0][0].valid(), src_global_ops[0][0].is_layout_interim(),
-    // src_global_ops[0][1].valid(), src_global_ops[0][1].is_layout_interim(), is_C_load_needed);
+    //   MY_PRINTF("1432 %d %d ; %d %d ; %d\n", src_global_ops[0][0].valid(), src_global_ops[0][0].is_layout_interim_linear(),
+    // src_global_ops[0][1].valid(), src_global_ops[0][1].is_layout_interim_linear(), is_C_load_needed);
     // For each output tile
     int linear_store_stage = 0;
     CUTLASS_PRAGMA_UNROLL
@@ -1577,7 +1577,7 @@ struct SM90_BULK_TMA_ADD_S2G
               copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
             }
             if (first_store_srcs[1].valid()) {
-              if (first_store_srcs[1].is_layout_interim()) {
+              if (first_store_srcs[1].is_layout_interim_linear()) {
                 cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC2 + load_wait_state.index()*(STAGE_ELEMS));
                 for (int i = 0; i < size(tSR_rC2); i += 8) {
                   auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
@@ -1648,7 +1648,7 @@ struct SM90_BULK_TMA_ADD_S2G
           int epi_n_in_mma = epi_n % (mma_tile_n / epi_tile_n);
           int r2s_v = epi_n_in_mma * size(tRS_rCompute_frg);
 
-          if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim()) {
+          if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim_linear()) {
             //LayoutInterim
             cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators[0];
             const uint PER_THREAD_ELEMS = (size<0>(EpilogueTile{})*size<1>(EpilogueTile{}))/NumMMAThreads;
@@ -1671,7 +1671,7 @@ struct SM90_BULK_TMA_ADD_S2G
           }
 
           //TODO: Here addition with source C happens
-          if (first_store_srcs[0].valid() and first_store_srcs[0].is_layout_interim()) {
+          if (first_store_srcs[0].valid() and first_store_srcs[0].is_layout_interim_linear()) {
             cutlass::Array<ElementD, FragmentSize> frg;
             for (int i = 0; i < size(tSR_rC); i++) {
               frg[i] = tSR_rC(i);
@@ -1689,7 +1689,7 @@ struct SM90_BULK_TMA_ADD_S2G
             }
           }
 
-          if (first_store_srcs[1].valid() and first_store_srcs[1].is_layout_interim()) {
+          if (first_store_srcs[1].valid() and first_store_srcs[1].is_layout_interim_linear()) {
             // typename decltype(tRS_rCompute_frg)::x y;
             cutlass::Array<ElementD, FragmentSize> frg;
             for (int i = 0; i < size(tSR_rC2); i++) {
