@@ -91,7 +91,7 @@ namespace cutlass::gemm::device {
   on the two kernel API types, and thus, StrassenGemmUniversalAdapter's behaviour might
   differ between the two specializations.
 */
-template <typename ScheduleStrassenGroups, class GemmKernel_, class Enable = void>
+template <class GemmKernel_, class Enable = void>
 class StrassenGemmUniversalAdapter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -174,11 +174,11 @@ struct PresumOpt {
   static constexpr uint FixedPresumTileDividerLogB = FixedPresumTileDividerLogB_;
 };
 
-template<typename StrassenGroups_,
+template<typename StrassenGroups_, typename ScheduleStrassenGroups_,
          typename ProblemShape,
          typename ElementA, typename LayoutA, typename ElementB, typename LayoutB,
-         typename ElementC, typename LayoutC, typename ElementAccum, typename TileShape,
-         typename ClusterShape, typename KernelSchedule, typename EpilogueSchedule,
+         typename ElementC, typename LayoutC, typename ElementAccum,
+         typename ClusterShape,
          typename StageCount,
          typename PresumTileShapeA = void, typename PresumTileShapeB = void,
          typename PresumOpt_ = void>
@@ -188,9 +188,13 @@ public:
   static const int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
   static const int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
   using StrassenGroups = StrassenGroups_;
+  using ScheduleStrassenGroups = ScheduleStrassenGroups_;
   using PresumOpt = typename std::conditional<std::is_same<PresumOpt_, void>::value, cutlass::gemm::device::PresumOpt<>, PresumOpt_>::type;
+  using DefaultKernelSchedule = typename ScheduleStrassenGroups::ParallelGroups0::KernelSchedule;
+  using DefaultEpilogueSchedule = typename ScheduleStrassenGroups::ParallelGroups0::EpilogueSchedule;
+  using DefaultTileShape = typename StrassenGroups::Group0::ThreadBlockShape;
 
-  template<typename StrassenMiGroup, typename DefaultTileShape>
+  template<typename ParallelGroup, typename StrassenMiGroup>
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveStrassenBuilder<
     StrassenMiGroup,
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
@@ -200,7 +204,8 @@ public:
     ElementAccum, ElementAccum,
     ElementC, LayoutC, AlignmentC,
     ElementC, LayoutC, AlignmentC,
-    EpilogueSchedule,
+    cute::conditional_t<!cute::is_same_v<typename ParallelGroup::EpilogueSchedule, void>,
+              typename ParallelGroup::EpilogueSchedule, DefaultEpilogueSchedule>,
     cutlass::epilogue::fusion::LinearCombination<
       cutlass::half_t,
       float,
@@ -209,7 +214,7 @@ public:
     >
   >;
 
-  template<typename StrassenMiGroup, typename DefaultTileShape>
+  template<typename ParallelGroup, typename StrassenMiGroup>
   using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveStrassenBuilder<
     StrassenMiGroup,
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
@@ -219,38 +224,46 @@ public:
     typename std::conditional<StrassenMiGroup::hasAnyM(), typename StrassenMiGroup::ThreadBlockShape, DefaultTileShape>::type,
     ClusterShape,
     typename StrassenMiGroup::StageCountType,
-    KernelSchedule,
+    cute::conditional_t<!cute::is_same_v<typename ParallelGroup::KernelSchedule, void>,
+              typename ParallelGroup::KernelSchedule, DefaultKernelSchedule>,
     PresumTileShapeA,
     PresumTileShapeB,
     PresumOpt,
     ProblemShape
   >;
 
-  template<typename StrassenMiGroup, typename DefaultTileShape>
+  template<typename ParallelGroup, typename StrassenMiGroup>
   using GemmKernel = cutlass::gemm::kernel::StrassenGemmUniversal<
     StrassenMiGroup,
     ProblemShape, // Indicates ProblemShape
-    typename CollectiveMainloop<StrassenMiGroup, DefaultTileShape>::CollectiveOp,
-    typename CollectiveEpilogue<StrassenMiGroup, DefaultTileShape>::CollectiveOp
+    typename CollectiveMainloop<ParallelGroup, StrassenMiGroup>::CollectiveOp,
+    typename CollectiveEpilogue<ParallelGroup, StrassenMiGroup>::CollectiveOp
   >;
 
-  using GemmKernelM0 = GemmKernel<typename StrassenGroups::Group0, TileShape>;
-  using GemmKernelM1 = GemmKernel<typename StrassenGroups::Group1, TileShape>;
-  using GemmKernelM2 = GemmKernel<typename StrassenGroups::Group2, TileShape>;
-  using GemmKernelM3 = GemmKernel<typename StrassenGroups::Group3, TileShape>;
-  using GemmKernelM4 = GemmKernel<typename StrassenGroups::Group4, TileShape>;
-  using GemmKernelM5 = GemmKernel<typename StrassenGroups::Group5, TileShape>;
-  using GemmKernelM6 = GemmKernel<typename StrassenGroups::Group6, TileShape>;
+  using GemmKernelM0 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<0>,
+                                  typename StrassenGroups::Group0>;
+  using GemmKernelM1 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<1>,
+                                  typename StrassenGroups::Group1>;
+  using GemmKernelM2 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<2>,
+                                  typename StrassenGroups::Group2>;
+  using GemmKernelM3 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<3>,
+                                  typename StrassenGroups::Group3>;
+  using GemmKernelM4 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<4>,
+                                  typename StrassenGroups::Group4>;
+  using GemmKernelM5 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<5>,
+                                  typename StrassenGroups::Group5>;
+  using GemmKernelM6 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<6>,
+                                  typename StrassenGroups::Group6>;
 };
 
-template <typename ScheduleStrassenGroups, typename StrassenGemmKernels>
+template <typename StrassenGemmKernels>
 class StrassenGemmUniversalAdapter<
-  ScheduleStrassenGroups,
   StrassenGemmKernels,
   cute::enable_if_t<true>>
   // cute::enable_if_t<gemm::detail::IsCutlass3GemmKernel<GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM0>>::value>>
 {
 public:
+  using ScheduleStrassenGroups = typename StrassenGemmKernels::ScheduleStrassenGroups;
   using GemmKernelM0 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM0>;
   using GemmKernelM1 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM1>;
   using GemmKernelM2 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM2>;
@@ -1521,9 +1534,8 @@ public:
 ////////////////////////////// CUTLASS 2.x API /////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename ScheduleStrassenGroups, class StrassenGemmKernels>
+template <class StrassenGemmKernels>
 class StrassenGemmUniversalAdapter<
-  ScheduleStrassenGroups,
   StrassenGemmKernels,
   cute::enable_if_t<not gemm::detail::IsCutlass3GemmKernel<GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernel0>>::value>>
 {

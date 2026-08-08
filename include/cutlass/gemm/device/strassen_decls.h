@@ -1581,9 +1581,12 @@ public:
   }
 };
 
-template<bool kCommonParams = false, typename... kFusedMiGroups>
+template<typename KernelSchedule_ = void, typename EpilogueSchedule_ = void,
+         bool kCommonParams = false, typename... kFusedMiGroups>
 class ParallelMiGroups {
 public:
+  using KernelSchedule = KernelSchedule_;
+  using EpilogueSchedule = EpilogueSchedule_;
   static const bool CommonParams = kCommonParams;
 
   CUTLASS_HOST_DEVICE
@@ -1958,6 +1961,16 @@ public:
   using ParallelGroups4 = kParallelGroups4;
   using ParallelGroups5 = kParallelGroups5;
   using ParallelGroups6 = kParallelGroups6;
+
+  template<int Mi>
+  using ParallelGroupForMi = std::conditional_t<kParallelGroups0::HasGroup(Mi), kParallelGroups0,
+                             std::conditional_t<kParallelGroups1::HasGroup(Mi), kParallelGroups1,
+                             std::conditional_t<kParallelGroups2::HasGroup(Mi), kParallelGroups2,
+                             std::conditional_t<kParallelGroups3::HasGroup(Mi), kParallelGroups3,
+                             std::conditional_t<kParallelGroups4::HasGroup(Mi), kParallelGroups4,
+                             std::conditional_t<kParallelGroups5::HasGroup(Mi), kParallelGroups5,
+                             std::conditional_t<kParallelGroups6::HasGroup(Mi), kParallelGroups6,
+                                                kParallelGroups0>>>>>>>;
 
   CUTLASS_HOST_DEVICE
   ScheduleStrassenGroups() {}

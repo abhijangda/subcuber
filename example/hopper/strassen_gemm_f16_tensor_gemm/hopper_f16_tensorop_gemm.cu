@@ -117,22 +117,41 @@ using ProblemShape = Shape<int,int,int>; // M,N,K
 
 #if defined(PINGPONG)
 using TileShape           = Shape<_128,_128,_64>;                           // Threadblock-level tile size
+using TileShapeM0         = TileShape;
+using TileShapeM2To6      = TileShape;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 6 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = 6 ;
 using PresumTileShapeA    = Shape<_2, _128>;
 using PresumTileShapeB    = Shape<_2, _128>;
-using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
-using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized;
+using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
+using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecialized;
+using KernelScheduleM2To6 = KernelScheduleM0;
+using EpilogueScheduleM2To6 = EpilogueScheduleM0;
 #elif defined(COOPERATIVE)
-using TileShape           = Shape<_128,_256,_64>;                           // Threadblock-level tile size
+using TileShapeM0           = Shape<_128,_256,_64>;                           // Threadblock-level tile size
+using TileShapeM2To6        = Shape<_128,_256,_64>;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = 4 ;
 using PresumTileShapeA    = Shape<_2, _256>;
 using PresumTileShapeB    = Shape<_2, _256>;
-using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
-using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecializedCooperative;
+using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
+using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecializedCooperative;
+using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
+using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
+#elif defined(COOPERATIVE_PINGPONG)
+using TileShapeM0         = Shape<_128,_256,_64>;                           // Threadblock-level tile size
+using TileShapeM2To6      = Shape<_128,_128,_64>;                           // Threadblock-level tile size
+using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
+const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
+const uint StageCountTypeM2M6 = 6 ;
+using PresumTileShapeA    = Shape<_2, _256>;
+using PresumTileShapeB    = Shape<_2, _256>;
+using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
+using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecialized;
+using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
+using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
 #endif
 
 using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
@@ -149,29 +168,29 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 1 //TMA Reduce
-using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM0,
+#if 0 //TMA Reduce
+using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, AllPresumsM0>,
+                                            StrassenLevel1MiGroup<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                            CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                   AllPresumsM0, 0, 0, 1>,
-                                            StrassenLevel1M1Group<1, 0, TileShape, ClusterShape, StageCountTypeM0,
+                                            StrassenLevel1M1Group<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
                                                                   RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                             CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C0 = M1
                                                                   AllPresumsM0>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1MiGroup<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim>> >, //C1 = Sh = C1+M2 ; Reg = C1 //TODO: pass C1 through registers
                                                                            CUW<3, LayoutFinal, LayoutNone, Expr<Plus<3>>/*, Expr<Plus<1, MemShared, LayoutInterim1D>>*/ >, //C2 = C1Sh+M3
                                                                            CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>> >,
                                                                   AllPresumsM1To6, 0, 2, 3, 6>,
-                                            StrassenLevel1M3Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M3Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<2, LayoutNone, LayoutInterim1D, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C2 = C1(Reg)+M3 
                                                                   AllPresumsM1To6>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1MiGroup<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes</*CUW<0, LayoutNone,  LayoutInterim1D,  Expr<Plus<4>>>,*/ //C1 (stored at M0) = C1+M4
                                                                            CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>, Expr<Plus<3, MemGlobal, LayoutFinal>>>,//C3 = C2+M4
@@ -180,26 +199,26 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                                                                                >
                                                                            >,
                                                                   AllPresumsM1To6, 0, 4, 5>,
-                                            StrassenLevel1M5Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M5Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>,
                                                                                                                                Plus<0, MemGlobal, LayoutInterim1D>>>>, //C1 = C1+M5 //TODO: in code M5 reads M1 and M0 (written by M4)
                                                                   AllPresumsM1To6>,
-                                            StrassenLevel1M6Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M6Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                   AllPresumsM1To6>
                                             >;
-using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>,
-                                                                                FusedMiGroup<7, 4>>
+using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0, EpilogueScheduleM0, false, FusedMiGroup<7, 0>>,
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                                                                                           FusedMiGroup<7, 4>>
+                                                                                // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
-
 #elif 0
 using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM0,
@@ -253,28 +272,28 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
                                                         >;
 
 #elif 1
-using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM0,
+using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, AllPresumsM0>,
+                                            StrassenLevel1MiGroup<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                            CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                   AllPresumsM0, 0, 0, 1>,
-                                            StrassenLevel1M1Group<1, 0, TileShape, ClusterShape, StageCountTypeM0,
+                                            StrassenLevel1M1Group<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
                                                                   RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                             CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C0 = M1
                                                                   AllPresumsM0>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1MiGroup<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim>> >, //C1 = Sh = C1+M2 ; Reg = C1 //TODO: pass C1 through registers
                                                                            CUW<2, LayoutInterim, LayoutNone, Expr<Plus<3>>/*, Expr<Plus<1, MemShared, LayoutInterim1D>>*/ >, //C2 = C1Sh+M3
                                                                            CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>> >,
                                                                   AllPresumsM1To6, 0, 2, 3, 6>,
-                                            StrassenLevel1M3Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M3Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<2, LayoutNone, LayoutInterim1D, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C2 = C1(Reg)+M3 
                                                                   AllPresumsM1To6>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1MiGroup<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes</*CUW<0, LayoutNone,  LayoutInterim1D,  Expr<Plus<4>>>,*/ //C1 (stored at M0) = C1+M4
                                                                            CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim>> >,//C3 = C2+M4
@@ -283,19 +302,19 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                                                                                >
                                                                            >,
                                                                   AllPresumsM1To6, 0, 4, 5>,
-                                            StrassenLevel1M5Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M5Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>,
                                                                                                                                Plus<0, MemGlobal, LayoutInterim1D>>>>, //C1 = C1+M5 //TODO: in code M5 reads M1 and M0 (written by M4)
                                                                   AllPresumsM1To6>,
-                                            StrassenLevel1M6Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M6Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                   AllPresumsM1To6>
                                             >;
-using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
-                                                                                FusedMiGroup<7, 4>>
+using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0, EpilogueScheduleM0, false, FusedMiGroup<7, 0>>,
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                                                                                           FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
@@ -357,17 +376,16 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
                                                         >;
 #endif
 
-using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups,
+using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups, ScheduleStrassenGroups1,
                                                                        ProblemShape,
                                                                        ElementA, LayoutA, ElementB, LayoutB,
                                                                        ElementC, LayoutC,
-                                                                       ElementAccumulator, TileShape, ClusterShape,
-                                                                       KernelSchedule, EpilogueSchedule,
+                                                                       ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
                                                                        PresumOpts>;
 
-using Gemm = cutlass::gemm::device::StrassenGemmUniversalAdapter<ScheduleStrassenGroups1, StrassenGemmKernels>;
+using Gemm = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenGemmKernels>;
 
 // Reference device GEMM implementation type
 using DeviceGemmReference = cutlass::reference::device::Gemm<
