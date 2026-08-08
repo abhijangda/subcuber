@@ -578,12 +578,8 @@ public:
       cute::prefetch_tma_descriptor(epilogue_params.tma_store_d.get_tma_descriptor());
     }
 
-    if (StrassenMiGroup::hasM0() || StrassenMiGroup::hasM1()) {
-      cute::prefetch_tma_descriptor(epilogue_params.tma_store_postsum_m.get_tma_descriptor());
-      cute::prefetch_tma_descriptor(epilogue_params.tma_load_presumld_a.get_tma_descriptor());
-    } else {
-      cute::prefetch_tma_descriptor(epilogue_params.tma_load_postsum_m.get_tma_descriptor());
-    }
+    cute::prefetch_tma_descriptor(epilogue_params.tma_store_postsum_m.get_tma_descriptor());
+    cute::prefetch_tma_descriptor(epilogue_params.tma_load_postsum_m.get_tma_descriptor());
   }
 
   CUTLASS_HOST_DEVICE
@@ -600,47 +596,28 @@ public:
     class ProblemShapeMNKL
   >
   CUTLASS_DEVICE decltype(auto)
-  get_load_tma(ProblemShapeMNKL problem_shape_mnkl) {
+  get_load_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, PostsumOp global_src) {
     auto [M, N, K, L] = problem_shape_mnkl;
     Tensor postsum_m = params.tma_load_postsum_m.get_tma_tensor(make_shape(M/2,N/2,L));
     auto m0_ptr = postsum_m.data() + make_coord(0,0,_);
     auto m0 = make_tensor(m0_ptr, postsum_m.layout());
-  
-    if (StrassenMiGroup::hasM1()) {
-      //Load M0
-      return m0;
+
+    Tensor d = params.tma_store_d.get_tma_tensor(make_shape(M, N, L));
+    auto d0_ptr = d.data() + make_coord(0,0,_);
+    auto d0 = make_tensor(d0_ptr, d.layout());
+
+    if (global_src.valid() && global_src.is_mem_global()) {
+      if (global_src.is_layout_final()) {
+        auto d_ptr = d.data() + make_coord((global_src.get_op()%2)*N/2,
+                                           (global_src.get_op()/2)*M/2,_);
+        return cute::tuple(make_tensor(d_ptr, d.layout()), false);
+      } else if (global_src.is_layout_interim_matrix()) {
+        auto m_ptr = postsum_m.data() + make_coord(0,global_src.get_op()*M/2,_);
+        return cute::tuple(make_tensor(m_ptr, postsum_m.layout()), true);
+      }
     }
 
-    if (StrassenMiGroup::hasM2()) {
-      //Load M0
-      return m0;
-    }
-
-    if (StrassenMiGroup::hasM3()) {
-      //Load M2
-      auto m2_ptr = postsum_m.data() + make_coord(0,1*M/2,_);
-      return make_tensor(m2_ptr, postsum_m.layout());
-    }
-
-    if (StrassenMiGroup::hasM4()) {
-      //Load M3
-      auto m3_ptr = postsum_m.data() + make_coord(0,2*M/2,_);
-      return make_tensor(m3_ptr, postsum_m.layout());
-    }
-
-    if (StrassenMiGroup::hasM5()) {
-      //Load M4
-      auto m4_ptr = postsum_m.data() + make_coord(0,3*M/2,_);
-      return make_tensor(m4_ptr, postsum_m.layout());
-    }
-
-    if (StrassenMiGroup::hasM6()) {
-      //Load M3
-      auto m3_ptr = postsum_m.data() + make_coord(0,2*M/2,_);
-      return make_tensor(m3_ptr, postsum_m.layout());
-    }
-
-    return m0;
+    return cute::tuple(d0, false);
   }
 
   template<
@@ -666,7 +643,7 @@ public:
     class ProblemShapeMNKL
   >
   CUTLASS_DEVICE decltype(auto)
-  get_store_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, MemLayout layout, PostsumOp global_srcs[4], bool& use_tma_reduce) {
+  get_store_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, bool matrix_or_linear, PostsumOp global_srcs[4], bool& use_tma_reduce) {
     auto [M, N, K, L] = problem_shape_mnkl;
     Tensor postsum_m = params.tma_store_postsum_m.get_tma_tensor(make_shape(M/2,N/2,L));
     auto m0_ptr = postsum_m.data() + make_coord(0,0,_);
@@ -681,7 +658,8 @@ public:
     for (int i = 0; i < 4; i++) {
       auto global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(i);
       int signMi = RWCTypes::MiSignByOutputIndex(i, StrassenMiGroup::getMi(sub_m_idx));
-      if (global_dest.valid() && global_dest.is_mem_global() && global_dest.get_mem_layout() == layout && signMi != 0) {
+      const bool satisfy_layout = matrix_or_linear == true ? global_dest.is_layout_final() || global_dest.is_layout_interim_matrix() : global_dest.is_layout_interim_linear();
+      if (global_dest.valid() && global_dest.is_mem_global() && satisfy_layout && signMi != 0) {
         PostsumOp src0 = RWCTypes::PostsumSrcByOutputIndex(i, 0);
         PostsumOp src1 = RWCTypes::PostsumSrcByOutputIndex(i, 1);
         if (global_dest.is_layout_final()) {
@@ -699,7 +677,7 @@ public:
             global_srcs[idx++] = src1;
           use_tma_reduce = use_tma_reduce || use_tma;
           return cute::tuple(make_tensor(d_ptr, d.layout()), global_dest, false);
-        } else if (global_dest.is_layout_interim_linear()) {
+        } else if (global_dest.is_layout_interim_matrix() || global_dest.is_layout_interim_linear()) {
           auto m_ptr = postsum_m.data() + make_coord(0,global_dest.get_op()*M/2,_);
           int idx = 0;
           use_tma_reduce = false;
@@ -728,11 +706,12 @@ public:
       LoadPipelineState load_pipe_producer_state,
       ProblemShapeMNKL problem_shape_mnkl,
       TileShapeMNK tile_shape_MNK,
-      TileCoordMNKL tile_coord_mnkl,
+      TileCoordMNKL tile_coord_mnkl, const int sub_m_idx,
       TiledMma tiled_mma,
       int thread_idx,
       TensorStorage& shared_tensors,
       TensorStorage& shared_tensors2,
+      PostsumOp src_global_ops[4],
       int subtile_idx=-1) {
     using namespace cute;
 
@@ -748,13 +727,15 @@ public:
 
     // Represent the full source tensor, slice to get the tile this CTA is currently responsible for
     bool OutputDorM = StrassenMiGroup::hasM0(); //true for D and false for M
-    auto& tma_load_m = params.tma_load_postsum_m;
     
-    Tensor mC_mn = get_load_tma(problem_shape_mnkl);                             //       (M,N,L)
+    auto first_load_tuple = get_load_tma(problem_shape_mnkl, sub_m_idx, src_global_ops[0]);
+    Tensor mC_mn = get<0>(first_load_tuple);                             //       (M,N,L)
+    auto& tma_load_m = params.tma_load_postsum_m;
     Tensor mC = coalesce(mC_mn, take<0,2>(CtaTileMNK{}));
     Tensor gC = local_tile(mC, take<0,2>(CtaTileMNK{}), coord_shape);                                  // (CTA_M,CTA_N)
 
-    bool has_second_load = get<1>(get_second_load_tma(problem_shape_mnkl));
+    auto second_load_tuple = get_load_tma(problem_shape_mnkl, sub_m_idx, src_global_ops[1]);
+    bool has_second_load = src_global_ops[1].valid();
     Tensor mC2_mn = get<0>(get_second_load_tma(problem_shape_mnkl));
     Tensor mC2 = coalesce(mC2_mn, take<0,2>(CtaTileMNK{}));
     Tensor gC2 = local_tile(mC2, take<0,2>(CtaTileMNK{}), coord_shape);
@@ -789,8 +770,7 @@ public:
                       thread_idx
                     );
     auto pld_callbacks = fusion_callbacks.get_producer_load_callbacks(pld_args);
-    bool is_C_load_needed = is_source_supported && (fusion_callbacks.is_C_load_needed() ||
-        StrassenMiGroup::hasM1() || StrassenMiGroup::hasM2() || StrassenMiGroup::hasM3());
+    bool is_C_load_needed = is_source_supported && (fusion_callbacks.is_C_load_needed() || true);
 
     // Predication for TMA load (one thread issues TMA load)
     bool issue_tma_load = cute::elect_one_sync();
@@ -1233,7 +1213,7 @@ struct SM90_BULK_TMA_ADD_S2G
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
     PostsumOp first_store_srcs[4], second_store_srcs[4];
     bool use_tma_first_store = false;
-    auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutFinal, first_store_srcs, use_tma_first_store);
+    auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, true, first_store_srcs, use_tma_first_store);
     PostsumOp first_store_dest = get<1>(first_store_tuple);
     auto& tma_store_dorm = get<2>(first_store_tuple) ? params.tma_store_postsum_m : params.tma_store_d ;
     auto& tma_add_dorm = get<2>(first_store_tuple) ? params.tma_add_postsum_m : params.tma_add_d;
@@ -1242,7 +1222,7 @@ struct SM90_BULK_TMA_ADD_S2G
     Tensor gD = local_tile(mD, take<0,2>(CtaTileMNK{}), coord_shape);                                  // (CTA_M,CTA_N)
     
     bool use_tma_second_store = false;
-    auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutInterim1D, second_store_srcs, use_tma_second_store);
+    auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, false, second_store_srcs, use_tma_second_store);
     bool has_second_store = get<1>(second_store_tuple).valid();
     PostsumOp second_store_dest = get<1>(second_store_tuple);
     Tensor mD2_mn = get<0>(second_store_tuple);
@@ -1399,8 +1379,8 @@ struct SM90_BULK_TMA_ADD_S2G
                     );
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<RefSrc>(cst_args);
     bool is_producer_load_needed = first_store_srcs[0].valid() || second_store_srcs[0].valid();
-    if (threadIdx.x%128==0 && blockIdx.x==0&&blockIdx.y == 0)
-      MY_PRINTF("1396 %d : %d %d %d\n", sub_m_idx, is_producer_load_needed, first_store_srcs[0].valid(), second_store_srcs[0].valid());
+    // if (StrassenMiGroup::hasM2() && sub_m_idx==0 && threadIdx.x%128==0 && blockIdx.x==0&&blockIdx.y == 0)
+    //   printf("1396 %d : %d %d %d\n", sub_m_idx, is_producer_load_needed, first_store_srcs[0].valid(), second_store_srcs[0].valid());
     // StrassenMiGroup::hasM1() || StrassenMiGroup::hasM2() || StrassenMiGroup::hasM3() || StrassenMiGroup::hasM4() || StrassenMiGroup::hasM6();
     bool is_C_load_needed = is_source_supported && (first_store_srcs[0].valid() || second_store_srcs[0].valid());
 
@@ -1564,7 +1544,7 @@ struct SM90_BULK_TMA_ADD_S2G
             const uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{}));
             if (first_store_srcs[0].valid()) {
               // copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
-              if (true) {
+              if (first_store_srcs[0].is_layout_interim_linear()) {
                 cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC + load_wait_state.index()*STAGE_ELEMS);
                 for (int i = 0; i < size(tSR_rC); i += 8) {
                   auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
@@ -1572,9 +1552,9 @@ struct SM90_BULK_TMA_ADD_S2G
                     tSR_rC(i + j) = frg[j];
                 }
               }
-            }
-            else {
-              copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
+              else {
+                copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
+              }
             }
             if (first_store_srcs[1].valid()) {
               if (first_store_srcs[1].is_layout_interim_linear()) {
@@ -1671,14 +1651,11 @@ struct SM90_BULK_TMA_ADD_S2G
           }
 
           //TODO: Here addition with source C happens
-          if (first_store_srcs[0].valid() and first_store_srcs[0].is_layout_interim_linear()) {
+          if (first_store_srcs[0].valid() and (first_store_srcs[0].is_layout_interim_linear() || first_store_srcs[0].is_layout_interim_matrix())) {
             cutlass::Array<ElementD, FragmentSize> frg;
             for (int i = 0; i < size(tSR_rC); i++) {
               frg[i] = tSR_rC(i);
             }
-
-            // if (StrassenMiGroup::hasM2() && thread_idx == 0 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
-            //   MY_PRINTF("1548 %d : %f %f\n", sub_m_idx, float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
 
             CUTLASS_PRAGMA_UNROLL
             for (int i = 0; i < size(tRS_rCompute_frg); ++i) {
@@ -1689,7 +1666,7 @@ struct SM90_BULK_TMA_ADD_S2G
             }
           }
 
-          if (first_store_srcs[1].valid() and first_store_srcs[1].is_layout_interim_linear()) {
+          if (first_store_srcs[1].valid() and (first_store_srcs[1].is_layout_interim_linear() || first_store_srcs[1].is_layout_interim_matrix())) {
             // typename decltype(tRS_rCompute_frg)::x y;
             cutlass::Array<ElementD, FragmentSize> frg;
             for (int i = 0; i < size(tSR_rC2); i++) {

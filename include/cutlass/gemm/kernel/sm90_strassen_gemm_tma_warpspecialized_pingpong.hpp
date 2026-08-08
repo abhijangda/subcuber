@@ -1110,7 +1110,7 @@ public:
               #pragma unroll 4
               for (read_c = 0; read_c < 4; read_c++) {
                 auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim_linear()) {
+                if (postsum_src.valid() && postsum_src.is_mem_global()) {
                   postsum_srcs[postsum_src_len++] = postsum_src;
                 }
               }
@@ -1133,20 +1133,21 @@ public:
                 load_order_barrier.advance();
                 if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                   MY_PRINTF("1119 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
-                if (false) {
+                if (postsum_srcs[0].is_layout_interim_matrix()) {
                   epi_load_pipe_producer_state =
                   collective_epilogue.load(//TODO: Give postsum as argument
                     epi_load_pipeline,
                     epi_load_pipe_producer_state,
                     problem_shape_MNKL,
                     blk_shape,
-                    blk_coord,
+                    blk_coord, fused_mi,
                     tiled_mma,
                     lane_idx,
                     shared_storage.tensors.extra_storage.epilogue,
-                    shared_storage.tensors.extra_storage.epilogue2
+                    shared_storage.tensors.extra_storage.epilogue2,
+                    postsum_srcs
                   );
-                } else {
+                } else if (postsum_srcs[0].is_layout_interim_linear()) {
                   epi_load_pipe_producer_state =
                   collective_epilogue.load_m0(//TODO: Give postsum as argument
                     epi_load_pipeline,
@@ -1405,7 +1406,7 @@ public:
         bool has_global_src = false;
         uint fused_mi = sub_m_idx;
 
-        bool any_global_dst_final = false;
+        bool any_global_dst_matrix = false;
         bool any_global_dst_valid = false;
 
         #pragma unroll 4
@@ -1419,7 +1420,8 @@ public:
 
           if (misign == 0 || (!postsum_global_dest.valid())) continue;
           
-          any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
+          any_global_dst_matrix = any_global_dst_matrix || postsum_global_dest.is_layout_final() ||
+                                                          postsum_global_dest.is_layout_interim_matrix();
           any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
 
           #pragma unroll 4
@@ -1439,7 +1441,7 @@ public:
         }
 
         if (any_global_dst_valid) {
-        if (!any_global_dst_final) {
+        if (!any_global_dst_matrix) {
           auto ret = collective_epilogue.store_m2(
             epi_load_pipeline,
             epi_load_pipe_consumer_state,

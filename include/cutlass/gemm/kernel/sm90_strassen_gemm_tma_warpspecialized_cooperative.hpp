@@ -961,19 +961,35 @@ public:
                 load_order_barrier.advance();
                 if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                   MY_PRINTF("948 %d : %d %d\n", fused_mi, m_coord, n_coord);
-                epi_load_pipe_producer_state =
-                collective_epilogue.load_m0(
-                  epi_load_pipeline,
-                  epi_load_pipe_producer_state,
-                  problem_shape_MNKL,
-                  blk_shape,
-                  blk_coord, fused_mi,
-                  tiled_mma,
-                  lane_idx,
-                  shared_storage.tensors.epilogue,
-                  shared_storage.tensors.epilogue,
-                  postsum_srcs
-                );
+                if (postsum_srcs[0].is_layout_interim_matrix()) {
+                  epi_load_pipe_producer_state =
+                  collective_epilogue.load(
+                    epi_load_pipeline,
+                    epi_load_pipe_producer_state,
+                    problem_shape_MNKL,
+                    blk_shape,
+                    blk_coord, fused_mi,
+                    tiled_mma,
+                    lane_idx,
+                    shared_storage.tensors.epilogue,
+                    shared_storage.tensors.epilogue,
+                    postsum_srcs
+                  );                  
+                } else if (postsum_srcs[0].is_layout_interim_linear()) {
+                  epi_load_pipe_producer_state =
+                  collective_epilogue.load_m0(
+                    epi_load_pipeline,
+                    epi_load_pipe_producer_state,
+                    problem_shape_MNKL,
+                    blk_shape,
+                    blk_coord, fused_mi,
+                    tiled_mma,
+                    lane_idx,
+                    shared_storage.tensors.epilogue,
+                    shared_storage.tensors.epilogue,
+                    postsum_srcs
+                  );
+                }
                 if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                   MY_PRINTF("963 %d : %d %d\n", fused_mi, m_coord, n_coord);
               }
@@ -1028,7 +1044,7 @@ public:
 
         bool is_neg = false;
         bool has_global_src = false;
-        bool any_global_dst_final = false;
+        bool any_global_dst_matrix = false;
         bool any_global_dst_valid = false;
 
         for (int c = 0; c < 4; c++) {
@@ -1041,7 +1057,8 @@ public:
 
           is_neg = misign == -1;
 
-          any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
+          any_global_dst_matrix = any_global_dst_matrix || postsum_global_dest.is_layout_final() ||
+                                                          postsum_global_dest.is_layout_interim_matrix();
           any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
 
           #pragma unroll 4
@@ -1116,7 +1133,7 @@ public:
 
         if (TileScheduler::compute_epilogue(work_tile_info, params.scheduler) && any_global_dst_valid) {
           // Epilogue and write to gD
-          if (!any_global_dst_final) {
+          if (!any_global_dst_matrix) {
             auto ret = collective_epilogue.store_m2(
               epi_load_pipeline,
               epi_load_pipe_consumer_state,

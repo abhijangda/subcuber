@@ -1424,11 +1424,11 @@ public:
       }
       #endif
       // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k(0)/2,1024>>>(paramsM0_.get_problem_shape_k(0), paramsM0_.get_problem_shape_n(0), paramsM0_.presum_m_b_workspace);
-      presumcheck<ElementA><<<8192/2,1024>>>(8192, 8192, paramsM0_.presum_m_b_workspace);
+      // presumcheck<ElementA><<<8192/2,1024>>>(8192, 8192, paramsM0_.presum_m_b_workspace);
+      postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
       cudaDeviceSynchronize();
       exit(EXIT_SUCCESS);
     }
-    // postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
 
     if ((!only_m or valid_ms[4] == 1) && ParallelGroup4::HasAKernel()) {
       result = run_parallel<ParallelGroup4>(paramsM0_, paramsM1_, paramsM2_, paramsM3_, paramsM4_, paramsM5_, paramsM6_,
