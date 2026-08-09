@@ -886,7 +886,7 @@ public:
       MY_PRINTF("1030 %d %d: %d %d\n", threadIdx.x, is_M_load_needed, m_coord, n_coord);
 
     if (is_M_load_needed)
-    CUTLASS_PRAGMA_UNROLL
+    CUTLASS_PRAGMA_NO_UNROLL
     for (uint stage = 0; stage < size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{}); stage += STAGE_ELEMS) {
       uint64_t* tma_barrier = load_pipeline.producer_get_barrier(load_pipe_producer_state);
       load_pipeline.producer_acquire(load_pipe_producer_state);

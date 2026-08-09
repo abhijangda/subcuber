@@ -9,6 +9,7 @@ static std::vector<strassen_tests::TestCase> test_cases() {
 		{{7168, 7168, 7168}, 1, 1, "7168x7168x7168 split_k=1"},
 		{{6144, 6144, 4096}, 1, 1, "6144x6144x4096 split_k=1"},
 		{{8192, 4096, 8192}, 1, 1, "8192x4096x8192 split_k=1"},
+		{{8192, 8192, 8192}, 1, 1, "8192x8192x8192 split_k=1"},
 	};
 
 	return cases;
