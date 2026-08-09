@@ -662,12 +662,22 @@ public:
           return Status::kErrorWorkspaceNull;
         }
 
-        size_t bytes = get_workspace_size(args) - get_presum_a_workspace_size(args) - get_presum_b_workspace_size(args) -
-                       get_postsum_m_workspace_size(args);
-        cudaError_t result = cudaMemsetAsync(postsum_semaphore, 0, bytes, stream);
+        cudaError_t result = cudaMemsetAsync(
+          postsum_semaphore, 0xff, get_postsum_semaphore_size(args), stream);
 
         if (result != cudaSuccess) {
           return Status::kErrorInternal;
+        }
+
+        if (kSplitKSerial && args.split_k_slices > 1) {
+          size_t bytes = get_workspace_size(args) - get_presum_a_workspace_size(args) -
+                         get_presum_b_workspace_size(args) - get_postsum_m_workspace_size(args) -
+                         get_postsum_semaphore_size(args);
+          result = cudaMemsetAsync(sem_workspace, 0, bytes, stream);
+
+          if (result != cudaSuccess) {
+            return Status::kErrorInternal;
+          }
         }
       }
     }
