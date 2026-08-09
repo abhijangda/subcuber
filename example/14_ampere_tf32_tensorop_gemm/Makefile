@@ -28,7 +28,7 @@ else
 endif
 
 # Targets
-all: ampere_f16_tensorop_gemm
+all: ampere_tf32_tensorop_gemm
 
 ampere_tf32_tensorop_gemm: ampere_tf32_tensorop_gemm.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) -o $@ $(CUDA_LIBS)

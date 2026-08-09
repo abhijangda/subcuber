@@ -68,7 +68,7 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, Sh
                                                              AllPresumsKernel>,
                                               StrassenLevel1MiGroup<kStrassenLevel, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                     AllPresumsM0, 1, 0, 1>,
                                               StrassenLevel1M2Group<kStrassenLevel, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 3,

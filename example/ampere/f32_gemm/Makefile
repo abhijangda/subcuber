@@ -40,17 +40,17 @@ endif
 # Targets
 all: basic_gemm_128 basic_gemm_256 basic_gemm_128_splitk basic_gemm_256_splitk
 
-basic_gemm_128: basic_gemm.cu
-	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) basic_gemm.cu $(INCLUDES) -DTILE_SIZE_128 -DSPLIT_K=0 -o $@ $(CUDA_LIBS)
+basic_gemm_128: f32_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) f32_gemm.cu $(INCLUDES) -DTILE_SIZE_128 -DSPLIT_K=0 -o $@ $(CUDA_LIBS)
 
-basic_gemm_256: basic_gemm.cu
-	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) basic_gemm.cu $(INCLUDES) -DTILE_SIZE_256 -DSPLIT_K=0 -o $@ $(CUDA_LIBS)
+basic_gemm_256: f32_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) f32_gemm.cu $(INCLUDES) -DTILE_SIZE_256 -DSPLIT_K=0 -o $@ $(CUDA_LIBS)
 
-basic_gemm_128_splitk: basic_gemm.cu
-	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) basic_gemm.cu $(INCLUDES) -DTILE_SIZE_128 -DSPLIT_K=1 -o $@ $(CUDA_LIBS)
+basic_gemm_128_splitk: f32_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) f32_gemm.cu $(INCLUDES) -DTILE_SIZE_128 -DSPLIT_K=1 -o $@ $(CUDA_LIBS)
 
-basic_gemm_256_splitk: basic_gemm.cu
-	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) basic_gemm.cu $(INCLUDES) -DTILE_SIZE_256 -DSPLIT_K=1 -o $@ $(CUDA_LIBS)
+basic_gemm_256_splitk: f32_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) f32_gemm.cu $(INCLUDES) -DTILE_SIZE_256 -DSPLIT_K=1 -o $@ $(CUDA_LIBS)
 
 # Clean up generated files
 clean: 

@@ -1581,12 +1581,18 @@ public:
   }
 };
 
-template<typename KernelSchedule_ = void, typename EpilogueSchedule_ = void,
+
+template<
+#ifdef CUTLASS_API_v3
+         typename KernelSchedule_ = void, typename EpilogueSchedule_ = void,
+#endif
          bool kCommonParams = false, typename... kFusedMiGroups>
 class ParallelMiGroups {
 public:
+#ifdef CUTLASS_API_v3
   using KernelSchedule = KernelSchedule_;
   using EpilogueSchedule = EpilogueSchedule_;
+#endif
   static const bool CommonParams = kCommonParams;
 
   CUTLASS_HOST_DEVICE

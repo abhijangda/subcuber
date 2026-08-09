@@ -242,7 +242,7 @@ using namespace MmaStrassen;
 
   using StrassenGroups = StrassenLevel1Groups<StrassenLevel1M0Group<kStrassenLevel, ThreadBlockShape, WarpShape, 
                                                                     RWMTypes<KeepAccums>,
-                                                                    RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
+                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
                                                                     AllPresumsM0>,
                                               StrassenLevel1M1Group<kStrassenLevel, ThreadBlockShape, WarpShape,
                                                                     RWMTypes<ContinueAccums>,
@@ -250,24 +250,24 @@ using namespace MmaStrassen;
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M2Group<kStrassenLevel, ThreadBlockShape, WarpShape,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<CUW<1, LayoutNone, LayoutInterim, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim>>>>,//C1(Shared) = C1+M2
+                                                                    RWCTypes<CUW<1, LayoutNone, LayoutInterim1D, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C1(Shared) = C1+M2
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M3Group<kStrassenLevel, ThreadBlockShape, WarpShape,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<CUW<2, LayoutInterim, LayoutNone, Expr<Plus<3>>, Expr<Plus<1, MemShared, LayoutInterim>>>>,//C2 = C1(Shared)+M3 ; 
+                                                                    RWCTypes<CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>, Expr<Plus<1, MemShared, LayoutInterim1D>>>>,//C2 = C1(Shared)+M3 ;
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M4Group<kStrassenLevel, ThreadBlockShape, WarpShape,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<CUW<1, LayoutNone, LayoutInterim, Expr<Plus<4>>, Expr<Plus<1, MemShared, LayoutInterim>>>, //C1(Shared) = C1(Shared)+M4
-                                                                             CUW<3, LayoutFinal,  LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim>>>>,//C3 = C2+M4
+                                                                    RWCTypes<CUW<1, LayoutNone, LayoutInterim1D, Expr<Plus<4>>, Expr<Plus<1, MemShared, LayoutInterim1D>>>, //C1(Shared) = C1(Shared)+M4
+                                                                             CUW<3, LayoutFinal,  LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>,//C3 = C2+M4
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M5Group<kStrassenLevel, ThreadBlockShape, WarpShape,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemShared, LayoutInterim>>>>, //C1(Shared) = C1(Shared)+M5
+                                                                    RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemShared, LayoutInterim1D>>>>, //C1(Shared) = C1(Shared)+M5
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M6Group<kStrassenLevel, ThreadBlockShape, WarpShape,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim>>>>, //C2 = C2-M6
+                                                                    RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                     AllPresumsM1To6>
                                               >;
   using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0, 1>>,

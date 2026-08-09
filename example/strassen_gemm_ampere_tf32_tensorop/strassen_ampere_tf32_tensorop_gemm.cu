@@ -289,7 +289,7 @@ constexpr int NumStages = 4; //TODO: Try with NumStages=3
                                                                     AllPresumsM0>,
                                               StrassenLevel1M1Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp, 
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<1, MemShared, LayoutInterim1D>> >>,//C0 = M1
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M2Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp,
@@ -329,7 +329,7 @@ constexpr int NumStages = 4; //TODO: Try with NumStages=3
   //For 4k, 4k, 4k acheives 0.55 ms 
   using StrassenGroups = StrassenLevel1Groups<StrassenLevel1MiGroup<kStrassenLevel, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                     AllPresumsM0, 1, 0, 1>,
                                               StrassenLevel1M2Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp,

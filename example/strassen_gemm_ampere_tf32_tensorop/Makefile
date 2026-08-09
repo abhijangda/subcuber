@@ -6,7 +6,7 @@ CUTLASS = ../../cutlass/include/
 CUTLASS_COMMON = ../../cutlass/examples/common
 UTIL_INCLUDE = ../../cutlass/tools/util/include/
 GENCODE = --generate-code=arch=compute_80,code=[compute_80,sm_80]
-NVCC_FLAGS = -std=c++17 -O3 -Xptxas -v,-O3 $(GENCODE) --split-compile=$(SPLIT_COMPILE) -lineinfo #--keep
+NVCC_FLAGS = -std=c++17 -O3 -Xptxas -v,-O3 $(GENCODE) --split-compile=$(SPLIT_COMPILE) -lineinfo -DCUTLASS_API_v2 #--keep
 CLANG_PATH = /home/anmoreira/llvm-project/build-gpu/bin
 CXXFLAGS_COMMON =
 CLANG_FLAGS = --cuda-gpu-arch=sm_86 -x cuda --cuda-path=/usr/local/cuda-12.2

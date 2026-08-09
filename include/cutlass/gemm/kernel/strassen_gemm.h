@@ -1093,13 +1093,13 @@ struct StrassenGemm {
             );
 
             if (postsum_global_dest.valid() &&
-                postsum_global_dest.is_layout_interim()) {
+                postsum_global_dest.is_layout_interim_linear()) {
               // interim_epilogue(accums, outputInterimIterator,
               //                  sourceInterimIterator, sharedInterimIterator,
               //                  postsum_global_dest, postsum_shared_dest,
               //                  postsum_src); 
             } else {
-              // if (postsum_src.valid() && postsum_src.is_layout_interim()) {
+              // if (postsum_src.valid() && postsum_src.is_layout_interim_linear()) {
               //   //TODO: This addSource probably need to be fused with in the Epilogue's loop
               //   interim_epilogue.addSource(accums, accums,
               //                              sourceInterimIterator,
@@ -1161,7 +1161,7 @@ struct StrassenGemm {
                                       RWCTypes::PostsumSrcs(c_o, read_c);
                 if (SubGemmParallel &&
                     postsum_srcs[read_c].valid() && postsum_srcs[read_c].is_mem_global() &&
-                    postsum_srcs[read_c].is_layout_interim()) {
+                    postsum_srcs[read_c].is_layout_interim_linear()) {
                   has_src = true;
                   postsum_semaphore.wait(postsum_srcs[read_c].get_op(), 0, false);
                   // if ((postsum_srcs[read_c].get_op() == 1 || postsum_srcs[read_c].get_op() == 0) && threadIdx.x == 0 &&
@@ -1222,7 +1222,7 @@ struct StrassenGemm {
             );
 
             if ((postsum_global_dest.valid() &&
-                 postsum_global_dest.is_layout_interim()) ||
+                 postsum_global_dest.is_layout_interim_linear()) ||
                 postsum_shared_dest.valid()) {
 
               interim_epilogue(accumM[StrassenMiGroup::getMi()],

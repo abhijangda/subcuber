@@ -36,21 +36,22 @@ using StrassenGroupsTmaReduce = StrassenLevel1Groups<StrassenPresum<1, 0, TileSh
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>,
                                                                   AllPresumsM1To6>>;
 
-using ScheduleStrassenGroupsTmaReduce = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                               ParallelMiGroups<false, FusedMiGroup<7, 2>>,
-                                                               ParallelMiGroups<false, FusedMiGroup<7, 4>>>;
+using ScheduleStrassenGroupsTmaReduce = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
+                                                               ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
+                                                               ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>>;
 
 template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using StrassenGemmKernelsTmaReduce = cutlass::gemm::device::StrassenGemmKernels<StrassenGroupsTmaReduce<StageCountTypeM0>,
+                                                                       ScheduleStrassenGroupsTmaReduce,
+                                                                       ProblemShape,
                                                                        ElementA, LayoutA, ElementB, LayoutB,
                                                                        ElementC, LayoutC,
-                                                                       ElementAccumulator, TileShape, ClusterShape,
-                                                                       KernelSchedule, EpilogueSchedule,
+                                                                       ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
                                                                        PresumOpts>;
 
-using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<ScheduleStrassenGroupsTmaReduce, StrassenGemmKernelsTmaReduce<4, Shape<_2,_256>, Shape<_2,_256>>>>;
-using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000 = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<ScheduleStrassenGroupsTmaReduce, StrassenGemmKernelsTmaReduce<4, Shape<_2,_256>, Shape<_2,_256>, cutlass::gemm::device::PresumOpt<0,0,0,0>>>>;
-using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<ScheduleStrassenGroupsTmaReduce, StrassenGemmKernelsTmaReduce<4, Shape<_4,_256>, Shape<_4,_256>>>>;
-using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<ScheduleStrassenGroupsTmaReduce, StrassenGemmKernelsTmaReduce<4, Shape<_8,_256>, Shape<_8,_256>>>>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduce<4, Shape<_2,_256>, Shape<_2,_256>>>>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000 = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduce<4, Shape<_2,_256>, Shape<_2,_256>, cutlass::gemm::device::PresumOpt<0,0,0,0>>>>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduce<4, Shape<_4,_256>, Shape<_4,_256>>>>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduce<4, Shape<_8,_256>, Shape<_8,_256>>>>;

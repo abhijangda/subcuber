@@ -41,22 +41,23 @@ using StrassenGroupsTmaReduce = StrassenLevel1Groups<StrassenPresum<1, 0, TileSh
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                   AllPresumsM1To6>
                                             >;
-using ScheduleStrassenGroupsTmaReduce = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                               ParallelMiGroups<false, FusedMiGroup<7, 2>>,
-                                                               ParallelMiGroups<false, FusedMiGroup<7, 4>>
+using ScheduleStrassenGroupsTmaReduce = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
+                                                               ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
+                                                               ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>
                                                               >;
 
 template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using StrassenGemmKernelsTmaReduce = cutlass::gemm::device::StrassenGemmKernels<StrassenGroupsTmaReduce<StageCountTypeM0>,
+                                                                       ScheduleStrassenGroupsTmaReduce,
+                                                                       ProblemShape,
                                                                        ElementA, LayoutA, ElementB, LayoutB,
                                                                        ElementC, LayoutC,
-                                                                       ElementAccumulator, TileShape, ClusterShape,
-                                                                       KernelSchedule, EpilogueSchedule,
+                                                                       ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
                                                                        PresumOpts>;
 
-using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_2x128_2x128_OptNoKernel = StrassenGemmUniversalAdapter<ScheduleStrassenGroupsTmaReduce,
+using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_2x128_2x128_OptNoKernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernelsTmaReduce<6, Shape<_2,_128>, Shape<_2, _128>>>;
 
 class HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_2x128_2x128_OptNo {
@@ -86,7 +87,7 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000Kernel = StrassenGemmUniversalAdapter<ScheduleStrassenGroupsTmaReduce,
+using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000Kernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernelsTmaReduce<6, Shape<_2,_128>, Shape<_2, _128>,
                                                                                                         cutlass::gemm::device::PresumOpt<0,0,0,0>>>;
 
@@ -117,7 +118,7 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_4x128_4x128_OptNoKernel = StrassenGemmUniversalAdapter<ScheduleStrassenGroupsTmaReduce,
+using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_4x128_4x128_OptNoKernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernelsTmaReduce<6, Shape<_4,_128>, Shape<_4, _128>>>;
 
 class HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_4x128_4x128_OptNo {
@@ -147,7 +148,7 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_8x128_8x128_OptNoKernel = StrassenGemmUniversalAdapter<ScheduleStrassenGroupsTmaReduce,
+using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_8x128_8x128_OptNoKernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernelsTmaReduce<5, Shape<_8,_128>, Shape<_8, _128>>>;
 
 class HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_8x128_8x128_OptNo {

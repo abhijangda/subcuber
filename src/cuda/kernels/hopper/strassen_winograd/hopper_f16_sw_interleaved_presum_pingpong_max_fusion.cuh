@@ -35,6 +35,7 @@ constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // M
 using ElementAccumulator  = float;                                          // Element type for internal accumulation
 using ArchTag             = cutlass::arch::Sm90;                            // Tag indicating the minimum SM that supports the intended feature
 using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
+using ProblemShape        = Shape<int,int,int>;                             // M,N,K
 using TileShape           = Shape<_128,_128,_64>;                           // Threadblock-level tile size
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 6 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
@@ -70,8 +71,8 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>> >, //C1 = Sh = C1+M2 ; Reg = C1 //TODO: pass C1 through registers
-                                                                           CUW<2, LayoutInterim, LayoutNone, Expr<Plus<3>>/*, Expr<Plus<1, MemShared, LayoutInterim1D>>*/ >, //C2 = C1Sh+M3
+                                                                  RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>> >, //C1 = Sh = C1+M2 ; Reg = C1 //TODO: pass C1 through registers
+                                                                           CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>/*, Expr<Plus<1, MemShared, LayoutInterim1D>>*/ >, //C2 = C1Sh+M3
                                                                            CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>> >,
                                                                   AllPresumsM1To6, 0, 2, 3, 6>,
                                             StrassenLevel1M3Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
@@ -97,9 +98,9 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                   AllPresumsM1To6>
                                             >;
-using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<false, FusedMiGroup<7, 2>, //TODO: Change this to true
-                                                                                FusedMiGroup<7, 4>>
+using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
+                                                        ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                                                                                  FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
@@ -110,17 +111,18 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
 
 template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups<StageCountTypeM0>,
+                                                                       ScheduleStrassenGroups1,
+                                                                       ProblemShape,
                                                                        ElementA, LayoutA, ElementB, LayoutB,
                                                                        ElementC, LayoutC,
-                                                                       ElementAccumulator, TileShape, ClusterShape,
-                                                                       KernelSchedule, EpilogueSchedule,
+                                                                       ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
                                                                        PresumOpts>;
 
-template<typename ScheduleStrassen, typename StrassenKernels>
-using StrassenGemmUniversalAdapter = cutlass::gemm::device::StrassenGemmUniversalAdapter<ScheduleStrassen, StrassenKernels>;
-using HopperF16InterleavedPresumPingpongMaxFusion_2x128_2x128_OptNoKernel = StrassenGemmUniversalAdapter<ScheduleStrassenGroups1,
+template<typename StrassenKernels>
+using StrassenGemmUniversalAdapter = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenKernels>;
+using HopperF16InterleavedPresumPingpongMaxFusion_2x128_2x128_OptNoKernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernels<6, Shape<_2,_128>, Shape<_2, _128>>>;
 
 class HopperF16InterleavedPresumPingpongMaxFusion_2x128_2x128_OptNo {
@@ -150,7 +152,7 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16InterleavedPresumPingpongMaxFusion_2x128_2x128_Opt_0000Kernel = StrassenGemmUniversalAdapter<ScheduleStrassenGroups1,
+using HopperF16InterleavedPresumPingpongMaxFusion_2x128_2x128_Opt_0000Kernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernels<6, Shape<_2,_128>, Shape<_2, _128>,
                                                                                                cutlass::gemm::device::PresumOpt<0,0,0,0>>>;
 
@@ -181,7 +183,7 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16InterleavedPresumPingpongMaxFusion_4x128_4x128_OptNoKernel = StrassenGemmUniversalAdapter<ScheduleStrassenGroups1,
+using HopperF16InterleavedPresumPingpongMaxFusion_4x128_4x128_OptNoKernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernels<6, Shape<_4,_128>, Shape<_4, _128>>>;
 
 class HopperF16InterleavedPresumPingpongMaxFusion_4x128_4x128_OptNo {
@@ -211,7 +213,7 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16InterleavedPresumPingpongMaxFusion_8x128_8x128_OptNoKernel = StrassenGemmUniversalAdapter<ScheduleStrassenGroups1,
+using HopperF16InterleavedPresumPingpongMaxFusion_8x128_8x128_OptNoKernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernels<5, Shape<_8,_128>, Shape<_8, _128>>>;
 
 class HopperF16InterleavedPresumPingpongMaxFusion_8x128_8x128_OptNo {
