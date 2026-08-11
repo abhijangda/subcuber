@@ -221,13 +221,23 @@ public:
 
     alignas(16) TileSchedulerResponse scheduler_response[TileSchedulerStages];
 
-    struct TensorMapStorage : cute::aligned_struct<128, _1> {
-      using MainloopTensorMapStorage = typename CollectiveMainloop::TensorMapStorage;
-      using EpilogueTensorMapStorage = typename CollectiveEpilogue::TensorMapStorage;
+    using MainloopTensorMapStorage = typename CollectiveMainloop::TensorMapStorage;
+    using EpilogueTensorMapStorage = typename CollectiveEpilogue::TensorMapStorage;
 
+    struct NonEmptyTensorMapStorage : cute::aligned_struct<128, _1> {
       [[no_unique_address]] alignas(128) MainloopTensorMapStorage mainloop;
       [[no_unique_address]] alignas(128) EpilogueTensorMapStorage epilogue;
-    } tensormaps;
+    };
+
+    struct EmptyTensorMapStorage {
+      [[no_unique_address]] MainloopTensorMapStorage mainloop;
+      [[no_unique_address]] EpilogueTensorMapStorage epilogue;
+    };
+
+    using TensorMapStorage = cute::conditional_t<IsMoEGemmKernel,
+                                                  EmptyTensorMapStorage,
+                                                  NonEmptyTensorMapStorage>;
+    [[no_unique_address]] TensorMapStorage tensormaps;
   };
 
   static constexpr int SharedStorageSize = sizeof(SharedStorage);
