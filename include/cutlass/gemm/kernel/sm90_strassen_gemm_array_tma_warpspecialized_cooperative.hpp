@@ -1100,7 +1100,7 @@ public:
                 #pragma unroll 4
                 for (int read_c = 0; read_c < 4; read_c++) {
                   auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                  if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+                  if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim_linear()) {
                     postsum_srcs[postsum_src_len++] = postsum_src;
                   }
                 }

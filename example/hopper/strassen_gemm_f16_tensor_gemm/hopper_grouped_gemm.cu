@@ -160,7 +160,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 1 //TMA Reduce
+#if 0 //TMA Reduce
 using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
@@ -201,13 +201,13 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                   AllPresumsM1To6>
                                             >;
-using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                       ParallelMiGroups<false, FusedMiGroup<7, 2>>, //TODO: Change this to true
+using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
+                                                       ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
                                                                                 //FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                       ParallelMiGroups<false, FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
@@ -253,13 +253,13 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                   AllPresumsM1To6>
                                             >;
-using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0>>,
-                                                      ParallelMiGroups<false, FusedMiGroup<7, 2>>, //TODO: Change this to true
+using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
+                                                      ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
                                                                                 // FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                       ParallelMiGroups<false, FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
@@ -318,17 +318,16 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
                                                         >;
 #endif
 
-using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups,
+using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups, ScheduleStrassenGroups1,
                                                                        ProblemShape,
                                                                        ElementA, LayoutA *, ElementB, LayoutB *,
                                                                        ElementC, LayoutC *,
-                                                                       ElementAccumulator, TileShape, ClusterShape,
-                                                                       KernelSchedule, EpilogueSchedule,
+                                                                       ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
                                                                        PresumOpts>;
 
-using Gemm = cutlass::gemm::device::StrassenGemmUniversalAdapter<ScheduleStrassenGroups1, StrassenGemmKernels>;
+using Gemm = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenGemmKernels>;
 
 // Reference device GEMM implementation type
 using DeviceGemmReference = cutlass::reference::device::Gemm<
