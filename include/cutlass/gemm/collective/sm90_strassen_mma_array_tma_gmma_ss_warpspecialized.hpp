@@ -417,34 +417,38 @@ struct CollectiveStrassenMma<
     uint32_t tma_transaction_bytes = TmaTransactionBytes;
     uint32_t tma_transaction_bytes_mk = TmaTransactionBytesMK;
     uint32_t tma_transaction_bytes_nk = TmaTransactionBytesNK;
-    uint32_t tma_transaction_bytes_presum_mk = TmaTransactionBytesPresumA;
+
+    uint32_t presum_tile_log_multiplier_a_;
+    uint32_t presum_tile_log_multiplier_b_;
+    uint32_t presum_tile_log_divider_a_;
+    uint32_t presum_tile_log_divider_b_;
 
     CUTLASS_HOST_DEVICE
     uint32_t get_presum_tile_log_multiplier_a() const {
-      return 0;//(PresumOpt::FixedPresumTileMultilplierLogA != UINT32_MAX) ?
-              // PresumOpt::FixedPresumTileMultilplierLogA :
-              // presum_tile_log_multiplier_a_;
+      return (PresumOpt::FixedPresumTileMultilplierLogA != UINT32_MAX) ?
+              PresumOpt::FixedPresumTileMultilplierLogA :
+              presum_tile_log_multiplier_a_;
     }
 
     CUTLASS_HOST_DEVICE
     uint32_t get_presum_tile_log_multiplier_b() const {
-      return 0;//(PresumOpt::FixedPresumTileMultilplierLogB != UINT32_MAX) ?
-              // PresumOpt::FixedPresumTileMultilplierLogB :
-              // presum_tile_log_multiplier_b_;
+      return (PresumOpt::FixedPresumTileMultilplierLogB != UINT32_MAX) ?
+              PresumOpt::FixedPresumTileMultilplierLogB :
+              presum_tile_log_multiplier_b_;
     }
 
     CUTLASS_HOST_DEVICE
     uint32_t get_presum_tile_log_divider_a() const {
-      return 0;//(PresumOpt::FixedPresumTileDividerLogA != UINT32_MAX) ? 
-              // PresumOpt::FixedPresumTileDividerLogA :
-              // presum_tile_log_divider_a_;
+      return (PresumOpt::FixedPresumTileDividerLogA != UINT32_MAX) ? 
+              PresumOpt::FixedPresumTileDividerLogA :
+              presum_tile_log_divider_a_;
     }
 
     CUTLASS_HOST_DEVICE
     uint32_t get_presum_tile_log_divider_b() const {
-      return 0;//(PresumOpt::FixedPresumTileDividerLogB != UINT32_MAX) ? 
-              // PresumOpt::FixedPresumTileDividerLogB :
-              // presum_tile_log_divider_b_;
+      return (PresumOpt::FixedPresumTileDividerLogB != UINT32_MAX) ? 
+              PresumOpt::FixedPresumTileDividerLogB :
+              presum_tile_log_divider_b_;
     }
   };
 
@@ -558,6 +562,11 @@ struct CollectiveStrassenMma<
       stride_b = args.dB;
     }
 
+    auto presum_tile_log_multiplier_a = get_presum_log_multiplier(init_K, init_N);
+    auto presum_tile_log_multiplier_b = get_presum_log_multiplier(init_K, presum_M);
+    auto presum_tile_log_divider_a = get_presum_log_divider(init_K, init_N);
+    auto presum_tile_log_divider_b = get_presum_log_divider(init_K, presum_M);
+
     Tensor tensor_a = make_tensor(ptr_A_first_batch, make_layout(make_shape(presum_M,init_K,init_L), stride_a));
     Tensor tensor_b = make_tensor(ptr_B_first_batch, make_layout(make_shape(init_N,moe_K,init_L), stride_b));
     TMA_A tma_load_a = make_tma_copy(
@@ -629,7 +638,11 @@ struct CollectiveStrassenMma<
       (ElementB*)ptr_presum_B, presum_b_batch_indices,
       transaction_bytes,
       transaction_bytes_mk,
-      transaction_bytes_nk
+      transaction_bytes_nk,
+      presum_tile_log_multiplier_a,
+      presum_tile_log_multiplier_b,
+      presum_tile_log_divider_a,
+      presum_tile_log_divider_b
     };
   }
 
@@ -915,8 +928,24 @@ struct CollectiveStrassenMma<
       auto halfM = M / 2;
       auto halfN = N / 2;
       auto halfK = K / 2;
+      uint block_idx = 0;
       const int n_coord_div = (n_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) % (1 << mainloop_params.get_presum_tile_log_divider_a());
       const int new_n_coord = (n_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) >> mainloop_params.get_presum_tile_log_divider_a();
+
+      PresumGlobalIteratorA iter_PresumA_M(
+        nullptr, halfK,
+        {halfM, halfK},
+        {m_coord * size<0>(TileShape{}) + ((n_coord_div * size<0>(TileShape{})) >> mainloop_params.get_presum_tile_log_divider_a()),
+          new_n_coord * size<1>(TileShape{})},
+        block_idx, {0, 0}, 0, {1*halfM, 0}, {2*halfM, 0}, {3*halfM, 0}
+      );
+      PresumGlobalIteratorB iter_PresumB_M(
+        nullptr, halfN,
+        {halfK, halfN},
+        {(m_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_b()) * (size<0>(TileShape{}))) >> mainloop_params.get_presum_tile_log_divider_b(),
+          n_coord * size<1>(TileShape{})},
+        block_idx, {0, 0}, 0, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}
+      );
 
       Tensor sA = make_tensor(make_smem_ptr(shared_tensors.smem_A.data()), SmemLayoutA{});        // (BLK_M,BLK_K,PIPE)
       Tensor sB = make_tensor(make_smem_ptr(shared_tensors.smem_B.data()), SmemLayoutB{});        // (BLK_N,BLK_K,PIPE)
@@ -1022,8 +1051,8 @@ struct CollectiveStrassenMma<
 
       int presum_k_iter = 0;
       bool ComputesPresum = false;
-      bool validTB_A = StrassenMiGroup::hasM0() && sub_m_idx == 0;// && iter_PresumA_M.validTB();
-      bool validTB_B = StrassenMiGroup::hasM1() && sub_m_idx == 1;// && iter_PresumB_M.validTB();
+      bool validTB_A = StrassenMiGroup::hasM0() && sub_m_idx == 0 && iter_PresumA_M.validTB();
+      bool validTB_B = StrassenMiGroup::hasM1() && sub_m_idx == 1 && iter_PresumB_M.validTB();
 
       if ((StrassenMiGroup::hasM0() && StrassenMiGroup::AllPresums::computeAnyAPresum()) ||
           (StrassenMiGroup::hasM1() && StrassenMiGroup::AllPresums::computeAnyBPresum())) {
