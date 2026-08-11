@@ -211,7 +211,9 @@ public:
       float,
       cutlass::half_t,
       float
-    >
+    >,
+    void,
+    ProblemShape
   >;
 
   template<typename ParallelGroup, typename StrassenMiGroup>
@@ -444,6 +446,13 @@ public:
     }
   }
 
+  static size_t get_grouped_gemm_index_copy_size(Arguments const &args) {
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      return args.problem_shape.groups() * sizeof(uint64_t);
+    }
+    return 0;
+  }
+
   static size_t get_presum_a_workspace_size(Arguments const &args) {
     auto workspace_size = [](auto const &problem_shape) {
       return StrassenGroups::Group0::AllPresums::numAPresumYes() * sizeof(ElementA) *
@@ -470,6 +479,15 @@ public:
 
     std::vector<size_t> vec;
     if constexpr (requires { args.problem_shape.num_groups; }) {
+      if (args.mode == GemmUniversalMode::kMoE) {
+        size_t total_workspace_rows = 0;
+        for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+          vec.push_back(total_workspace_rows);
+          total_workspace_rows += StrassenGroups::Group0::AllPresums::numAPresumYes() *
+                                  size_t(cute::get<0>(args.problem_shape.get_host_problem_shape(group_idx)) / 2);
+        }
+        return vec;
+      }
       size_t total_workspace_size = 0;
       for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
         vec.push_back(total_workspace_size/sizeof(ElementA));
@@ -508,6 +526,15 @@ public:
 
     std::vector<size_t> vec;
     if constexpr (requires { args.problem_shape.num_groups; }) {
+      if (args.mode == GemmUniversalMode::kMoE) {
+        size_t total_workspace_k = 0;
+        for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+          vec.push_back(total_workspace_k);
+          total_workspace_k += StrassenGroups::Group0::AllPresums::numBPresumYes() *
+                               size_t(cute::get<2>(args.problem_shape.get_host_problem_shape(group_idx)) / 2);
+        }
+        return vec;
+      }
       size_t total_workspace_size = 0;
       for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
         vec.push_back(total_workspace_size/sizeof(ElementB));
@@ -726,17 +753,17 @@ public:
 
     if (presum_a_batch_indices != nullptr) {
       cudaMemcpy(presum_a_batch_indices, get_presum_a_batch_indices(args).data(),
-                 get_grouped_gemm_index_size(args)*sizeof(size_t), cudaMemcpyHostToDevice);
+                 get_grouped_gemm_index_copy_size(args), cudaMemcpyHostToDevice);
     }
 
     if (presum_b_batch_indices != nullptr) {
       cudaMemcpy(presum_b_batch_indices, get_presum_b_batch_indices(args).data(),
-                 get_grouped_gemm_index_size(args)*sizeof(size_t), cudaMemcpyHostToDevice);
+                 get_grouped_gemm_index_copy_size(args), cudaMemcpyHostToDevice);
     }
 
     if (postsum_m_batch_indices != nullptr) {
       cudaMemcpy(postsum_m_batch_indices, get_postsum_m_batch_indices(args).data(),
-                 get_grouped_gemm_index_size(args)*sizeof(size_t), cudaMemcpyHostToDevice);
+                 get_grouped_gemm_index_copy_size(args), cudaMemcpyHostToDevice);
     }
 
     int swizzle_idx = 0;

@@ -225,8 +225,8 @@ public:
       using MainloopTensorMapStorage = typename CollectiveMainloop::TensorMapStorage;
       using EpilogueTensorMapStorage = typename CollectiveEpilogue::TensorMapStorage;
 
-      alignas(128) MainloopTensorMapStorage mainloop;
-      alignas(128) EpilogueTensorMapStorage epilogue;
+      [[no_unique_address]] alignas(128) MainloopTensorMapStorage mainloop;
+      [[no_unique_address]] alignas(128) EpilogueTensorMapStorage epilogue;
     } tensormaps;
   };
 
@@ -282,6 +282,10 @@ public:
   };
 
   // Kernel entry point API
+  using KernelPointerA = cute::conditional_t<IsMoEGemmKernel, ElementA*, ElementA**>;
+  using KernelPointerB = cute::conditional_t<IsMoEGemmKernel, ElementB*, ElementB**>;
+  using KernelPointerD = cute::conditional_t<IsMoEGemmKernel, ElementD*, ElementD**>;
+
   struct Params {
     GemmUniversalMode mode{};
     ProblemShape problem_shape{};
@@ -289,9 +293,12 @@ public:
     EpilogueParams epilogue{};
     KernelHardwareInfo hw_info{};
     TileSchedulerParams scheduler{};
-    ElementA** ptr_A;
-    ElementB** ptr_B;
-    ElementD** ptr_D;
+    KernelPointerA ptr_A;
+    uint64_t const* ptr_A_batch_indices;
+    KernelPointerB ptr_B;
+    uint64_t const* ptr_B_batch_indices;
+    KernelPointerD ptr_D;
+    uint64_t const* ptr_D_batch_indices;
     ElementA* presum_m_a_workspace;
     uint64_t* presum_a_batch_indices;
     ElementB* presum_m_b_workspace;
@@ -357,27 +364,52 @@ public:
 
     CUTLASS_HOST_DEVICE
     ElementA* get_ptr_A(int problem_idx) const {
-      return ptr_A[problem_idx];
+      if constexpr (IsMoEGemmKernel) {
+        return ptr_A + ptr_A_batch_indices[problem_idx] * get_stride_A(problem_idx);
+      }
+      else {
+        return ptr_A[problem_idx];
+      }
     }
 
     CUTLASS_HOST_DEVICE
     ElementB* get_ptr_B(int problem_idx) const {
-      return ptr_B[problem_idx];
+      if constexpr (IsMoEGemmKernel) {
+        return ptr_B + ptr_B_batch_indices[problem_idx] * get_stride_B(problem_idx);
+      }
+      else {
+        return ptr_B[problem_idx];
+      }
     }
 
     CUTLASS_HOST_DEVICE
     ElementD* get_ptr_D(int problem_idx) const {
-      return ptr_D[problem_idx];
+      if constexpr (IsMoEGemmKernel) {
+        return ptr_D + ptr_D_batch_indices[problem_idx] * get_problem_shape_n(problem_idx);
+      }
+      else {
+        return ptr_D[problem_idx];
+      }
     }
 
     CUTLASS_HOST_DEVICE
     ElementA* get_ptr_presum_A(int problem_idx) const {
-      return presum_m_a_workspace + presum_a_batch_indices[problem_idx];
+      if constexpr (IsMoEGemmKernel) {
+        return presum_m_a_workspace + presum_a_batch_indices[problem_idx] * get_stride_MA(problem_idx);
+      }
+      else {
+        return presum_m_a_workspace + presum_a_batch_indices[problem_idx];
+      }
     }
 
     CUTLASS_HOST_DEVICE
     ElementB* get_ptr_presum_B(int problem_idx) const {
-      return presum_m_b_workspace + presum_b_batch_indices[problem_idx];
+      if constexpr (IsMoEGemmKernel) {
+        return presum_m_b_workspace + presum_b_batch_indices[problem_idx] * get_stride_MB(problem_idx);
+      }
+      else {
+        return presum_m_b_workspace + presum_b_batch_indices[problem_idx];
+      }
     }
 
     CUTLASS_HOST_DEVICE
@@ -393,7 +425,11 @@ public:
   // Convert to underlying arguments. In this case, a simple copy for the aliased type.
   static
   Params
-  to_underlying_arguments(Arguments const& args, ElementA* presum_m_a, uint64_t* presum_a_batch_indices, ElementB* presum_m_b, uint64_t* presum_b_batch_indices, ElementD* postsum_m, uint64_t* postsum_m_batch_indices, void* workspace) {
+  to_underlying_arguments(Arguments const& args,
+      ElementA* presum_m_a, uint64_t* presum_a_batch_indices,
+      ElementB* presum_m_b, uint64_t* presum_b_batch_indices,
+      ElementD* postsum_m, uint64_t* postsum_m_batch_indices,
+      void* workspace) {
     CUTLASS_TRACE_HOST("to_underlying_arguments():");
 
     ProblemShape problem_shapes = args.problem_shape;
@@ -454,9 +490,9 @@ public:
       CollectiveEpilogue::to_underlying_arguments(problem_shapes, args.epilogue, postsum_m, postsum_m_batch_indices, epilogue_workspace),
       hw_info,
       scheduler,
-      const_cast<ElementA**>(args.mainloop.ptr_A),
-      const_cast<ElementB**>(args.mainloop.ptr_B),
-      const_cast<ElementD**>(args.epilogue.ptr_D),
+      const_cast<KernelPointerA>(args.mainloop.ptr_A), args.mainloop.ptr_A_batch_indices,
+      const_cast<KernelPointerB>(args.mainloop.ptr_B), args.mainloop.ptr_B_batch_indices,
+      const_cast<KernelPointerD>(args.epilogue.ptr_D), args.epilogue.ptr_D_batch_indices,
       presum_m_a, presum_a_batch_indices,
       presum_m_b, presum_b_batch_indices,
       postsum_m, postsum_m_batch_indices,

@@ -46,6 +46,7 @@
 #include "cutlass/detail/layout.hpp"
 #include "cutlass/trace.h"
 #include "cutlass/cuda_host_adapter.hpp"
+#include "cutlass/gemm/strassen_group_array_problem_shape.hpp"
 
 #include "cute/tensor.hpp"
 #include "cute/atom/copy_traits_sm90_tma.hpp"
@@ -81,7 +82,8 @@ template <
   class SmemLayoutAtomD_,
   class CopyOpR2S_,
   class CopyAtomC_,
-  class CopyOpR2R_
+  class CopyOpR2R_,
+  class ProblemShape_
 >
 class CollectiveStrassenEpilogue<
     StrassenMiGroup_,
@@ -106,13 +108,15 @@ class CollectiveStrassenEpilogue<
     SmemLayoutAtomD_,
     CopyOpR2S_,
     CopyAtomC_,
-    CopyOpR2R_
+    CopyOpR2R_,
+    ProblemShape_
 > {
 public:
   //
   // Type Aliases
   //
   using StrassenMiGroup = StrassenMiGroup_;
+  using ProblemShape = ProblemShape_;
   using DispatchPolicy = Sm90PtrArrayTmaWarpSpecialized<StagesC_,
                                                         StagesD_,
                                                         FragmentSize_,
@@ -239,6 +243,12 @@ public:
                           cutlass::PipelineTmaStore<StagesD>>;
   using StorePipelineState = cutlass::PipelineState<ReuseSmemC ? StagesC : StagesD>;
 
+  static constexpr bool IsGroupedGemmKernel = !cute::is_same_v<InternalStrideC, StrideC>;
+  static constexpr bool IsMoEGemmKernel = cute::is_same_v<
+    ProblemShape,
+    cutlass::gemm::StrassenMoEProblemShape<typename ProblemShape::UnderlyingProblemShape>
+  >;
+
   struct SharedStorage {
     struct TensorStorage {
       using CollectiveStorage = cute::conditional_t<not is_source_supported, CollectiveStorageWithoutC,
@@ -249,11 +259,15 @@ public:
       FusionStorage thread;
     } tensors;
 
-    struct TensorMapStorage : cute::aligned_struct<128, _0> {
+    struct NonEmptyTensorMapStorage : cute::aligned_struct<128, _0> {
       cute::TmaDescriptor smem_tensormap_C;
       cute::TmaDescriptor smem_tensormap_postsum;
       cute::array<cute::TmaDescriptor, NumEpilogueWarpGroups> smem_tensormap_D;
-    } tensormaps;
+    };
+
+    struct EmptyTensorMapStorage {};
+    using TensorMapStorage = cute::conditional_t<IsMoEGemmKernel, EmptyTensorMapStorage, NonEmptyTensorMapStorage>;
+    TensorMapStorage tensormaps;
 
     using PipelineStorage = typename LoadPipeline::SharedStorage;
     PipelineStorage pipeline;
@@ -261,21 +275,27 @@ public:
   using TensorStorage = typename SharedStorage::TensorStorage;
   using TensorMapStorage = typename SharedStorage::TensorMapStorage;
   using PipelineStorage = typename SharedStorage::PipelineStorage;
-
-  static constexpr bool IsGroupedGemmKernel = !cute::is_same_v<InternalStrideC, StrideC>;
+  using PointerC = cute::conditional_t<IsMoEGemmKernel, ElementC const*, ElementC const**>;
+  using PointerD = cute::conditional_t<IsMoEGemmKernel, ElementD*, ElementD**>;
 
   // Host side epilogue arguments
   struct Arguments {
     typename FusionCallbacks::Arguments thread{};
-    ElementC const** ptr_C = nullptr;
+    PointerC ptr_C = nullptr;
     StrideC dC;
-    ElementD ** ptr_D = nullptr;
+    PointerD ptr_D = nullptr;
     StrideD dD;
+    uint64_t const* ptr_C_batch_indices = nullptr;
+    uint64_t const* ptr_D_batch_indices = nullptr;
 
     Arguments() {}
 
-    Arguments(typename FusionCallbacks::Arguments thread, ElementC const** ptr_C, StrideC dC,
-              ElementD ** ptr_D, StrideD dD) : thread(thread), ptr_C(ptr_C), dC(dC), ptr_D(ptr_D), dD(dD)
+    Arguments(typename FusionCallbacks::Arguments thread, PointerC ptr_C, StrideC dC,
+          PointerD ptr_D, StrideD dD,
+          uint64_t const* ptr_C_batch_indices = nullptr,
+          uint64_t const* ptr_D_batch_indices = nullptr) :
+              thread(thread), ptr_C(ptr_C), dC(dC), ptr_D(ptr_D), dD(dD),
+          ptr_C_batch_indices(ptr_C_batch_indices), ptr_D_batch_indices(ptr_D_batch_indices)
               {
                 thread.beta = 0;
               }
@@ -286,6 +306,10 @@ public:
               {
                 thread.alpha = other.thread.alpha;
                 thread.beta = other.thread.beta;
+                if constexpr (requires { other.ptr_C_batch_indices; other.ptr_D_batch_indices; }) {
+                  ptr_C_batch_indices = other.ptr_C_batch_indices;
+                  ptr_D_batch_indices = other.ptr_D_batch_indices;
+                }
               }
   };
 
@@ -323,9 +347,11 @@ public:
     TMA_D_ADD tma_add_postsum_m;
     TMA_D_ADD tma_add_d;
     cute::TmaDescriptor* tensormaps;
-    ElementC const** ptr_C;
+    PointerC ptr_C;
+    uint64_t const* ptr_C_batch_indices;
     StrideC dC;
-    ElementD** ptr_D;
+    PointerD ptr_D;
+    uint64_t const* ptr_D_batch_indices;
     StrideD dD;
     uint32_t tma_transaction_bytes = TmaTransactionBytes;
     void* ptr_postsum_m;
@@ -349,6 +375,7 @@ public:
     auto init_M = int32_t(size<0>(CtaTileMNK{}));
     auto init_N = int32_t(size<1>(CtaTileMNK{}));
     auto init_L = 1;
+    auto moe_M = init_M;
 
     static_assert(!is_im2col_C and !is_im2col_D, "Im2Col not supported on C or D");
 
@@ -358,12 +385,30 @@ public:
       // Strides for Grouped Gemm will be replaced prior to the first access regardless.
       stride_c = InternalStrideC{};
       stride_d = InternalStrideD{};
+      if constexpr (IsMoEGemmKernel) {
+        auto problem_shape_MNKL = append<4>(problem_shape.get_host_problem_shape(0), 1);
+        init_M = get<0>(problem_shape_MNKL);
+        init_N = get<1>(problem_shape_MNKL);
+        moe_M = 0;
+        for (int group_idx = 0; group_idx < problem_shape.groups(); ++group_idx) {
+          moe_M += get<0>(problem_shape.get_host_problem_shape(group_idx));
+        }
+        if constexpr (cute::is_same_v<cute::remove_cvref_t<decltype(get<0>(stride_c))>, cute::Int<1>>) {
+          get<1>(stride_c) = init_M;
+          get<1>(stride_d) = init_M;
+        }
+        else {
+          get<0>(stride_c) = init_N;
+          get<0>(stride_d) = init_N;
+        }
+      }
     } 
     else {
       // Tensor shapes for Ptr-Array are initialized correctly only here.
       auto problem_shape_MNKL = append<4>(problem_shape.get_host_problem_shape(0), 1);
       init_M = get<0>(problem_shape_MNKL);
       init_N = get<1>(problem_shape_MNKL);
+      moe_M = init_M;
       stride_c = args.dC;
       stride_d = args.dD;
     }
@@ -372,8 +417,14 @@ public:
     typename Params::TMA_C tma_load_c{};
     if constexpr (is_source_supported) {
     // NOTE: Since TMA desc creation with nullptr not possible until 12.6, we use an initial address even when tensor addresses are on device. This address is never used.
-      ElementC const* ptr_C_first_batch = reinterpret_cast<ElementC const*>(reinterpret_cast<uint64_t>(args.ptr_C) & 0xFFFFFFFFFFFFFFF0);  // Address must be 16B-aligned
-      Tensor tensor_c = make_tensor(ptr_C_first_batch, make_layout(make_shape(init_M,init_N,init_L), append<3>(stride_c, _0{})));
+      ElementC const* ptr_C_first_batch;
+      if constexpr (IsMoEGemmKernel) {
+        ptr_C_first_batch = args.ptr_C;
+      }
+      else {
+        ptr_C_first_batch = reinterpret_cast<ElementC const*>(reinterpret_cast<uint64_t>(args.ptr_C) & 0xFFFFFFFFFFFFFFF0);  // Address must be 16B-aligned
+      }
+      Tensor tensor_c = make_tensor(ptr_C_first_batch, make_layout(make_shape(moe_M,init_N,init_L), append<3>(stride_c, _0{})));
       tma_load_c = make_tma_copy(
           CopyOpG2S{},
           tensor_c,
@@ -387,8 +438,14 @@ public:
 
     if constexpr (is_destination_supported) {
     // NOTE: Since TMA desc creation with nullptr not possible until 12.6, we use an initial address even when tensor addresses are on device. This address is never used.
-      ElementD const* ptr_D_first_batch = reinterpret_cast<ElementD const*>(reinterpret_cast<uint64_t>(args.ptr_D) & 0xFFFFFFFFFFFFFFF0);  // Address must be 16B-aligned
-      Tensor tensor_d = make_tensor(ptr_D_first_batch, make_layout(make_shape(init_M,init_N,init_L), append<3>(stride_d, _0{})));
+      ElementD const* ptr_D_first_batch;
+      if constexpr (IsMoEGemmKernel) {
+        ptr_D_first_batch = args.ptr_D;
+      }
+      else {
+        ptr_D_first_batch = reinterpret_cast<ElementD const*>(reinterpret_cast<uint64_t>(args.ptr_D) & 0xFFFFFFFFFFFFFFF0);  // Address must be 16B-aligned
+      }
+      Tensor tensor_d = make_tensor(ptr_D_first_batch, make_layout(make_shape(moe_M,init_N,init_L), append<3>(stride_d, _0{})));
       tma_store_d = make_tma_copy(
           CopyOpS2G{},
           tensor_d,
@@ -429,8 +486,8 @@ public:
 
     auto fusion_workspace = static_cast<char*>(workspace);
     auto fusion_workspace_size = round_nearest(FusionCallbacks::get_workspace_size(problem_shape, args.thread), MinTensorMapWorkspaceAlignment);
-    auto tma_descriptor_workspace = reinterpret_cast<cute::TmaDescriptor*>(
-                                      static_cast<char*>(workspace) + fusion_workspace_size);
+    auto tma_descriptor_workspace = IsMoEGemmKernel ? nullptr : reinterpret_cast<cute::TmaDescriptor*>(
+                      static_cast<char*>(workspace) + fusion_workspace_size);
 
     return {
       FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, fusion_workspace),
@@ -442,8 +499,10 @@ public:
       tma_add_d,
       tma_descriptor_workspace,
       args.ptr_C,
+      args.ptr_C_batch_indices,
       args.dC,
       args.ptr_D,
+      args.ptr_D_batch_indices,
       args.dD,
       transaction_bytes,
       postsum_m,
@@ -458,7 +517,7 @@ public:
     auto descriptors_shape = cute::make_shape(sm_count, Int<NumInputTensors>{});
     constexpr size_t SizeOfCuTensorMap = sizeof(cute::TmaDescriptor);
     // Allocate gmem space for input tensormaps per each SM, A tensormap copies followed by B tensormap copies
-    return (size(descriptors_shape) * SizeOfCuTensorMap) + 
+    return (IsMoEGemmKernel ? 0 : size(descriptors_shape) * SizeOfCuTensorMap) +
         (round_nearest(FusionCallbacks::get_workspace_size(problem_shape, args.thread), MinTensorMapWorkspaceAlignment));
   }
 
@@ -477,6 +536,11 @@ public:
 
     bool implementable = true;
     bool fusion_implementable = true;
+
+    if constexpr (IsMoEGemmKernel) {
+      implementable &= !is_destination_supported || (args.ptr_D != nullptr && args.ptr_D_batch_indices != nullptr);
+      implementable &= !is_source_supported || args.ptr_C == nullptr || args.ptr_C_batch_indices != nullptr;
+    }
 
     if (problem_shape.is_host_problem_shape_available()) {
       for (int i = 0; i < problem_shape.groups(); ++i) {
@@ -597,7 +661,13 @@ public:
 
     static_assert(!is_im2col_D, "Do not support im2col");
 
-    auto coord_shape = append<3>(make_shape(m_coord, n_coord), Int<0>{});
+    int c_m_coord = m_coord;
+    if constexpr (IsMoEGemmKernel) {
+      if (l_coord != 0 && params.ptr_C != nullptr) {
+        c_m_coord += int(params.ptr_C_batch_indices[l_coord] / size<0>(CtaTileMNK{}));
+      }
+    }
+    auto coord_shape = append<3>(make_shape(c_m_coord, n_coord), Int<0>{});
 
     // Represent the full source tensor, slice to get the tile this CTA is currently responsible for
     Tensor mC_mn = params.tma_load_c.get_tma_tensor(append<3>(make_shape(M,N), Int<1>{}));             //       (M,N,L)
@@ -658,8 +728,14 @@ public:
         // Execute the TMA load for C if needed
         if (is_C_load_needed) {
           if (issue_tma_load) {
-            copy(params.tma_load_c.with(load_tensormap, *tma_barrier, mcast_mask),
-                bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
+            if constexpr (IsMoEGemmKernel) {
+              copy(params.tma_load_c.with(*tma_barrier, mcast_mask),
+                  bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
+            }
+            else {
+              copy(params.tma_load_c.with(load_tensormap, *tma_barrier, mcast_mask),
+                  bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
+            }
             load_pipeline.producer_expect_transaction(load_pipe_producer_state);
           }
           last_load_producer_state = load_pipe_producer_state;
@@ -1141,7 +1217,13 @@ public:
     const uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{}));
     constexpr uint NumMMAThreads = size(TiledMma{});
 
-    auto coord_shape = append<3>(make_shape(m_coord, n_coord), Int<0>{});
+    int d_m_coord = m_coord;
+    if constexpr (IsMoEGemmKernel) {
+      if (l_coord != 0) {
+        d_m_coord += int(params.ptr_D_batch_indices[l_coord] / size<0>(CtaTileMNK{}));
+      }
+    }
+    auto coord_shape = append<3>(make_shape(d_m_coord, n_coord), Int<0>{});
 
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
     PostsumOp first_store_srcs[4], second_store_srcs[4];
@@ -1154,7 +1236,7 @@ public:
     if (get<2>(first_store_tuple) == false) {
       coord_shape = append<3>(
         make_shape(
-          m_coord + (output_idx / 2) * (M / 2 / size<0>(CtaTileMNK{})),
+          d_m_coord + (output_idx / 2) * (M / 2 / size<0>(CtaTileMNK{})),
           n_coord + (output_idx % 2) * (N / 2 / size<1>(CtaTileMNK{}))),
         Int<0>{});
     }
@@ -1361,13 +1443,21 @@ public:
               //TODO: This tensormap probably needs to be fixed for multiple groups
               Tensor sD_tile = group_modes<0,2>(sD_epi(_,_,store_pipe_producer_state.index()));
               Tensor gD_tile = group_modes<0,2>(gD_epi(_,_,epi_m,epi_n));
-              copy(tma_add_dorm.with(store_tensormap),
-                   sD_tile,
-                   gD_tile);
+              if constexpr (IsMoEGemmKernel) {
+                copy(tma_add_dorm, sD_tile, gD_tile);
+              }
+              else {
+                copy(tma_add_dorm.with(store_tensormap), sD_tile, gD_tile);
+              }
             }
             // copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
           } else {
-            copy(tma_store_dorm.with(store_tensormap), bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+            if constexpr (IsMoEGemmKernel) {
+              copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+            }
+            else {
+              copy(tma_store_dorm.with(store_tensormap), bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+            }
           }
         }
       }
@@ -1694,6 +1784,12 @@ public:
       int32_t sm_idx,
       int32_t warp_group_idx) {
 
+    if constexpr (IsMoEGemmKernel) {
+      TmaDescriptor* null_tma_desc = nullptr;
+      return cute::make_tuple(null_tma_desc);
+    }
+    else {
+
     constexpr uint32_t NumInputTensors = NumEpilogueWarpGroups + (cute::is_void_v<ElementC> ? 0 : 1);
     Layout desc_layout = make_layout(make_shape(sm_count, Int<NumInputTensors>{}));
 
@@ -1726,6 +1822,7 @@ public:
       }
       __syncwarp();
       return cute::make_tuple(&gmem_tensormap(sm_idx, warp_group_idx));
+    }
     }
   }
 
@@ -1815,16 +1912,18 @@ public:
       ProblemShape_MNKL problem_shape_mnkl,
       int32_t next_batch,
       int32_t warp_group_idx) {
-    if (cute::elect_one_sync()) {
-      // Replacing global_address for the next batch
-      tensormaps_replace_global_address<IsLoad>(shared_tensormaps, params, next_batch, warp_group_idx);
+    if constexpr (!IsMoEGemmKernel) {
+      if (cute::elect_one_sync()) {
+        // Replacing global_address for the next batch
+        tensormaps_replace_global_address<IsLoad>(shared_tensormaps, params, next_batch, warp_group_idx);
 
-      if constexpr (IsGroupedGemmKernel) {
-        // Replacing global dims and strides for the next batch
-        tensormaps_replace_global_tensor_properties<IsLoad>(
-            shared_tensormaps, params, next_batch, problem_shape_mnkl, warp_group_idx);
+        if constexpr (IsGroupedGemmKernel) {
+          // Replacing global dims and strides for the next batch
+          tensormaps_replace_global_tensor_properties<IsLoad>(
+              shared_tensormaps, params, next_batch, problem_shape_mnkl, warp_group_idx);
+        }
+
       }
-
     }
   }
 
@@ -1835,6 +1934,7 @@ public:
       TensorMapStorage& shared_tensormaps,
       cute::TmaDescriptor const* tensormap,
       const int32_t warp_group_idx = 0) {
+    if constexpr (!IsMoEGemmKernel) {
     // Commit and wait for all TMA load/store instructions before updating the tensormap in gmem.
     // This operation only happens when the group/batch changes between consecutive tiles.
     // If there are no uncommitted instructions then tma_desc_commit_group results in an empty bulk async-group.
@@ -1855,19 +1955,22 @@ public:
       tma_desc_wait_all_fn();
       tma_descriptor_cp_fence_release(tensormap, shared_tensormaps.smem_tensormap_D[warp_group_idx]);
     }
+    }
   }
 
   template <bool IsLoad>
   CUTLASS_DEVICE
   void
   tensormaps_fence_acquire(cute::TmaDescriptor const* tensormap) {
-    if constexpr (IsLoad) {
-      if constexpr (is_source_supported) {
+    if constexpr (!IsMoEGemmKernel) {
+      if constexpr (IsLoad) {
+        if constexpr (is_source_supported) {
+          cute::tma_descriptor_fence_acquire(tensormap);
+        }
+      }
+      else {
         cute::tma_descriptor_fence_acquire(tensormap);
       }
-    } 
-    else {
-      cute::tma_descriptor_fence_acquire(tensormap);
     }
   }
 

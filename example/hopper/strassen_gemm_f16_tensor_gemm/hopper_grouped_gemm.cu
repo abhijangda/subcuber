@@ -355,6 +355,11 @@ std::vector<int64_t> offset_B;
 std::vector<int64_t> offset_C;
 std::vector<int64_t> offset_D;
 
+std::vector<uint64_t> ptr_A_batch_indices_host;
+std::vector<uint64_t> ptr_B_batch_indices_host;
+std::vector<uint64_t> ptr_C_batch_indices_host;
+std::vector<uint64_t> ptr_D_batch_indices_host;
+
 std::vector<StrideA> stride_A_host;
 std::vector<StrideB> stride_B_host;
 std::vector<StrideC> stride_C_host;
@@ -382,6 +387,10 @@ cutlass::DeviceAllocation<StrideA> stride_A;
 cutlass::DeviceAllocation<StrideB> stride_B;
 cutlass::DeviceAllocation<StrideC> stride_C;
 cutlass::DeviceAllocation<StrideD> stride_D;
+cutlass::DeviceAllocation<uint64_t> ptr_A_batch_indices;
+cutlass::DeviceAllocation<uint64_t> ptr_B_batch_indices;
+cutlass::DeviceAllocation<uint64_t> ptr_C_batch_indices;
+cutlass::DeviceAllocation<uint64_t> ptr_D_batch_indices;
 
 // Note, this is an array of pointers to alpha and beta scaling values per group
 cutlass::DeviceAllocation<ElementAccumulator*> alpha_device;
@@ -602,6 +611,10 @@ void allocate(const Options &options) {
   int64_t total_elements_B = 0;
   int64_t total_elements_C = 0;
   int64_t total_elements_D = 0;
+  uint64_t total_rows_A = 0;
+  uint64_t total_rows_B = 0;
+  uint64_t total_rows_C = 0;
+  uint64_t total_rows_D = 0;
 
   for (int32_t i = 0; i < options.groups; ++i) {
 
@@ -614,6 +627,10 @@ void allocate(const Options &options) {
     offset_B.push_back(total_elements_B);
     offset_C.push_back(total_elements_C);
     offset_D.push_back(total_elements_D);
+    ptr_A_batch_indices_host.push_back(total_rows_A);
+    ptr_B_batch_indices_host.push_back(total_rows_B);
+    ptr_C_batch_indices_host.push_back(total_rows_C);
+    ptr_D_batch_indices_host.push_back(total_rows_D);
 
     int64_t elements_A = M * K;
     int64_t elements_B = K * N;
@@ -624,6 +641,10 @@ void allocate(const Options &options) {
     total_elements_B += elements_B;
     total_elements_C += elements_C;
     total_elements_D += elements_D;
+    total_rows_A += M;
+    total_rows_B += K;
+    total_rows_C += M;
+    total_rows_D += M;
 
     stride_A_host.push_back(cutlass::make_cute_packed_stride(StrideA{}, {M, K, 1}));
     stride_B_host.push_back(cutlass::make_cute_packed_stride(StrideB{}, {N, K, 1}));
@@ -712,6 +733,15 @@ void initialize(const Options &options) {
   stride_D.reset(options.groups);
   stride_D.copy_from_host(stride_D_host.data());
 
+  ptr_A_batch_indices.reset(options.groups);
+  ptr_A_batch_indices.copy_from_host(ptr_A_batch_indices_host.data());
+  ptr_B_batch_indices.reset(options.groups);
+  ptr_B_batch_indices.copy_from_host(ptr_B_batch_indices_host.data());
+  ptr_C_batch_indices.reset(options.groups);
+  ptr_C_batch_indices.copy_from_host(ptr_C_batch_indices_host.data());
+  ptr_D_batch_indices.reset(options.groups);
+  ptr_D_batch_indices.copy_from_host(ptr_D_batch_indices_host.data());
+
   alpha_device.reset(options.groups);
   alpha_device.copy_from_host(ptr_alpha_host.data());
   beta_device.reset(options.groups);
@@ -766,8 +796,15 @@ typename Gemm::Arguments args_from_options(const Options &options)
     arguments = typename Gemm::Arguments {
       GemmMode,
       {options.groups, problem_sizes.get(), options.problem_sizes_host.data()},
+    #if defined(MOE)
+      {block_A.get(), stride_A.get(), block_B.get(), stride_B.get(),
+       ptr_A_batch_indices.get(), ptr_B_batch_indices.get()},
+      {fusion_args, nullptr, nullptr, block_D.get(), stride_D.get(),
+       nullptr, ptr_D_batch_indices.get()},
+    #else
       {ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get()},
       {fusion_args, nullptr, nullptr, ptr_D.get(), stride_D.get()},
+    #endif
       kernel_hw_info
     };
   }
@@ -775,8 +812,15 @@ typename Gemm::Arguments args_from_options(const Options &options)
     arguments = typename Gemm::Arguments {
       GemmMode,
       {options.groups, problem_sizes.get(), nullptr},
+    #if defined(MOE)
+      {block_A.get(), stride_A.get(), block_B.get(), stride_B.get(),
+       ptr_A_batch_indices.get(), ptr_B_batch_indices.get()},
+      {fusion_args, block_C.get(), stride_C.get(), block_D.get(), stride_D.get(),
+       ptr_C_batch_indices.get(), ptr_D_batch_indices.get()},
+    #else
       {ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get()},
       {fusion_args, ptr_C.get(), stride_C.get(), ptr_D.get(), stride_D.get()},
+    #endif
       kernel_hw_info
     };
   }
