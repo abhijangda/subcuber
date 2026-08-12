@@ -749,7 +749,7 @@ public:
     uint64_t* presum_b_batch_indices = (uint64_t*)((ElementA*)presum_b_workspace + get_presum_b_workspace_size(args)/sizeof(ElementB));
     ElementC* postsum_m_workspace = (ElementC*)presum_b_workspace + (get_presum_b_workspace_size(args) + get_grouped_gemm_index_size(args))/sizeof(ElementB);
     uint64_t* postsum_m_batch_indices = (uint64_t*)(postsum_m_workspace + get_grouped_gemm_index_size(args)/sizeof(ElementC));
-    int* sem_workspace = (int*)(((ElementC*)postsum_m_batch_indices) + (get_postsum_m_workspace_size(args)+get_grouped_gemm_index_size(args))/sizeof(ElementC));
+    int* sem_workspace = (int*)(((ElementC*)postsum_m_workspace) + (get_postsum_m_workspace_size(args)+get_grouped_gemm_index_size(args))/sizeof(ElementC));
 
     if (presum_a_batch_indices != nullptr) {
       cudaMemcpy(presum_a_batch_indices, get_presum_a_batch_indices(args).data(),
