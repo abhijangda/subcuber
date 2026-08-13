@@ -49,7 +49,7 @@ class StrassenPersistentTileSchedulerSm90Group {
   // Data members
   //
 
-private:
+public:
   uint64_t current_work_linear_idx_ = 0;
   uint64_t total_grid_size_ = 0;
 
@@ -428,6 +428,15 @@ public:
               scheduler_params.log_swizzle_size_, 
               scheduler_params.raster_order_);
   }
+
+  CUTLASS_DEVICE
+  bool
+  has_next_work() const {
+    auto scheduler = *this;
+    return scheduler.get_current_work_for_linear_idx(
+      current_work_linear_idx_ + total_grid_size_).is_valid();
+  }
+
   template <typename TileSchedulerPipeline, typename TileSchedulerPipelineState>
   CUTLASS_DEVICE
   auto
@@ -570,6 +579,7 @@ public:
     auto work_tile = response_ptr_[scheduler_pipe_consumer_state.index()];
     cutlass::arch::fence_view_async_shared();
     scheduler_pipeline.consumer_release(scheduler_pipe_consumer_state);
+    current_work_linear_idx_ += total_grid_size_;
 
     return cute::make_tuple(work_tile, true);
   }

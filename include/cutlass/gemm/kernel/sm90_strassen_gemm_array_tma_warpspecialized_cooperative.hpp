@@ -320,7 +320,7 @@ public:
 
     int run = 0;
 
-     CUTLASS_HOST_DEVICE
+    CUTLASS_HOST_DEVICE
     int get_problem_shape_m(int problem_idx) const {
       return get<0>(problem_shape.get_problem_shape(problem_idx));
     }

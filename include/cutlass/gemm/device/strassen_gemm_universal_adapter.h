@@ -1395,6 +1395,11 @@ public:
     if ((!only_m or valid_ms[0] == 1) && ParallelGroup0::HasAKernel()) {
       result = run_parallel<ParallelGroup0>(paramsM0_, paramsM1_, paramsM2_, paramsM3_, paramsM4_, paramsM5_, paramsM6_,
                                             streams[(stream_idx++)%num_streams], cuda_adapter, launch_with_pdl);
+      {
+        auto result = cudaDeviceSynchronize();
+        if (result != cudaSuccess)
+        {printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(result)); return Status::kErrorInternal;}
+      }
       if (result != Status::kSuccess) {
         printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(cudaGetLastError())); return Status::kErrorInternal;
       }

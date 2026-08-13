@@ -566,7 +566,8 @@ struct Result
 /// Helper to initialize a block of device data
 template <class Element>
 bool initialize_block(
-  cutlass::DeviceAllocation<Element>& block,
+  Element* block, int group,
+  uint64_t size,
   uint64_t seed=2023, bool mod = false, bool ones = false) {
 
   Element scope_max, scope_min;
@@ -585,21 +586,21 @@ bool initialize_block(
 
   if (!mod and !ones) {
     cutlass::reference::device::BlockFillRandomUniform(
-      block.get(), block.size(), seed, scope_max, scope_min, 0);
+      block, size, seed, scope_max, scope_min, 0);
   } else if (mod) {
-    Element* host =  new Element[block.size()];
-    for (int i = 0; i < block.size(); i++)
-      host[i] = (static_cast<Element>(i/(9*1024)));
-    CUDA_CHECK(cudaMemcpy(block.get(), host, block.size() * sizeof(Element), cudaMemcpyHostToDevice));
+    Element* host = new Element[size];
+    for (uint64_t i = 0; i < size; i++)
+      host[i] = static_cast<Element>(static_cast<int>(i / (9 * 1024)));
+    CUDA_CHECK(cudaMemcpy(block, host, size * sizeof(Element), cudaMemcpyHostToDevice));
     delete[] host;
   } else if (ones) {
     using Layout = cutlass::layout::PackedVectorLayout;
-    Layout::TensorCoord size(static_cast<Layout::Index>(block.size())); // -Wconversion
-    Layout layout = Layout::packed(size);
-    cutlass::TensorView<Element, Layout> view(block.get(), layout, size);
+    Layout::TensorCoord extent(static_cast<Layout::Index>(size)); // -Wconversion
+    Layout layout = Layout::packed(extent);
+    cutlass::TensorView<Element, Layout> view(block, layout, extent);
 
     cutlass::reference::device::TensorFill(
-      view, Element(1));
+      view, Element(1+int(group)));
   }
 
   return true;
@@ -747,10 +748,14 @@ void initialize(const Options &options) {
   beta_device.reset(options.groups);
   beta_device.copy_from_host(ptr_beta_host.data());
 
-  initialize_block(block_A, seed + 2021, false, false);
-  initialize_block(block_B, seed + 2022, false, false);
-  // initialize_block(block_C, seed + 2023, false, false);
-  // initialize_block(block_D, seed + 2024, false, false);
+  for (int32_t i = 0; i < options.groups; ++i) {
+    auto problem = options.problem_sizes_host.at(i);
+    uint64_t elements_A = uint64_t(get<0>(problem)) * uint64_t(get<2>(problem));
+    uint64_t elements_B = uint64_t(get<2>(problem)) * uint64_t(get<1>(problem));
+
+    initialize_block(block_A.get() + offset_A.at(i), i, elements_A, seed + 2021 + 2*i, false, false);
+    initialize_block(block_B.get() + offset_B.at(i), i, elements_B, seed + 2022 + 2*i, false, false);
+  }
   block_alpha.copy_from_host(alpha_host.data());
   block_beta.copy_from_host(beta_host.data());
 }
