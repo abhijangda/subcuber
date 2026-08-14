@@ -230,7 +230,7 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSc
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
-#elif 0
+#elif 1
 #if defined(COOPERATIVE_PINGPONG)
 #error "This schedule do not work with mixed schedule"
 #endif

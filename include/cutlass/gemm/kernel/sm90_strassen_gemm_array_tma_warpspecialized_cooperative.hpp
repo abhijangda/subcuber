@@ -705,7 +705,12 @@ public:
     int lane_predicate = cute::elect_one_sync();
     uint32_t block_rank_in_cluster = cute::block_rank_in_cluster();
 
-    // Note: Tma Descriptor Prefetch (from either const or param) is not applicable here
+    // Note: Tma Descriptor Prefetch (from either const or param) is not applicable here for GroupedGemm
+
+    if (IsMoEGemmKernel && (warp_idx == 0) && lane_predicate) {
+      CollectiveMainloop::prefetch_tma_descriptors(params.mainloop);
+      // CollectiveEpilogue::prefetch_tma_descriptors(params.epilogue);
+    }
 
     // TileScheduler pipeline
     using TileSchedulerPipeline = typename TileScheduler::Pipeline;

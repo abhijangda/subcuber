@@ -733,6 +733,25 @@ struct CollectiveStrassenMma<
   //   return cute::make_tuple(gA_mkl, gB_nkl);
   // }
 
+  /// Issue Tma Descriptor Prefetch -- ideally from a single thread for best performance
+  CUTLASS_DEVICE
+  static void prefetch_tma_descriptors(Params const& mainloop_params) {
+    if (!IsMoEGemmKernel) return;
+    cute::prefetch_tma_descriptor(mainloop_params.tma_load_a.get_tma_descriptor());
+    cute::prefetch_tma_descriptor(mainloop_params.tma_load_b.get_tma_descriptor());
+    //TODO: Do this only when presum_a or presum_b is needed
+    cute::prefetch_tma_descriptor(mainloop_params.tma_load_presum_a.get_tma_descriptor());
+    cute::prefetch_tma_descriptor(mainloop_params.tma_load_presum_b.get_tma_descriptor());
+    if (StrassenMiGroup::hasM0() && StrassenMiGroup::AllPresums::computeAnyAPresum()) {
+      cute::prefetch_tma_descriptor(mainloop_params.tma_load_presumld_a.get_tma_descriptor());
+      cute::prefetch_tma_descriptor(mainloop_params.tma_store_presumld_a.get_tma_descriptor());
+    }
+    if (StrassenMiGroup::hasM1() && StrassenMiGroup::AllPresums::computeAnyBPresum()) {
+      cute::prefetch_tma_descriptor(mainloop_params.tma_load_presumld_b.get_tma_descriptor());
+      cute::prefetch_tma_descriptor(mainloop_params.tma_store_presumld_b.get_tma_descriptor());
+    }
+  }
+
   template <class ProblemShape_MNKL>
   CUTLASS_DEVICE auto
   load_init(ProblemShape_MNKL const& problem_shape_MNKL, Params const& mainloop_params) const {
@@ -1336,6 +1355,7 @@ struct CollectiveStrassenMma<
         PresumVecTypeA a3; a3.clear();
 
         auto smem_a0_ptr = shared_presum_tensors.smem_A0.data() + 0*PresumSingleStageSize + presum_read_stage*4*PresumSingleStageSize + thread_idx * sizeof(PresumVecTypeA)/sizeof(ElementA);
+
         auto smem_a1_ptr = smem_a0_ptr + 1*PresumSingleStageSize;
         auto smem_a2_ptr = smem_a0_ptr + 2*PresumSingleStageSize;
         auto smem_a3_ptr = smem_a0_ptr + 3*PresumSingleStageSize;

@@ -1248,7 +1248,7 @@ public:
                   if (postsum_src_len > 0) {
                     load_order_barrier.wait();
                     load_order_barrier.advance();
-                    if (postsum_src_len > 0) {
+                    if (postsum_srcs[0].is_layout_interim_matrix()) {
                       epi_load_pipe_producer_state =
                       collective_epilogue.load(
                         epi_load_pipeline,
@@ -1264,7 +1264,7 @@ public:
                         epi_load_postsum_tensormap,
                         postsum_srcs
                       );
-                    } else {
+                    } else if (postsum_srcs[0].is_layout_interim_linear()) {
                       epi_load_pipe_producer_state =
                       collective_epilogue.load_m0(
                         epi_load_pipeline,
