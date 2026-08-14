@@ -227,11 +227,13 @@ cutlass::DeviceAllocation<ElementAccumulator> block_beta;
 struct Options {
 
   bool help = false;
+  bool valid = true;
+  std::string error_message;
 
   float alpha = FLT_MAX;
   float beta  = FLT_MAX;
   int iterations = 10;
-  int m = 1024, n = 2048, k = 512, groups = 10;
+  int groups = 10;
   std::string benchmark_path;
   std::vector<typename ProblemShape::UnderlyingProblemShape> problem_sizes_host;
   int const tma_alignment_bits = 128;
@@ -248,9 +250,6 @@ struct Options {
       return;
     }
 
-    cmd.get_cmd_line_argument("m", m);
-    cmd.get_cmd_line_argument("n", n);
-    cmd.get_cmd_line_argument("k", k);
     cmd.get_cmd_line_argument("groups", groups);
     cmd.get_cmd_line_argument("alpha", alpha, FLT_MAX);
     cmd.get_cmd_line_argument("beta",  beta,  FLT_MAX);
@@ -260,12 +259,17 @@ struct Options {
     // Decide how to initialize the problems
     if (!benchmark_path.empty()) {
       if (!benchmark_problems()) {
+        valid = false;
+        error_message = "Unable to read benchmark file: " + benchmark_path;
         problem_sizes_host.clear();
         return;
       }
     }
     else {
-      randomize_problems(cmd);
+      initialize_problems(cmd);
+      if (!valid) {
+        return;
+      }
     }
 
     char raster_char;
@@ -284,28 +288,59 @@ struct Options {
     cmd.get_cmd_line_argument("swizzle", swizzle, 1);
   }
 
-  void randomize_problems(cutlass::CommandLine &cmd) {
-    int cmd_line_m = -1, cmd_line_n = -1, cmd_line_k = -1;
-    cmd.get_cmd_line_argument("m", cmd_line_m);
-    cmd.get_cmd_line_argument("n", cmd_line_n);
-    cmd.get_cmd_line_argument("k", cmd_line_k);
+  void initialize_problems(cutlass::CommandLine const &cmd) {
+    std::vector<int> m_values;
+    std::vector<int> n_values;
+    std::vector<int> k_values;
+    cmd.get_cmd_line_arguments("m", m_values);
+    cmd.get_cmd_line_arguments("n", n_values);
+    cmd.get_cmd_line_arguments("k", k_values);
+
+    size_t inferred_groups = 0;
+    for (auto const* values : {&m_values, &n_values, &k_values}) {
+      if (values->size() > 1) {
+        if (inferred_groups != 0 && inferred_groups != values->size()) {
+          valid = false;
+          error_message = "Comma-separated m, n, and k lists must have the same length.";
+          return;
+        }
+        inferred_groups = values->size();
+      }
+    }
+
+    if (cmd.check_cmd_line_flag("groups")) {
+      for (auto const* values : {&m_values, &n_values, &k_values}) {
+        if (values->size() > 1 && values->size() != static_cast<size_t>(groups)) {
+          valid = false;
+          error_message = "Each dimension list must contain one value or exactly --groups values.";
+          return;
+        }
+      }
+    }
+    else if (inferred_groups != 0) {
+      groups = static_cast<int>(inferred_groups);
+    }
+
+    if (groups <= 0) {
+      valid = false;
+      error_message = "--groups must be greater than zero.";
+      return;
+    }
 
     problem_sizes_host.reserve(groups);
 
-    for (int i = groups; i > 0; i--) {
-      int m = cmd_line_m;
-      int n = cmd_line_n;
-      int k = cmd_line_k;
-      if (m < 0) {
-        m = alignment * ((rand() % 64));
+    auto dimension_for_group = [&](std::vector<int> const& values, int group) {
+      if (values.empty()) {
+        return alignment * (rand() % 64);
       }
-      if (n < 0) {
-        n = alignment * ((rand() % 64));
-      }
-      if (k < 0) {
-        k = alignment * ((rand() % 64));
-      }
-      problem_sizes_host.push_back({m, n, k});
+      return values.size() == 1 ? values.front() : values.at(group);
+    };
+
+    for (int group = 0; group < groups; ++group) {
+      problem_sizes_host.push_back({
+        dimension_for_group(m_values, group),
+        dimension_for_group(n_values, group),
+        dimension_for_group(k_values, group)});
     }
   }
 
@@ -349,9 +384,9 @@ struct Options {
       << "  Hopper FP8 Grouped GEMM using a Warp Specialized kernel.\n\n"
       << "Options:\n\n"
       << "  --help                      If specified, displays this usage statement\n\n"
-      << "  --m=<int>                   Sets the M extent of the GEMM for all groups\n"
-      << "  --n=<int>                   Sets the N extent of the GEMM for all groups\n"
-      << "  --k=<int>                   Sets the K extent of the GEMM for all groups\n"
+      << "  --m=<int[,int...]>          Sets one M extent for all groups or one per group\n"
+      << "  --n=<int[,int...]>          Sets one N extent for all groups or one per group\n"
+      << "  --k=<int[,int...]>          Sets one K extent for all groups or one per group\n"
       << "  --groups=<int>              Sets the number of individual GEMM problems for Grouped GEMM\n"
       << "  --alpha=<f32>               Epilogue scalar alpha\n"
       << "  --beta=<f32>                Epilogue scalar beta\n\n"
@@ -360,7 +395,8 @@ struct Options {
 
     out
       << "\n\nExamples:\n\n"
-      << "$ " << "57_hopper_grouped_gemm" << " --m=1024 --n=512 --k=1024 --groups=10 --alpha=2 --beta=0.707 \n\n";
+      << "$ " << "57_hopper_grouped_gemm" << " --m=1024 --n=512 --k=1024 --groups=10 --alpha=2 --beta=0.707\n"
+      << "$ " << "57_hopper_grouped_gemm" << " --m=1024,2048 --n=512,1024 --k=1024,2048\n\n";
 
     return out;
   }
@@ -767,6 +803,12 @@ int main(int argc, char const **args) {
   if (options.help) {
     options.print_usage(std::cout) << std::endl;
     return 0;
+  }
+
+  if (!options.valid) {
+    std::cerr << "Error: " << options.error_message << "\n\n";
+    options.print_usage(std::cerr) << std::endl;
+    return -1;
   }
 
   //

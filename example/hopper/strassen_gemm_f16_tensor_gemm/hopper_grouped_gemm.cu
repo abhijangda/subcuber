@@ -59,6 +59,7 @@
         5 1024x512x128 and so on
 */
 
+#include <algorithm>
 #include <iostream>
 
 #define MY_PRINTF(...) ;//printf(__VA_ARGS__)
@@ -482,10 +483,12 @@ using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTil
 struct Options {
 
   bool help;
+  bool valid = true;
+  std::string error_message;
 
   float alpha, beta;
   int iterations;
-  int m, n, k, groups;
+  int groups;
   std::vector<typename ProblemShape::UnderlyingProblemShape> problem_sizes_host;
   RasterOrderOptions raster;
   int const tma_alignment_bits = 128;
@@ -496,7 +499,7 @@ struct Options {
 
   Options():
     help(false),
-    m(5120), n(4096), k(4096), groups(1),
+    groups(1),
     alpha(1.f), beta(0.f),
     reference_check(true),
     iterations(1000),
@@ -514,17 +517,97 @@ struct Options {
       return;
     }
 
+    std::vector<int> m_values{5120};
+    std::vector<int> n_values{4096};
+    std::vector<int> k_values{4096};
+
     if (cmd.check_cmd_line_flag("mnk")) {
       int mnk = 0;
       cmd.get_cmd_line_argument("mnk", mnk);
-      m = n = k = mnk;
+      m_values.assign(1, mnk);
+      n_values.assign(1, mnk);
+      k_values.assign(1, mnk);
     } else {
-      cmd.get_cmd_line_argument("m", m);
-      cmd.get_cmd_line_argument("n", n);
-      cmd.get_cmd_line_argument("k", k);
+      cmd.get_cmd_line_arguments("m", m_values);
+      cmd.get_cmd_line_arguments("n", n_values);
+      cmd.get_cmd_line_arguments("k", k_values);
     }
 
     cmd.get_cmd_line_argument("groups", groups);
+
+#if defined(MOE)
+    auto all_values_equal = [](std::vector<int> const& values) {
+      return std::all_of(values.begin() + 1, values.end(), [&](int value) {
+        return value == values.front();
+      });
+    };
+    if (!all_values_equal(n_values) || !all_values_equal(k_values)) {
+      valid = false;
+      error_message = "All n values and all k values must be identical for MoE.";
+      return;
+    }
+    size_t inferred_groups = 1;
+    for (auto const* values : {&m_values, &n_values, &k_values}) {
+      if (values->size() > 1) {
+        if (inferred_groups > 1 && inferred_groups != values->size()) {
+          valid = false;
+          error_message = "Comma-separated m, n, and k lists must have the same length.";
+          return;
+        }
+        inferred_groups = values->size();
+      }
+    }
+#else
+    size_t inferred_groups = 1;
+    for (auto const* values : {&m_values, &n_values, &k_values}) {
+      if (values->size() > 1) {
+        if (inferred_groups > 1 && inferred_groups != values->size()) {
+          valid = false;
+          error_message = "Comma-separated m, n, and k lists must have the same length.";
+          return;
+        }
+        inferred_groups = values->size();
+      }
+    }
+#endif
+
+    if (cmd.check_cmd_line_flag("groups")) {
+      for (auto const* values : {&m_values, &n_values, &k_values}) {
+        if (values->size() > 1 && values->size() != static_cast<size_t>(groups)) {
+          valid = false;
+          error_message = "Each dimension list must contain one value or exactly --groups values.";
+          return;
+        }
+      }
+    }
+    else if (inferred_groups > 1) {
+      groups = static_cast<int>(inferred_groups);
+    }
+
+    if (groups <= 0) {
+      valid = false;
+      error_message = "--groups must be greater than zero.";
+      return;
+    }
+
+    auto dimension_for_group = [](std::vector<int> const& values, int group) {
+      return values.size() == 1 ? values.front() : values.at(group);
+    };
+
+    problem_sizes_host.reserve(groups);
+    for (int group = 0; group < groups; ++group) {
+      auto group_m = dimension_for_group(m_values, group);
+      auto group_n = dimension_for_group(n_values, group);
+      auto group_k = dimension_for_group(k_values, group);
+      if (group_m <= 0 || group_n <= 0 || group_k <= 0) {
+        valid = false;
+        error_message = "All m, n, and k values must be greater than zero.";
+        problem_sizes_host.clear();
+        return;
+      }
+      problem_sizes_host.push_back({group_m, group_n, group_k});
+    }
+
     cmd.get_cmd_line_argument("streams", streams);
     cmd.get_cmd_line_argument("check", reference_check);
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
@@ -560,9 +643,6 @@ struct Options {
     }
     for (int ii = idx; ii < 7; ii++) swizzles[ii] = 1;
 
-    if (groups > 0) {
-      problem_sizes_host.assign(groups, {m, n, k});
-    }
   }
 
   /// Prints the usage statement.
@@ -572,9 +652,14 @@ struct Options {
       << "  Hopper FP16 GEMM using a Warp Specialized kernel.\n\n"
       << "Options:\n\n"
       << "  --help                      If specified, displays this usage statement\n\n"
-      << "  --m=<int>                   Sets the M extent of the GEMM\n"
-      << "  --n=<int>                   Sets the N extent of the GEMM\n"
-      << "  --k=<int>                   Sets the K extent of the GEMM\n"
+      << "  --m=<int[,int...]>          Sets one M extent for all groups or one per group\n"
+    #if defined(MOE)
+      << "  --n=<int[,int...]>          Sets identical N extents for all MoE groups\n"
+      << "  --k=<int[,int...]>          Sets identical K extents for all MoE groups\n"
+    #else
+      << "  --n=<int[,int...]>          Sets one N extent for all groups or one per group\n"
+      << "  --k=<int[,int...]>          Sets one K extent for all groups or one per group\n"
+    #endif
       << "  --alpha=<f32>               Epilogue scalar alpha\n"
       << "  --beta=<f32>                Epilogue scalar beta\n\n"
       << "  --raster=<char>             CTA Rasterization direction (N for along N, M for along M, and H for heuristic)\n\n"
@@ -586,7 +671,7 @@ struct Options {
 
     out
       << "\n\nExamples:\n\n"
-      << "$ " << "48_hopper_warp_specialized_gemm" << " --m=1024 --n=512 --k=1024 --alpha=2 --beta=0.707 \n\n";
+      << "$ " << "48_hopper_warp_specialized_gemm" << " --m=8192,16384 --n=8192 --k=8192 --alpha=1 --beta=0\n\n";
 
     return out;
   }
@@ -942,24 +1027,24 @@ bool verify(const Options &options) {
     // Wait for kernel to finish
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    ElementC* host_ref_D = new ElementC[options.m*options.n];
-    CUDA_CHECK(cudaMemcpy(host_ref_D, block_ref_D.get()  + offset_D.at(i), options.m*options.n*sizeof(ElementC), cudaMemcpyDeviceToHost));
-    ElementC* host_D = new ElementC[options.m*options.n];
-    CUDA_CHECK(cudaMemcpy(host_D, block_D.get() + offset_D.at(i), options.m*options.n*sizeof(ElementC), cudaMemcpyDeviceToHost));
+    ElementC* host_ref_D = new ElementC[M*N];
+    CUDA_CHECK(cudaMemcpy(host_ref_D, block_ref_D.get()  + offset_D.at(i), M*N*sizeof(ElementC), cudaMemcpyDeviceToHost));
+    ElementC* host_D = new ElementC[M*N];
+    CUDA_CHECK(cudaMemcpy(host_D, block_D.get() + offset_D.at(i), M*N*sizeof(ElementC), cudaMemcpyDeviceToHost));
 
     float MAX_REL_ERR = 1e-2;
     float MAX_ABS_ERR = 5;
 
-    for (int r = 0; r < options.m; r++) {
-    for (int c = 0; c < options.n; c++) {
-      auto idx = r*options.n + c;
+    for (int r = 0; r < M; r++) {
+    for (int c = 0; c < N; c++) {
+      auto idx = r*N + c;
       cutlass::half_t e1 = host_ref_D[idx];
       cutlass::half_t e2 = host_D[idx];
       float err = fabs((float)e1 -(float)e2)/fabs((float)e1 + 1e-6);
       float abs_err = fabs((float)e1 -(float)e2);
 
       //C0
-      if (r < options.m/2 && c < options.n/2) {
+      if (r < M/2 && c < N/2) {
         if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
           printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
           passed = false;
@@ -967,7 +1052,7 @@ bool verify(const Options &options) {
       }
 
       //C1
-      if (r < options.m/2 && c >= options.n/2) {
+      if (r < M/2 && c >= N/2) {
         if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
           printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
           passed = false;
@@ -975,7 +1060,7 @@ bool verify(const Options &options) {
       }
 
       //C2
-      if (r >= options.m/2 && c < options.n/2) {
+      if (r >= M/2 && c < N/2) {
         if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
           printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
           passed = false;
@@ -983,7 +1068,7 @@ bool verify(const Options &options) {
       }
 
       //C3
-      if (r >= options.m/2 && c >= options.n/2) {
+      if (r >= M/2 && c >= N/2) {
         if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
           printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
           passed = false;
@@ -994,6 +1079,8 @@ bool verify(const Options &options) {
     }
     if (!passed) break;
     }
+    delete[] host_ref_D;
+    delete[] host_D;
     if(!passed) break;
   }
 
@@ -1105,7 +1192,7 @@ int run(Options &options)
       raster = "Along M";
     }
 
-    std::cout << "  Problem Size: " << options.m << 'x' << options.n << 'x' << options.k << std::endl;
+    std::cout << "  Problems: " << options.groups << std::endl;
     std::cout << "  Rasterization: " << raster << " with a maximum CTA swizzle of ";
     for (int i = 0; i < 7; i++) std::cout << options.swizzles[i] << ", ";
     std::cout <<std::endl;
@@ -1160,6 +1247,12 @@ int main(int argc, char const **args) {
   if (options.help) {
     options.print_usage(std::cout) << std::endl;
     return 0;
+  }
+
+  if (!options.valid) {
+    std::cerr << "Error: " << options.error_message << "\n\n";
+    options.print_usage(std::cerr) << std::endl;
+    return -1;
   }
 
   //
