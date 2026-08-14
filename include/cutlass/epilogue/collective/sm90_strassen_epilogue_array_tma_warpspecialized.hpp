@@ -261,8 +261,9 @@ public:
 
     struct NonEmptyTensorMapStorage : cute::aligned_struct<128, _0> {
       cute::TmaDescriptor smem_tensormap_C;
-      cute::TmaDescriptor smem_tensormap_postsum;
+      cute::TmaDescriptor smem_tensormap_postsum_load;
       cute::array<cute::TmaDescriptor, NumEpilogueWarpGroups> smem_tensormap_D;
+      cute::array<cute::TmaDescriptor, NumEpilogueWarpGroups> smem_tensormap_postsum_store;
     };
 
     struct EmptyTensorMapStorage {};
@@ -461,7 +462,9 @@ public:
 
     typename Params::TMA_C tma_load_postsum_m{};
 
-    Tensor tensor_load_m = make_tensor(make_gmem_ptr<NonVoidElementC const>(postsum_m), make_layout(make_shape(4*init_M/2,init_N/2,init_L), make_stride(get<0>(stride_d)/2, get<1>(stride_d), get<2>(stride_d))));
+    Tensor tensor_load_m = make_tensor(make_gmem_ptr<NonVoidElementC const>(postsum_m),
+                                       make_layout(make_shape((4*moe_M)/2,max(init_N/2,1),init_L),
+                                                   make_stride(max(get<0>(stride_d)/2, get<0>(stride_d)), get<1>(stride_d), get<2>(stride_d))));
     tma_load_postsum_m = make_tma_copy_C_sm90(
         CopyOpG2S{},
         tensor_load_m,
@@ -469,7 +472,9 @@ public:
         EpilogueTile{});
 
     typename Params::TMA_D tma_store_postsum_m{};
-    Tensor tensor_store_m = make_tensor(make_gmem_ptr<NonVoidElementD>(postsum_m), make_layout(make_shape(4*init_M/2,init_N/2,init_L), make_stride(get<0>(stride_d)/2, get<1>(stride_d), get<2>(stride_d))));
+    Tensor tensor_store_m = make_tensor(make_gmem_ptr<NonVoidElementD>(postsum_m),
+                                       make_layout(make_shape((4*moe_M)/2,max(init_N/2,1),init_L),
+                                                   make_stride(max(get<0>(stride_d)/2, get<0>(stride_d)), get<1>(stride_d), get<2>(stride_d))));
 
     tma_store_postsum_m = make_tma_copy_C_sm90(
         CopyOpS2G{},
@@ -513,8 +518,9 @@ public:
   template <class ProblemShape>
   static size_t
   get_workspace_size(ProblemShape const& problem_shape, Arguments const& args, int sm_count) {
-    constexpr uint32_t NumInputTensors = NumEpilogueWarpGroups + (cute::is_void_v<ElementC> ? 0 : 1);
-    auto descriptors_shape = cute::make_shape(sm_count, Int<NumInputTensors>{});
+    constexpr uint32_t NumTensorMaps = 2 * NumEpilogueWarpGroups +
+      (cute::is_void_v<ElementC> ? 0 : 2 * NumEpilogueWarpGroups);
+    auto descriptors_shape = cute::make_shape(sm_count, Int<NumTensorMaps>{});
     constexpr size_t SizeOfCuTensorMap = sizeof(cute::TmaDescriptor);
     // Allocate gmem space for input tensormaps per each SM, A tensormap copies followed by B tensormap copies
     return (IsMoEGemmKernel ? 0 : size(descriptors_shape) * SizeOfCuTensorMap) +
@@ -620,15 +626,41 @@ public:
     return StrassenMiGroup::NumMisWithGLLoads() > 0;
   }
 
+  /*template<
+    class ProblemShapeMNKL
+  >
+  CUTLASS_DEVICE decltype(auto)
+  get_load_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, PostsumOp global_src) {
+    auto [M, N, K, L] = problem_shape_mnkl;
+
+    Tensor d = params.tma_store_d.get_tma_tensor(make_shape(M, N, L));
+    auto d0_ptr = d.data() + make_coord(0,0,_);
+    auto d0 = make_tensor(d0_ptr, d.layout());
+
+    if (global_src.valid() && global_src.is_mem_global()) {
+      if (global_src.is_layout_final()) {
+        auto d_ptr = d.data() + make_coord((global_src.get_op()%2)*N/2,
+                                           (global_src.get_op()/2)*M/2,_);
+        return cute::tuple(make_tensor(d_ptr, d.layout()), false);
+      } else if (global_src.is_layout_interim_matrix()) {
+        auto m_ptr = postsum_m.data() + make_coord(0,global_src.get_op()*M/2,_);
+        return cute::tuple(make_tensor(m_ptr, postsum_m.layout()), true);
+      }
+    }
+
+    return cute::tuple(d0, false);
+  }*/
+
   CUTLASS_DEVICE auto
   load_init(
       Params const& params,
       TensorMapStorage& shared_tensormaps,
       int32_t sm_count,
-      int32_t sm_idx) {
+      int32_t sm_idx,
+      int32_t warp_group_idx = 0) {
     // Initialize tma for loading
     constexpr bool IsLoad = true;
-    auto load_tensormaps = tensormaps_init<IsLoad>(params, shared_tensormaps, sm_count, sm_idx, 0);
+    auto load_tensormaps = tensormaps_init<IsLoad>(params, shared_tensormaps, sm_count, sm_idx, warp_group_idx);
     return load_tensormaps;
   }
 
@@ -646,11 +678,14 @@ public:
       LoadPipelineState load_pipe_producer_state,
       ProblemShapeMNKL problem_shape_mnkl,
       TileShapeMNK tile_shape_MNK,
-      TileCoordMNKL tile_coord_mnkl,
+      TileCoordMNKL tile_coord_mnkl, const int sub_m_idx,
       TiledMma tiled_mma,
       int thread_idx,
       TensorStorage& shared_tensors,
+      TensorStorage& shared_tensors2,
       TensorMapC const& load_tensormap,
+      TensorMapC const& load_postsum_tensormap,
+      PostsumOp src_global_ops[4],
       int subtile_idx=-1,
       bool wait_until_load_finishes = false) {
     using namespace cute;
@@ -662,15 +697,24 @@ public:
     static_assert(!is_im2col_D, "Do not support im2col");
 
     int c_m_coord = m_coord;
-    if constexpr (IsMoEGemmKernel) {
-      if (l_coord != 0 && params.ptr_C != nullptr) {
+    if (l_coord != 0 && params.ptr_C != nullptr && src_global_ops[0].is_layout_final()) {
+      if constexpr (IsMoEGemmKernel) {
         c_m_coord += int(params.ptr_C_batch_indices[l_coord] / size<0>(CtaTileMNK{}));
+      } else {
+        printf("696 TODO\n");
+      }
+    } else if (src_global_ops[0].is_layout_interim_matrix()) {
+      c_m_coord += int(src_global_ops[0].get_op()*(M/2)/size<0>(CtaTileMNK{}));
+      if constexpr (IsMoEGemmKernel) {
+        c_m_coord += int((l_coord * 4*M/2)/size<0>(CtaTileMNK{}));
       }
     }
+
     auto coord_shape = append<3>(make_shape(c_m_coord, n_coord), Int<0>{});
+    // auto first_load_tuple = get_load_tma(problem_shape_mnkl, sub_m_idx, src_global_ops[0]);
 
     // Represent the full source tensor, slice to get the tile this CTA is currently responsible for
-    Tensor mC_mn = params.tma_load_c.get_tma_tensor(append<3>(make_shape(M,N), Int<1>{}));             //       (M,N,L)
+    Tensor mC_mn = params.tma_load_postsum_m.get_tma_tensor(append<3>(make_shape(4*(M/2),N/2), Int<1>{}));             //       (M,N,L)
     Tensor mC = coalesce(mC_mn, take<0,2>(CtaTileMNK{}));
     Tensor gC = local_tile(mC, take<0,2>(CtaTileMNK{}), coord_shape);                                  // (CTA_M,CTA_N)
 
@@ -680,7 +724,7 @@ public:
     Tensor sC_epi = make_tensor(make_smem_ptr(ptr_sC), SmemLayoutC{});           //      (EPI_TILE_M,EPI_TILE_N,PIPE_C)
 
     // Prepare the thread(b)lock's (G)mem to (S)mem TMA tiled copy (bGS_)
-    ThrCopy thrblk_g2s = params.tma_load_c.get_slice(Int<0>{});
+    ThrCopy thrblk_g2s = params.tma_load_postsum_m.get_slice(Int<0>{});
     Tensor bGS_gC = thrblk_g2s.partition_S(gC_epi);                                    // (G2S,G2S_M,G2S_N,EPI_M,EPI_N)
     Tensor bGS_sC = thrblk_g2s.partition_D(sC_epi);                                    // (G2S,G2S_M,G2S_N,PIPE_C)
 
@@ -694,7 +738,7 @@ public:
                       thread_idx
                     };
     auto pld_callbacks = fusion_callbacks.get_producer_load_callbacks(pld_args);
-    bool is_C_load_needed = is_source_supported && fusion_callbacks.is_C_load_needed();
+    bool is_C_load_needed = is_source_supported && (fusion_callbacks.is_C_load_needed() || src_global_ops[0].valid());
 
     LoadPipelineState last_load_producer_state = load_pipe_producer_state;
 
@@ -709,9 +753,9 @@ public:
     bool did_load = false;
 
     CUTLASS_PRAGMA_UNROLL
-    for (int epi_n = 0; epi_n < size<3>(gC_epi); ++epi_n) {
+    for (int epi_m = 0; epi_m < size<2>(gC_epi); ++epi_m) {
       CUTLASS_PRAGMA_UNROLL
-      for (int epi_m = 0; epi_m < size<2>(gC_epi); ++epi_m) {
+      for (int epi_n = 0; epi_n < size<3>(gC_epi); ++epi_n) {
         if (subtile_idx != -1 && (epi_n * static_cast<int>(size<2>(gC_epi)) + epi_m) != subtile_idx) {
           continue;
         }
@@ -729,11 +773,11 @@ public:
         if (is_C_load_needed) {
           if (issue_tma_load) {
             if constexpr (IsMoEGemmKernel) {
-              copy(params.tma_load_c.with(*tma_barrier, mcast_mask),
+              copy(params.tma_load_postsum_m.with(*tma_barrier, mcast_mask),
                   bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
             }
             else {
-              copy(params.tma_load_c.with(load_tensormap, *tma_barrier, mcast_mask),
+              copy(params.tma_load_postsum_m.with(load_postsum_tensormap, *tma_barrier, mcast_mask),
                   bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
             }
             load_pipeline.producer_expect_transaction(load_pipe_producer_state);
@@ -803,7 +847,6 @@ public:
       MY_PRINTF("1030 %d %d: %d %d\n", threadIdx.x, is_M_load_needed, m_coord, n_coord);
 
     if (is_M_load_needed)
-    CUTLASS_PRAGMA_UNROLL
     for (uint stage = 0; stage < size<0>(TileShapeMNK{})*size<1>(TileShapeMNK{}); stage += STAGE_ELEMS) {
       uint64_t* tma_barrier = load_pipeline.producer_get_barrier(load_pipe_producer_state);
       if (thread_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
@@ -1118,14 +1161,14 @@ public:
     class ProblemShapeMNKL
   >
   CUTLASS_DEVICE decltype(auto)
-  get_store_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, MemLayout layout, PostsumOp global_srcs[4], int batch, bool& use_tma_reduce) {
+  get_store_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx, bool matrix_or_linear, PostsumOp global_srcs[4], int batch, bool& use_tma_reduce) {
     auto [M, N, K, L] = problem_shape_mnkl;
     Tensor postsum_m = params.tma_store_postsum_m.get_tma_tensor(append<3>(make_shape(M/2,N/2), Int<1>{}));
     auto m0_ptr = postsum_m.data() + make_coord(0,0,_);
     auto m0 = make_tensor(m0_ptr, postsum_m.layout());
   
     Tensor d = params.tma_store_d.get_tma_tensor(append<3>(make_shape(M,N), Int<1>{}));
-    auto d0_ptr = d.data() + make_coord(uint64_t(0),0,_);
+    auto d0_ptr = d.data() + make_coord(0,0,_);
     auto d0 = make_tensor(d0_ptr, d.layout());
     bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
     global_srcs[0] = MmaStrassen::PostsumOp(); global_srcs[1] = MmaStrassen::PostsumOp();
@@ -1133,12 +1176,15 @@ public:
     for (int i = 0; i < 4; i++) {
       auto global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(i);
       int signMi = RWCTypes::MiSignByOutputIndex(i, StrassenMiGroup::getMi(sub_m_idx));
-      if (global_dest.valid() && global_dest.is_mem_global() && global_dest.get_mem_layout() == layout && signMi != 0) {
+      const bool satisfy_layout = matrix_or_linear == true ?
+                                  global_dest.is_layout_final() || global_dest.is_layout_interim_matrix() :
+                                  global_dest.is_layout_interim_linear();
+      if (global_dest.valid() && global_dest.is_mem_global() && satisfy_layout && signMi != 0) {
         PostsumOp src0 = RWCTypes::PostsumSrcByOutputIndex(i, 0);
         PostsumOp src1 = RWCTypes::PostsumSrcByOutputIndex(i, 1);
         if (global_dest.is_layout_final()) {
-          auto d_ptr = d.data() + make_coord(static_cast<uint64_t>((global_dest.get_op()%2)*N/2),
-                                            (global_dest.get_op()/2)*M/2,_);
+          auto coord = make_coord((global_dest.get_op()%2)*N/2,
+                                             (global_dest.get_op()/2)*M/2,_);
           int idx = 0;
           //If the src op and dest op are same then use TMA Reduce instead of Load, Add and Store 
           bool use_tma = src0.is_mem_global() && src0.is_layout_final() && src0.get_op() == global_dest.get_op();
@@ -1150,9 +1196,9 @@ public:
           if (src1.valid() && src1.is_mem_global() && !use_tma)
             global_srcs[idx++] = src1;
           use_tma_reduce = use_tma_reduce || use_tma;
-          return cute::tuple(make_tensor(d_ptr, d.layout()), global_dest, false);
-        } else if (global_dest.is_layout_interim_linear()) {
-          auto m_ptr = postsum_m.data() + make_coord(batch == 0 ? 0 : params.postsum_m_batch_indices[batch],global_dest.get_op()*M/2,_);
+          return cute::tuple(coord, global_dest, false);
+        } else if (global_dest.is_layout_interim_matrix() || global_dest.is_layout_interim_linear()) {
+          auto coord = make_coord(int(batch == 0 ? 0 : params.postsum_m_batch_indices[batch]),global_dest.get_op()*M/2,_);
           int idx = 0;
           use_tma_reduce = false;
           if (src0.valid() && src0.is_mem_global())// && src0.get_op() != global_dest.get_op() && src0.is_layout_interim_linear()
@@ -1160,12 +1206,12 @@ public:
           if (src1.valid() && src1.is_mem_global())// && src1.get_op() != global_dest.get_op() && src1.is_layout_interim_linear()
             global_srcs[idx++] = src1;
 
-          return cute::tuple(make_tensor(m_ptr, postsum_m.layout()), global_dest, true);
+          return cute::tuple(coord, global_dest, true);
         }
       }
     }
 
-    return cute::tuple(d0, MmaStrassen::PostsumOp(), false);
+    return cute::tuple(make_coord(0,0,_), MmaStrassen::PostsumOp(), false);
   }
 
 
@@ -1191,6 +1237,7 @@ public:
       int thread_idx,
       TensorStorage& shared_tensors,
       TensorMapD const& store_tensormap,
+      TensorMapD const& store_postsum_tensormap,
       int subtile_idx=-1) {
 
     using namespace cute;
@@ -1228,7 +1275,7 @@ public:
     // Represent the full output tensor, slice to get the tile this CTA is responsible for
     PostsumOp first_store_srcs[4], second_store_srcs[4];
     bool use_tma_first_store = false;
-    auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutFinal, first_store_srcs, l_coord, use_tma_first_store);
+    auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, true, first_store_srcs, l_coord, use_tma_first_store);
     PostsumOp first_store_dest = get<1>(first_store_tuple);
     auto& tma_store_dorm = get<2>(first_store_tuple) ? params.tma_store_postsum_m : params.tma_store_d ;
     auto& tma_add_dorm = get<2>(first_store_tuple) ? params.tma_add_postsum_m : params.tma_add_d;
@@ -1239,18 +1286,26 @@ public:
           d_m_coord + (output_idx / 2) * (M / 2 / size<0>(CtaTileMNK{})),
           n_coord + (output_idx % 2) * (N / 2 / size<1>(CtaTileMNK{}))),
         Int<0>{});
+    } else {
+      coord_shape = append<3>(
+        make_shape(
+          m_coord + (first_store_dest.get_op() * (M/2))/size<0>(CtaTileMNK{}) +
+            (IsMoEGemmKernel ? (l_coord * 4*M/2)/size<0>(CtaTileMNK{}) : 0),
+          n_coord),
+        Int<0>{});
     }
-    
-    Tensor mD_mn = params.tma_store_d.get_tma_tensor(append<3>(make_shape(M,N), Int<1>{}));            //       (M,N,L)
+
+    Tensor mD_mn = get<2>(first_store_tuple) ? params.tma_store_postsum_m.get_tma_tensor(append<3>(make_shape(M/2,N/2), Int<1>{})) :
+                                               params.tma_store_d.get_tma_tensor(append<3>(make_shape(M,N), Int<1>{}));            //       (M,N,L)
 
     Tensor mD = coalesce(mD_mn, take<0,2>(CtaTileMNK{}));
     Tensor gD = local_tile(mD, take<0,2>(CtaTileMNK{}), coord_shape);                                  // (CTA_M,CTA_N)
 
     bool use_tma_second_store = false;
-    auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, MemLayout::LayoutInterim1D, second_store_srcs, l_coord, use_tma_second_store);
+    auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, false, second_store_srcs, l_coord, use_tma_second_store);
     bool has_second_store = get<1>(second_store_tuple).valid();
     PostsumOp second_store_dest = get<1>(second_store_tuple);
-    Tensor mD2_mn = get<0>(second_store_tuple);
+    Tensor mD2_mn = mD_mn;//get<0>(second_store_tuple);
     Tensor mD2 = coalesce(mD2_mn, take<0,2>(CtaTileMNK{}));
     Tensor gD2 = local_tile(mD2, take<0,2>(CtaTileMNK{}), coord_shape);
 
@@ -1438,6 +1493,7 @@ public:
       synchronize(); // ensure all threads have issued their async fence
       if constexpr (is_destination_supported) {
         if (issue_tma_store) {
+          auto active_store_tensormap = get<2>(first_store_tuple) ? store_postsum_tensormap : store_tensormap;
           if (use_tma_first_store) {
             if (thread_idx == 0) {
               //TODO: This tensormap probably needs to be fixed for multiple groups
@@ -1447,7 +1503,7 @@ public:
                 copy(tma_add_dorm, sD_tile, gD_tile);
               }
               else {
-                copy(tma_add_dorm.with(store_tensormap), sD_tile, gD_tile);
+                copy(tma_add_dorm.with(active_store_tensormap), sD_tile, gD_tile);
               }
             }
             // copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
@@ -1456,7 +1512,7 @@ public:
               copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
             }
             else {
-              copy(tma_store_dorm.with(store_tensormap), bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
+              copy(tma_store_dorm.with(active_store_tensormap), bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
             }
           }
         }
@@ -1525,7 +1581,7 @@ public:
             const uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{}));
             if (first_store_srcs[0].valid()) {
               // copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
-              if (true) {
+              if (first_store_srcs[0].is_layout_interim_linear()) {
                 cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC + load_wait_state.index()*STAGE_ELEMS);
                 for (int i = 0; i < size(tSR_rC); i += 8) {
                   auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
@@ -1533,9 +1589,9 @@ public:
                     tSR_rC(i + j) = frg[j];
                 }
               }
-            }
-            else {
-              copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
+              else {
+                copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
+              }
             }
             if (first_store_srcs[1].valid()) {
               if (first_store_srcs[1].is_layout_interim_linear()) {
@@ -1625,7 +1681,7 @@ public:
           }
 
           //TODO: Here addition with source C happens
-          if (first_store_srcs[0].valid() and first_store_srcs[0].is_layout_interim_linear()) {
+          if (first_store_srcs[0].valid() and (first_store_srcs[0].is_layout_interim_linear() || first_store_srcs[0].is_layout_interim_matrix())) {
             cutlass::Array<ElementD, FragmentSize> frg;
             for (int i = 0; i < size(tSR_rC); i++) {
               frg[i] = tSR_rC(i);
@@ -1643,7 +1699,7 @@ public:
             }
           }
 
-          if (first_store_srcs[1].valid() and first_store_srcs[1].is_layout_interim_linear()) {
+          if (first_store_srcs[1].valid() and (first_store_srcs[1].is_layout_interim_linear() || first_store_srcs[1].is_layout_interim_matrix())) {
             // typename decltype(tRS_rCompute_frg)::x y;
             cutlass::Array<ElementD, FragmentSize> frg;
             for (int i = 0; i < size(tSR_rC2); i++) {
@@ -1768,7 +1824,7 @@ public:
       return store_tensormaps;
     }
     TmaDescriptor* null_tma_desc = nullptr;
-    return cute::make_tuple(null_tma_desc);
+    return cute::make_tuple(null_tma_desc, null_tma_desc);
   }
 
   //
@@ -1786,42 +1842,53 @@ public:
 
     if constexpr (IsMoEGemmKernel) {
       TmaDescriptor* null_tma_desc = nullptr;
-      return cute::make_tuple(null_tma_desc);
+      return cute::make_tuple(null_tma_desc, null_tma_desc);
     }
     else {
 
-    constexpr uint32_t NumInputTensors = NumEpilogueWarpGroups + (cute::is_void_v<ElementC> ? 0 : 1);
-    Layout desc_layout = make_layout(make_shape(sm_count, Int<NumInputTensors>{}));
+    constexpr uint32_t NumTensorMaps = 2 * NumEpilogueWarpGroups +
+      (cute::is_void_v<ElementC> ? 0 : 2 * NumEpilogueWarpGroups);
+    Layout desc_layout = make_layout(make_shape(sm_count, Int<NumTensorMaps>{}));
 
     Tensor gmem_tensormap = make_tensor(params.tensormaps, desc_layout);                      // (SMs, NumInputTensors)
 
     if constexpr (IsLoad) {
       if (is_source_supported) {
-        constexpr int C_tensormap_index = NumEpilogueWarpGroups;
+        constexpr int C_tensormap_index = 2 * NumEpilogueWarpGroups;
+        constexpr int Postsum_tensormap_index = 3 * NumEpilogueWarpGroups;
         Tensor pC_tensormap = make_tensor(params.tma_load_c.get_tma_descriptor(), Int<1>{}, Int<1>{});
         Tensor sC_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_C), Int<1>{}, Int<1>{});
+        Tensor pPostsum_tensormap = make_tensor(params.tma_load_postsum_m.get_tma_descriptor(), Int<1>{}, Int<1>{});
+        Tensor sPostsum_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_postsum_load), Int<1>{}, Int<1>{});
 
         if (cute::elect_one_sync()) {
           // Bringing tensormaps from params to smem for modification later
           copy(recast<uint128_t>(pC_tensormap), recast<uint128_t>(sC_tensormap));
+          copy(recast<uint128_t>(pPostsum_tensormap), recast<uint128_t>(sPostsum_tensormap));
         }
         __syncwarp();
-        return cute::make_tuple(&gmem_tensormap(sm_idx, C_tensormap_index));
+        return cute::make_tuple(&gmem_tensormap(sm_idx, C_tensormap_index + warp_group_idx),
+              &gmem_tensormap(sm_idx, Postsum_tensormap_index + warp_group_idx));
 
       }
       TmaDescriptor* null_tma_desc = nullptr;
-      return cute::make_tuple(null_tma_desc);
+      return cute::make_tuple(null_tma_desc, null_tma_desc);
     }
     else {
+      constexpr int Postsum_tensormap_index = NumEpilogueWarpGroups;
       Tensor pD_tensormap = make_tensor(params.tma_store_d.get_tma_descriptor(), Int<1>{}, Int<1>{});
       Tensor sD_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_D[warp_group_idx]), Int<1>{}, Int<1>{});
+      Tensor pPostsum_tensormap = make_tensor(params.tma_store_postsum_m.get_tma_descriptor(), Int<1>{}, Int<1>{});
+      Tensor sPostsum_tensormap = make_tensor(make_smem_ptr(&shared_tensormaps.smem_tensormap_postsum_store[warp_group_idx]), Int<1>{}, Int<1>{});
 
       if (cute::elect_one_sync()) {
         // Bringing tensormaps from params to smem for modification later
         copy(recast<uint128_t>(pD_tensormap), recast<uint128_t>(sD_tensormap));
+        copy(recast<uint128_t>(pPostsum_tensormap), recast<uint128_t>(sPostsum_tensormap));
       }
       __syncwarp();
-      return cute::make_tuple(&gmem_tensormap(sm_idx, warp_group_idx));
+      return cute::make_tuple(&gmem_tensormap(sm_idx, warp_group_idx),
+                              &gmem_tensormap(sm_idx, Postsum_tensormap_index + warp_group_idx));
     }
     }
   }
@@ -1843,10 +1910,16 @@ public:
                                                           params.ptr_C[next_batch]);
         }
       }
+      auto postsum_ptr = static_cast<ElementD*>(params.ptr_postsum_m) + params.postsum_m_batch_indices[next_batch];
+      cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_postsum_load,
+                                                      postsum_ptr);
     }
     else if constexpr (is_destination_supported) {
       cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_D[warp_group_idx],
                                                       params.ptr_D[next_batch]);
+      auto postsum_ptr = static_cast<ElementD*>(params.ptr_postsum_m) + params.postsum_m_batch_indices[next_batch];
+      cute::tma_descriptor_replace_addr_in_shared_mem(shared_tensormaps.smem_tensormap_postsum_store[warp_group_idx],
+                                                      postsum_ptr);
     }
   }
 
@@ -1866,6 +1939,8 @@ public:
     constexpr int MaxTensorRank = 5;
     cute::array<uint32_t, MaxTensorRank> prob_shape  = {1,1,1,1,1};
     cute::array<uint64_t, MaxTensorRank> prob_stride = {0,0,0,0,0};
+    cute::array<uint32_t, MaxTensorRank> postsum_shape  = {1,1,1,1,1};
+    cute::array<uint64_t, MaxTensorRank> postsum_stride = {0,0,0,0,0};
 
     if constexpr (IsLoad) {
       if constexpr (is_source_supported) {
@@ -1884,6 +1959,26 @@ public:
                                                                   prob_stride);
         }
       }
+      NonVoidElementC const* ptr_postsum = nullptr;
+      using PostsumStride = cute::conditional_t<is_m_major_D,
+        decltype(make_stride(Int<1>{}, uint32_t{}, Int<0>{})),
+        decltype(make_stride(uint32_t{}, Int<1>{}, Int<0>{}))>;
+      PostsumStride dPostsum{};
+      if constexpr (is_m_major_D) {
+        get<1>(dPostsum) = M/2;
+      }
+      else {
+        get<0>(dPostsum) = N/2;
+      }
+      Tensor tensor_postsum = make_tensor(ptr_postsum, make_layout(make_shape(4*M/2,N/2,Int<1>{}), dPostsum));
+      cute::detail::fill_tma_gmem_shape_stride(params.tma_load_postsum_m, tensor_postsum,
+                                               postsum_shape, postsum_stride);
+      for (uint64_t& stride : postsum_stride) {
+        stride = (stride * sizeof_bits_v<NonVoidElementC>) / 8;
+      }
+      cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_postsum_load,
+                                                              postsum_shape,
+                                                              postsum_stride);
     }
     else if constexpr (is_destination_supported) {
       ElementD const* ptr_D = nullptr;
@@ -1899,6 +1994,27 @@ public:
       cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_D[warp_group_idx],
                                                               prob_shape,
                                                               prob_stride);
+
+      NonVoidElementD const* ptr_postsum = nullptr;
+      using PostsumStride = cute::conditional_t<is_m_major_D,
+        decltype(make_stride(Int<1>{}, uint32_t{}, Int<0>{})),
+        decltype(make_stride(uint32_t{}, Int<1>{}, Int<0>{}))>;
+      PostsumStride dPostsum{};
+      if constexpr (is_m_major_D) {
+        get<1>(dPostsum) = M/2;
+      }
+      else {
+        get<0>(dPostsum) = N/2;
+      }
+      Tensor tensor_postsum = make_tensor(ptr_postsum, make_layout(make_shape(4*M/2,N/2,Int<1>{}), dPostsum));
+      cute::detail::fill_tma_gmem_shape_stride(params.tma_store_postsum_m, tensor_postsum,
+                                               postsum_shape, postsum_stride);
+      for (uint64_t& stride : postsum_stride) {
+        stride = (stride * sizeof_bits_v<NonVoidElementD>) / 8;
+      }
+      cute::tma_descriptor_replace_dims_strides_in_shared_mem(shared_tensormaps.smem_tensormap_postsum_store[warp_group_idx],
+                                                              postsum_shape,
+                                                              postsum_stride);
     }
   }
 
@@ -1933,6 +2049,7 @@ public:
   tensormaps_cp_fence_release(
       TensorMapStorage& shared_tensormaps,
       cute::TmaDescriptor const* tensormap,
+      cute::TmaDescriptor const* postsum_tensormap,
       const int32_t warp_group_idx = 0) {
     if constexpr (!IsMoEGemmKernel) {
     // Commit and wait for all TMA load/store instructions before updating the tensormap in gmem.
@@ -1949,27 +2066,32 @@ public:
       if constexpr (is_source_supported) {
         tma_desc_wait_all_fn();
         tma_descriptor_cp_fence_release(tensormap, shared_tensormaps.smem_tensormap_C);
+        tma_descriptor_cp_fence_release(postsum_tensormap, shared_tensormaps.smem_tensormap_postsum_load);
       }
     }
     else if constexpr (is_destination_supported) {
       tma_desc_wait_all_fn();
       tma_descriptor_cp_fence_release(tensormap, shared_tensormaps.smem_tensormap_D[warp_group_idx]);
+      tma_descriptor_cp_fence_release(postsum_tensormap, shared_tensormaps.smem_tensormap_postsum_store[warp_group_idx]);
     }
     }
   }
 
   template <bool IsLoad>
   CUTLASS_DEVICE
-  void
-  tensormaps_fence_acquire(cute::TmaDescriptor const* tensormap) {
+  void tensormaps_fence_acquire(
+      cute::TmaDescriptor const* tensormap,
+      cute::TmaDescriptor const* postsum_tensormap) {
     if constexpr (!IsMoEGemmKernel) {
       if constexpr (IsLoad) {
         if constexpr (is_source_supported) {
           cute::tma_descriptor_fence_acquire(tensormap);
+          cute::tma_descriptor_fence_acquire(postsum_tensormap);
         }
       }
       else {
         cute::tma_descriptor_fence_acquire(tensormap);
+        cute::tma_descriptor_fence_acquire(postsum_tensormap);
       }
     }
   }

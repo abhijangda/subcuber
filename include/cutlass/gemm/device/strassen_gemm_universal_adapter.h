@@ -743,13 +743,22 @@ public:
                                               GemmKernelM0, GemmKernelM1, GemmKernelM2, GemmKernelM3,
                                               GemmKernelM4, GemmKernelM5, GemmKernelM6>;
 
+    uint64_t workspace_offset = 0;
     ElementA* presum_a_workspace = (ElementA*)workspace;
-    uint64_t* presum_a_batch_indices = (uint64_t*)((ElementA*)presum_a_workspace + get_presum_a_workspace_size(args)/sizeof(ElementA));
-    ElementA* presum_b_workspace = (ElementA*)presum_a_workspace + (get_presum_a_workspace_size(args) + get_grouped_gemm_index_size(args))/sizeof(ElementA);
-    uint64_t* presum_b_batch_indices = (uint64_t*)((ElementA*)presum_b_workspace + get_presum_b_workspace_size(args)/sizeof(ElementB));
-    ElementC* postsum_m_workspace = (ElementC*)presum_b_workspace + (get_presum_b_workspace_size(args) + get_grouped_gemm_index_size(args))/sizeof(ElementB);
-    uint64_t* postsum_m_batch_indices = (uint64_t*)(postsum_m_workspace + get_grouped_gemm_index_size(args)/sizeof(ElementC));
-    int* sem_workspace = (int*)(((ElementC*)postsum_m_workspace) + (get_postsum_m_workspace_size(args)+get_grouped_gemm_index_size(args))/sizeof(ElementC));
+    workspace_offset += get_presum_a_workspace_size(args);
+    ElementA* presum_b_workspace = (ElementA*)((char*)workspace + workspace_offset);
+    workspace_offset += get_presum_b_workspace_size(args);
+    ElementC* postsum_m_workspace = (ElementC*)((char*)workspace + workspace_offset);
+    workspace_offset += get_postsum_m_workspace_size(args);
+
+    uint64_t* presum_a_batch_indices = (uint64_t*)((char*)workspace + workspace_offset);
+    workspace_offset += get_grouped_gemm_index_size(args);
+    uint64_t* presum_b_batch_indices = (uint64_t*)((char*)workspace + workspace_offset);
+    workspace_offset += get_grouped_gemm_index_size(args);
+    uint64_t* postsum_m_batch_indices = (uint64_t*)((char*)workspace + workspace_offset);
+    workspace_offset += get_grouped_gemm_index_size(args);
+
+    int* sem_workspace = (int*)(((char*)workspace) + workspace_offset);
 
     if (presum_a_batch_indices != nullptr) {
       cudaMemcpy(presum_a_batch_indices, get_presum_a_batch_indices(args).data(),
@@ -1395,11 +1404,6 @@ public:
     if ((!only_m or valid_ms[0] == 1) && ParallelGroup0::HasAKernel()) {
       result = run_parallel<ParallelGroup0>(paramsM0_, paramsM1_, paramsM2_, paramsM3_, paramsM4_, paramsM5_, paramsM6_,
                                             streams[(stream_idx++)%num_streams], cuda_adapter, launch_with_pdl);
-      {
-        auto result = cudaDeviceSynchronize();
-        if (result != cudaSuccess)
-        {printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(result)); return Status::kErrorInternal;}
-      }
       if (result != Status::kSuccess) {
         printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(cudaGetLastError())); return Status::kErrorInternal;
       }

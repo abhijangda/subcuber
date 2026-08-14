@@ -1115,7 +1115,15 @@ public:
         int32_t const sm_idx = blockIdx.x + (blockIdx.y * gridDim.x);
         int32_t const sm_count = params.hw_info.sm_count;
 
-        auto epi_load_tensormap = get<0>(collective_epilogue.load_init(params.epilogue, shared_storage.tensormaps.epilogue, sm_count, sm_idx));
+        auto epi_load_tensormaps_0 = collective_epilogue.load_init(
+          params.epilogue, shared_storage.tensormaps.epilogue, sm_count, sm_idx, 0);
+        auto epi_load_tensormaps_1 = collective_epilogue.load_init(
+          params.epilogue, shared_storage.tensormaps.epilogue, sm_count, sm_idx, 1);
+        cute::array<cute::TmaDescriptor const*, NumMmaWarpGroups> epi_load_tensormaps = {
+          get<0>(epi_load_tensormaps_0), get<0>(epi_load_tensormaps_1)};
+        cute::array<cute::TmaDescriptor const*, NumMmaWarpGroups> epi_load_postsum_tensormaps = {
+          get<1>(epi_load_tensormaps_0), get<1>(epi_load_tensormaps_1)};
+        int32_t epi_load_tensormap_batches[NumMmaWarpGroups] = {work_tile_info.L_idx, -1};
 
         bool did_batch_change = true;
         constexpr bool IsEpiLoad = true;
@@ -1123,7 +1131,7 @@ public:
         collective_epilogue.template tensormaps_perform_update<IsEpiLoad>(
           shared_storage.tensormaps.epilogue,
           params.epilogue,
-          epi_load_tensormap,
+          epi_load_tensormaps[0],
           problem_shape_MNKL,
           work_tile_info.L_idx,
           0
@@ -1131,7 +1139,8 @@ public:
 
         // Converge before issuing tensormap fence release since fence is aligned
         __syncwarp();
-        collective_epilogue.template tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue, epi_load_tensormap, 0);
+        collective_epilogue.template tensormaps_cp_fence_release<IsEpiLoad>(
+          shared_storage.tensormaps.epilogue, epi_load_tensormaps[0], epi_load_postsum_tensormaps[0], 0);
 
         do {
           int32_t curr_batch = work_tile_info.L_idx;
@@ -1142,12 +1151,15 @@ public:
             ++tile_scheduler_pipe_consumer_state;
           }
 
-          auto tensormap_update_and_fence = [&](decltype(work_tile_info) work_tile_info2, bool call_fence_acquire) {
-            did_batch_change = curr_batch != work_tile_info.L_idx;
+          auto tensormap_update_and_fence = [&](decltype(work_tile_info) work_tile_info2,
+                                                int warp_group_idx,
+                                                bool call_fence_acquire) {
+            bool descriptor_batch_changed = work_tile_info2.is_valid() &&
+              epi_load_tensormap_batches[warp_group_idx] != work_tile_info2.L_idx;
 
-            if (work_tile_info.is_valid() && did_batch_change) {
+            if (descriptor_batch_changed) {
               if constexpr (IsGroupedGemmKernel) {
-                problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(work_tile_info.L_idx), 1);
+                problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(work_tile_info2.L_idx), 1);
               }
 
               // tensormap update
@@ -1155,17 +1167,24 @@ public:
                 collective_epilogue.template tensormaps_perform_update<IsEpiLoad>(
                   shared_storage.tensormaps.epilogue,
                   params.epilogue,
-                  epi_load_tensormap,
+                  epi_load_tensormaps[warp_group_idx],
                   problem_shape_MNKL,
-                  work_tile_info.L_idx,
-                  0
+                  work_tile_info2.L_idx,
+                  warp_group_idx
                 );
 
                 // Converge before issuing tensormap fence release since fence is aligned
                 __syncwarp();
-                collective_epilogue.template tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue, epi_load_tensormap, 0);
-                if (call_fence_acquire)
-                  collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_load_tensormap);
+                collective_epilogue.template tensormaps_cp_fence_release<IsEpiLoad>(
+                  shared_storage.tensormaps.epilogue,
+                  epi_load_tensormaps[warp_group_idx],
+                  epi_load_postsum_tensormaps[warp_group_idx],
+                  warp_group_idx);
+                epi_load_tensormap_batches[warp_group_idx] = work_tile_info2.L_idx;
+                if (call_fence_acquire) {
+                  collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(
+                    epi_load_tensormaps[warp_group_idx], epi_load_postsum_tensormaps[warp_group_idx]);
+                }
               }
             }
           };
@@ -1176,7 +1195,8 @@ public:
             }
 
             if (did_batch_change) {
-              collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_load_tensormap);
+              collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(
+                epi_load_tensormaps[0], epi_load_postsum_tensormaps[0]);
             }
 
             #pragma unroll (StrassenMiGroup::numMs())
@@ -1204,7 +1224,7 @@ public:
                 #pragma unroll 4
                 for (int read_c = 0; read_c < 4; read_c++) {
                   auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                  if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim_linear()) {
+                  if (postsum_src.valid() && postsum_src.is_mem_global()) {
                     postsum_srcs[postsum_src_len++] = postsum_src;
                   }
                 }
@@ -1216,7 +1236,10 @@ public:
                   auto work_tile_info2 = (wg == 0) ? work_tile_info : next_work_tile_info;
                   if (!work_tile_info2.is_valid()) continue;
 
-                  tensormap_update_and_fence(work_tile_info2, true);
+                  tensormap_update_and_fence(work_tile_info2, wg, true);
+
+                  auto epi_load_tensormap = epi_load_tensormaps[wg];
+                  auto epi_load_postsum_tensormap = epi_load_postsum_tensormaps[wg];
 
                   auto m_coord = idx2crd(work_tile_info2.M_idx, shape<2>(gA_mkl));
                   auto n_coord = idx2crd(work_tile_info2.N_idx, shape<2>(gB_nkl));
@@ -1225,19 +1248,37 @@ public:
                   if (postsum_src_len > 0) {
                     load_order_barrier.wait();
                     load_order_barrier.advance();
-                    epi_load_pipe_producer_state =
-                    collective_epilogue.load_m0(
-                      epi_load_pipeline,
-                      epi_load_pipe_producer_state,
-                      problem_shape_MNKL,
-                      blk_shape,
-                      blk_coord, fused_mi,
-                      tiled_mma,
-                      lane_idx,
-                      shared_storage.tensors.epilogue,
-                      shared_storage.tensors.epilogue,
-                      postsum_srcs
-                    );
+                    if (postsum_src_len > 0) {
+                      epi_load_pipe_producer_state =
+                      collective_epilogue.load(
+                        epi_load_pipeline,
+                        epi_load_pipe_producer_state,
+                        problem_shape_MNKL,
+                        blk_shape,
+                        blk_coord, fused_mi,
+                        tiled_mma,
+                        lane_idx,
+                        shared_storage.tensors.epilogue,
+                        shared_storage.tensors.epilogue,
+                        epi_load_tensormap,
+                        epi_load_postsum_tensormap,
+                        postsum_srcs
+                      );
+                    } else {
+                      epi_load_pipe_producer_state =
+                      collective_epilogue.load_m0(
+                        epi_load_pipeline,
+                        epi_load_pipe_producer_state,
+                        problem_shape_MNKL,
+                        blk_shape,
+                        blk_coord, fused_mi,
+                        tiled_mma,
+                        lane_idx,
+                        shared_storage.tensors.epilogue,
+                        shared_storage.tensors.epilogue,
+                        postsum_srcs
+                      );
+                    }
                   }
                 }
               }
@@ -1254,7 +1295,8 @@ public:
             }
           }
 
-          tensormap_update_and_fence(work_tile_info, false);
+          did_batch_change = work_tile_info.is_valid() && curr_batch != work_tile_info.L_idx;
+          tensormap_update_and_fence(work_tile_info, 0, false);
         } while (work_tile_info.is_valid()); // Scheduler work fetch loop
 
         // Make sure all Consumer Warp Groups have been waited upon
@@ -1273,7 +1315,10 @@ public:
       // Do we potentially issue tail arrives for TMA stores, if epilogue load is waiting for it
       bool do_store_tail = false;
       // Get a copy of tensormaps
-      auto epi_store_tensormap = get<0>(collective_epilogue.store_init(params.epilogue, shared_storage.tensormaps.epilogue, sm_count, sm_idx, consumer_warp_group_idx));
+      auto epi_store_tensormaps = collective_epilogue.store_init(
+        params.epilogue, shared_storage.tensormaps.epilogue, sm_count, sm_idx, consumer_warp_group_idx);
+      auto epi_store_tensormap = get<0>(epi_store_tensormaps);
+      auto epi_store_postsum_tensormap = get<1>(epi_store_tensormaps);
 
       bool did_batch_change = true;
       constexpr bool IsEpiLoad = false;
@@ -1293,6 +1338,7 @@ public:
         __syncwarp();
         collective_epilogue.template tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue,
                                                                     epi_store_tensormap,
+                                                                    epi_store_postsum_tensormap,
                                                                     consumer_warp_group_idx);
       }
 
@@ -1349,7 +1395,8 @@ public:
 
             is_neg = misign == -1;
 
-            any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
+            any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final() ||
+                                                           postsum_global_dest.is_layout_interim_matrix();
             any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
 
             #pragma unroll 4
@@ -1408,7 +1455,7 @@ public:
             params.scheduler, work_tile_info, accumulators, NumMmaWarpGroups, consumer_warp_group_idx);
 
           if (did_batch_change) {
-            collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_store_tensormap);
+            collective_epilogue.template tensormaps_fence_acquire<IsEpiLoad>(epi_store_tensormap, epi_store_postsum_tensormap);
           }
 
           if (is_neg)
@@ -1456,6 +1503,7 @@ public:
                 mma_thread_idx,
                 shared_storage.tensors.epilogue,
                 epi_store_tensormap,
+                epi_store_postsum_tensormap,
                 work_tile_info.reduction_subtile_idx()
               );
 
@@ -1554,6 +1602,7 @@ public:
             __syncwarp();
             collective_epilogue.template tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue,
                                                                       epi_store_tensormap,
+                                                                      epi_store_postsum_tensormap,
                                                                       consumer_warp_group_idx);
           }
         }
