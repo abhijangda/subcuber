@@ -1780,12 +1780,13 @@ public:
 
 private:
   Params0 params0_;
+  size_t kernel_workspace_size_;
 
 public:
-  ParallelGroupParams(const Params0& params0, const Params1& params1, const Params2& params2,
+  ParallelGroupParams(size_t kernel_workspace_size, const Params0& params0, const Params1& params1, const Params2& params2,
                       const Params3& params3, const Params4& params4, const Params5& params5,
                       const Params6& params6) :
-                      params0_(params0)
+                      params0_(params0), kernel_workspace_size_(kernel_workspace_size)
   {}
 
   CUTLASS_HOST_DEVICE
@@ -1821,6 +1822,11 @@ public:
   CUTLASS_HOST_DEVICE
   Params6 params6() const {
     return Params6(params0());
+  }
+
+  CUTLASS_HOST_DEVICE
+  size_t kernel_workspace_size() const {
+    return kernel_workspace_size_;
   }
 };
 
@@ -1934,6 +1940,26 @@ public:
     if (ParallelGroup::HasGroup(6))
       return sizeof(typename GemmKernel6::Mma::FragmentC);
     return sizeof(typename GemmKernel0::Mma::FragmentC);
+  }
+
+  CUTLASS_HOST
+  static constexpr size_t GetWorkspaceSize(typename GemmKernel0::Arguments const& args) {
+    size_t sz = 0;
+    if (ParallelGroup::HasGroup(0))
+      sz += GemmKernel0::get_workspace_size(args);
+    if (ParallelGroup::HasGroup(1))
+      sz += GemmKernel1::get_workspace_size(args);
+    if (ParallelGroup::HasGroup(2))
+      sz += GemmKernel2::get_workspace_size(args);
+    if (ParallelGroup::HasGroup(3))
+      sz += GemmKernel3::get_workspace_size(args);
+    if (ParallelGroup::HasGroup(4))
+      sz += GemmKernel4::get_workspace_size(args);
+    if (ParallelGroup::HasGroup(5))
+      sz += GemmKernel5::get_workspace_size(args);
+    if (ParallelGroup::HasGroup(6))
+      sz += GemmKernel6::get_workspace_size(args);
+    return sz;
   }
 
   CUTLASS_HOST_DEVICE

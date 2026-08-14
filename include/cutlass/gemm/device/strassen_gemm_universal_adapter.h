@@ -597,7 +597,10 @@ public:
     workspace_bytes += get_presum_a_workspace_size(args) + get_grouped_gemm_index_size(args) +
                        get_presum_b_workspace_size(args) + get_grouped_gemm_index_size(args) +
                        get_postsum_m_workspace_size(args) + get_grouped_gemm_index_size(args) +
-                       GemmKernel::get_workspace_size(args);
+                       GemmKernelM0::get_workspace_size(args) + GemmKernelM1::get_workspace_size(args) + 
+                       GemmKernelM2::get_workspace_size(args) + GemmKernelM3::get_workspace_size(args) +
+                       GemmKernelM4::get_workspace_size(args) + GemmKernelM5::get_workspace_size(args) +
+                       GemmKernelM6::get_workspace_size(args);
 
     CUTLASS_TRACE_HOST("  workspace_bytes: " << workspace_bytes);
 
@@ -938,27 +941,33 @@ public:
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM1::initialize_workspace(args1, sem_workspace, stream, cuda_adapter);
+    uint64_t sem_offset = GemmKernelM0::get_workspace_size(args0);
+    status = GemmKernelM1::initialize_workspace(args1, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM2::initialize_workspace(args2, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM1::get_workspace_size(args1);
+    status = GemmKernelM2::initialize_workspace(args2, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM3::initialize_workspace(args3, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM2::get_workspace_size(args2);
+    status = GemmKernelM3::initialize_workspace(args3, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM4::initialize_workspace(args4, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM3::get_workspace_size(args3);
+    status = GemmKernelM4::initialize_workspace(args4, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM5::initialize_workspace(args5, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM4::get_workspace_size(args4);
+    status = GemmKernelM5::initialize_workspace(args5, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM6::initialize_workspace(args6, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM5::get_workspace_size(args5);
+    status = GemmKernelM6::initialize_workspace(args6, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
