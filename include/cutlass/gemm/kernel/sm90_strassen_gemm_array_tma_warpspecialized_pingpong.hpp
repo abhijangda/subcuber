@@ -336,12 +336,12 @@ public:
 
     CUTLASS_HOST_DEVICE
     int get_stride_MA(int problem_idx = 0) const {
-      return problem_idx == 0 ? 0 : get_problem_shape_k(problem_idx)/2;
+      return get_problem_shape_k(problem_idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
     int get_stride_MB(int problem_idx = 0) const {
-      return problem_idx == 0 ? 0 : get_problem_shape_n(problem_idx)/2;
+      return get_problem_shape_n(problem_idx)/2;
     }
 
     CUTLASS_HOST_DEVICE

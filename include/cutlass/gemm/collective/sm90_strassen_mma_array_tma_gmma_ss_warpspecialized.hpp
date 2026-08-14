@@ -1122,9 +1122,9 @@ struct CollectiveStrassenMma<
                     m_coord * kPresumComputeIterationsA + presum_write_iter,
                   presum_tile + new_n_coord,
                   0));
-                  auto store_slice = mainloop_params.tma_store_presumld_a.get_slice(Int<0>{});
-                  auto store_src = store_slice.partition_S(smem_src);
-                  auto store_dst = store_slice.partition_D(output_tile);
+              auto store_slice = mainloop_params.tma_store_presumld_a.get_slice(Int<0>{});
+              auto store_src = store_slice.partition_S(smem_src);
+              auto store_dst = store_slice.partition_D(output_tile);
               if (IsMoEGemmKernel) {
                 copy(mainloop_params.tma_store_presumld_a,
                       store_src,

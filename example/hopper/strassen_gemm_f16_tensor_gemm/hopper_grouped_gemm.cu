@@ -825,8 +825,8 @@ void initialize(const Options &options) {
     uint64_t elements_A = uint64_t(get<0>(problem)) * uint64_t(get<2>(problem));
     uint64_t elements_B = uint64_t(get<2>(problem)) * uint64_t(get<1>(problem));
 
-    initialize_block(block_A.get() + offset_A.at(i), i, elements_A, seed + 2021 + 2*i, false, true);
-    initialize_block(block_B.get() + offset_B.at(i), i, elements_B, seed + 2022 + 2*i, false, true);
+    initialize_block(block_A.get() + offset_A.at(i), i, elements_A, seed + 2021 + 2*i, false, false);
+    initialize_block(block_B.get() + offset_B.at(i), i, elements_B, seed + 2022 + 2*i, false, false);
   }
   block_alpha.copy_from_host(alpha_host.data());
   block_beta.copy_from_host(beta_host.data());
