@@ -462,8 +462,9 @@ public:
 
     typename Params::TMA_C tma_load_postsum_m{};
 
+    auto postsum_m_extent = IsMoEGemmKernel ? (7 * moe_M) / 4 : (4 * moe_M) / 2;
     Tensor tensor_load_m = make_tensor(make_gmem_ptr<NonVoidElementC const>(postsum_m),
-                                       make_layout(make_shape((4*moe_M)/2,max(init_N/2,1),init_L),
+                       make_layout(make_shape(postsum_m_extent,max(init_N/2,1),init_L),
                                                    make_stride(max(get<0>(stride_d)/2, get<0>(stride_d)), get<1>(stride_d), get<2>(stride_d))));
     tma_load_postsum_m = make_tma_copy_C_sm90(
         CopyOpG2S{},
@@ -473,7 +474,7 @@ public:
 
     typename Params::TMA_D tma_store_postsum_m{};
     Tensor tensor_store_m = make_tensor(make_gmem_ptr<NonVoidElementD>(postsum_m),
-                                       make_layout(make_shape((4*moe_M)/2,max(init_N/2,1),init_L),
+                                       make_layout(make_shape(postsum_m_extent,max(init_N/2,1),init_L),
                                                    make_stride(max(get<0>(stride_d)/2, get<0>(stride_d)), get<1>(stride_d), get<2>(stride_d))));
 
     tma_store_postsum_m = make_tma_copy_C_sm90(
@@ -706,7 +707,9 @@ public:
     } else if (src_global_ops[0].is_layout_interim_matrix()) {
       c_m_coord += int(src_global_ops[0].get_op()*(M/2)/size<0>(CtaTileMNK{}));
       if constexpr (IsMoEGemmKernel) {
-        c_m_coord += int((l_coord * 4*M/2)/size<0>(CtaTileMNK{}));
+        if (l_coord > 0)
+          c_m_coord += int((params.ptr_D_batch_indices[l_coord] * 7 / 4) /
+                          size<0>(CtaTileMNK{}));
       }
     }
 
@@ -1290,7 +1293,8 @@ public:
       coord_shape = append<3>(
         make_shape(
           m_coord + (first_store_dest.get_op() * (M/2))/size<0>(CtaTileMNK{}) +
-            (IsMoEGemmKernel ? (l_coord * 4*M/2)/size<0>(CtaTileMNK{}) : 0),
+            (IsMoEGemmKernel && l_coord > 0 ? int((params.ptr_D_batch_indices[l_coord] * 7 / 4) /
+              size<0>(CtaTileMNK{})) : 0),
           n_coord),
         Int<0>{});
     }

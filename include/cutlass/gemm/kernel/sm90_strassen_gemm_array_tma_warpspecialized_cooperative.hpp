@@ -921,7 +921,12 @@ public:
           auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
 
           if (did_batch_change) {
-            load_inputs = collective_mainloop.tensors_perform_update(load_inputs, params.mainloop, problem_shape_MNKL, curr_batch);
+            all_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+            load_inputs = collective_mainloop.get_inputs(all_inputs);
+            load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
+            load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+            gA_mkl = get<0>(load_inputs);
+            gB_nkl = get<1>(load_inputs);
             collective_mainloop.tensormaps_fence_acquire(shared_storage.tensormaps.mainloop, input_tensormaps);
           }
           if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
@@ -1051,7 +1056,12 @@ public:
             auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
 
             if (did_batch_change) {
-              load_inputs = collective_mainloop.tensors_perform_update(load_inputs, params.mainloop, problem_shape_MNKL, curr_batch);
+              all_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+              load_inputs = collective_mainloop.get_inputs(all_inputs);
+              load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
+              load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+              gA_mkl = get<0>(load_inputs);
+              gB_nkl = get<1>(load_inputs);
             }
 
             collective_mainloop.load_auxiliary(

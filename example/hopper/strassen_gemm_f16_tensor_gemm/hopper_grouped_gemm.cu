@@ -180,7 +180,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 0 //TMA Reduce
+#if 1 //TMA Reduce
 using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
@@ -231,7 +231,7 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSc
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
-#elif 1
+#elif 0
 #if defined(COOPERATIVE_PINGPONG)
 #error "This schedule do not work with mixed schedule"
 #endif
