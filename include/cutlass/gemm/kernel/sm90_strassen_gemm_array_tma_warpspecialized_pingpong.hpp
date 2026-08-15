@@ -817,11 +817,15 @@ public:
 
     // Optionally append 1s until problem shape is rank-4 in case it is only rank-3 (MNK)
     auto problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(work_tile_info.L_idx), 1);
+    [[maybe_unused]] uint32_t previous_peer_work_k_tile_count = 0;
 
     // Consumer1 is not on the critical path at prologue.
     if (warp_group_role == WarpGroupRole::Consumer1) [[unlikely]] {
       // Advance 2nd Math WG to the next work tile for the startup
       const auto k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape)/2;
+      if constexpr (!IsMoEGemmKernel) {
+        previous_peer_work_k_tile_count = k_tile_count;
+      }
 
       auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, tile_scheduler_pipeline, tile_scheduler_pipe_consumer_state);
       work_tile_info = next_work_tile_info;
@@ -913,6 +917,16 @@ public:
             continue;
           }
 
+          if (did_batch_change) {
+            all_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+            load_inputs = collective_mainloop.get_inputs(all_inputs);
+            load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
+            load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+            gA_mkl = get<0>(load_inputs);
+            gB_nkl = get<1>(load_inputs);
+            collective_mainloop.tensormaps_fence_acquire(shared_storage.tensormaps.mainloop, input_tensormaps);
+          }
+
           // Compute m_coord, n_coord, l_coord with the post-tiled m-shape and n-shape
           auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
           auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
@@ -922,11 +936,6 @@ public:
           auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape)/2;
           auto work_k_tile_start = 0;//TileScheduler::get_work_k_tile_start(work_tile_info);
           auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
-
-          if (did_batch_change) {
-            load_inputs = collective_mainloop.tensors_perform_update(load_inputs, params.mainloop, problem_shape_MNKL, curr_batch);
-            collective_mainloop.tensormaps_fence_acquire(shared_storage.tensormaps.mainloop, input_tensormaps);
-          }
 
           auto tensormap_update_and_fence = [&] (decltype(work_tile_info) work_tile_info2, bool call_fence_acquire) {
             auto next_batch = idx2crd(work_tile_info2.L_idx, shape<4>(gB_nkl)); // Usually just returns work_tile_info.L_idx
@@ -947,6 +956,14 @@ public:
               __syncwarp();
               // Entire warp must do this (i.e. it's aligned)
               collective_mainloop.tensormaps_cp_fence_release(shared_storage.tensormaps.mainloop, input_tensormaps);
+              if (true) {
+                all_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+                load_inputs = collective_mainloop.get_inputs(all_inputs);
+                load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
+                load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+                gA_mkl = get<0>(load_inputs);
+                gB_nkl = get<1>(load_inputs);
+              }
               if (call_fence_acquire) {
                 collective_mainloop.tensormaps_fence_acquire(shared_storage.tensormaps.mainloop, input_tensormaps);
               }
@@ -957,39 +974,42 @@ public:
             if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                 MY_PRINTF("826 %d %d\n", m_coord, n_coord);
             auto load_work_tile = [&] (decltype(work_tile_info) load_work_tile_info, int load_sub_m_idx) {
+              tensormap_update_and_fence(load_work_tile_info, true);
+
               if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                 MY_PRINTF("829 %d %d\n", m_coord, n_coord);
               auto load_m_coord = idx2crd(load_work_tile_info.M_idx, shape<2>(gA_mkl));
               auto load_n_coord = idx2crd(load_work_tile_info.N_idx, shape<2>(gB_nkl));
               auto load_l_coord = idx2crd(load_work_tile_info.L_idx, shape<4>(gB_nkl));
               auto load_blk_coord = make_coord(load_m_coord, load_n_coord, _, load_l_coord);
+              auto load_problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(load_work_tile_info.L_idx), 1);
+              auto load_work_k_tile_count = TileScheduler::get_work_k_tile_count(
+                load_work_tile_info, load_problem_shape_MNKL, blk_shape) / 2;
               auto load_k_tile_iter = cute::make_coord_iterator(shape<3>(gA_mkl));
-              load_k_tile_iter.coord += (is_fused && load_sub_m_idx == 1) ? work_k_tile_count : 0;
+              load_k_tile_iter.coord += (is_fused && load_sub_m_idx == 1) ? load_work_k_tile_count : 0;
 
               if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-                MY_PRINTF("943 %d : %d : %d %d : %d %d %d\n", work_k_tile_count, load_sub_m_idx, load_m_coord, load_n_coord, mainloop_pipe_producer_state.index_, mainloop_pipe_producer_state.phase_, mainloop_pipe_producer_state.count_);
-
-              tensormap_update_and_fence(load_work_tile_info, true);
+                MY_PRINTF("943 %d : %d : %d %d : %d %d %d\n", load_work_k_tile_count, load_sub_m_idx, load_m_coord, load_n_coord, mainloop_pipe_producer_state.index_, mainloop_pipe_producer_state.phase_, mainloop_pipe_producer_state.count_);
 
               collective_mainloop.load(
                 params.mainloop,
-                problem_shape_MNKL,
+                load_problem_shape_MNKL,
                 mainloop_pipeline,
                 mainloop_pipe_producer_state,
                 (is_fused || load_sub_m_idx == 0) ? load_inputs :
                   ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
                 input_tensormaps,
                 load_blk_coord, load_sub_m_idx,
-                load_k_tile_iter, work_k_tile_count,
+                load_k_tile_iter, load_work_k_tile_count,
                 lane_idx,
                 block_rank_in_cluster,
                 shared_storage.tensors.presum_tensors,
                 shared_storage.tensors.mainloop
               );
               // Pipeline state is only advanced if there are K tiles to compute
-              mainloop_pipe_producer_state.advance(work_k_tile_count);
+              mainloop_pipe_producer_state.advance(load_work_k_tile_count);
               if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-                MY_PRINTF("963 %d : %d : %d %d\n", work_k_tile_count, load_sub_m_idx, load_m_coord, load_n_coord);
+                MY_PRINTF("963 %d : %d : %d %d\n", load_work_k_tile_count, load_sub_m_idx, load_m_coord, load_n_coord);
             };
 
             auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, tile_scheduler_pipeline, tile_scheduler_pipe_consumer_state);
@@ -1075,7 +1095,12 @@ public:
             auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
 
             if (did_batch_change) {
-              load_inputs = collective_mainloop.tensors_perform_update(load_inputs, params.mainloop, problem_shape_MNKL, curr_batch);
+              all_inputs = collective_mainloop.load_init(problem_shape_MNKL, params.mainloop);
+              load_inputs = collective_mainloop.get_inputs(all_inputs);
+              load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
+              load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+              gA_mkl = get<0>(load_inputs);
+              gB_nkl = get<1>(load_inputs);
             }
 
             collective_mainloop.load_auxiliary(
@@ -1158,8 +1183,10 @@ public:
               epi_load_tensormap_batches[warp_group_idx] != work_tile_info2.L_idx;
 
             if (descriptor_batch_changed) {
+              auto descriptor_problem_shape_MNKL = problem_shape_MNKL;
               if constexpr (IsGroupedGemmKernel) {
-                problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(work_tile_info2.L_idx), 1);
+                descriptor_problem_shape_MNKL = append<4>(
+                  params.problem_shape.get_problem_shape(work_tile_info2.L_idx), 1);
               }
 
               // tensormap update
@@ -1168,7 +1195,7 @@ public:
                   shared_storage.tensormaps.epilogue,
                   params.epilogue,
                   epi_load_tensormaps[warp_group_idx],
-                  problem_shape_MNKL,
+                  descriptor_problem_shape_MNKL,
                   work_tile_info2.L_idx,
                   warp_group_idx
                 );
@@ -1240,6 +1267,11 @@ public:
 
                   auto epi_load_tensormap = epi_load_tensormaps[wg];
                   auto epi_load_postsum_tensormap = epi_load_postsum_tensormaps[wg];
+                  auto load_problem_shape_MNKL = problem_shape_MNKL;
+                  if constexpr (IsGroupedGemmKernel) {
+                    load_problem_shape_MNKL = append<4>(
+                      params.problem_shape.get_problem_shape(work_tile_info2.L_idx), 1);
+                  }
 
                   auto m_coord = idx2crd(work_tile_info2.M_idx, shape<2>(gA_mkl));
                   auto n_coord = idx2crd(work_tile_info2.N_idx, shape<2>(gB_nkl));
@@ -1253,7 +1285,7 @@ public:
                       collective_epilogue.load(
                         epi_load_pipeline,
                         epi_load_pipe_producer_state,
-                        problem_shape_MNKL,
+                        load_problem_shape_MNKL,
                         blk_shape,
                         blk_coord, fused_mi,
                         tiled_mma,
@@ -1269,7 +1301,7 @@ public:
                       collective_epilogue.load_m0(
                         epi_load_pipeline,
                         epi_load_pipe_producer_state,
-                        problem_shape_MNKL,
+                        load_problem_shape_MNKL,
                         blk_shape,
                         blk_coord, fused_mi,
                         tiled_mma,
@@ -1360,9 +1392,26 @@ public:
         // MSVC CTAD breaks if we say "Tensor" here, so we use "auto" instead.
         auto accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape));               // (MMA,MMA_M,MMA_N)
         auto consumer_scratch_idx = canonical_warp_group_idx() - static_cast<int>(WarpGroupRole::Consumer0);
-        bool has_peer_work = true;
-        if (StrassenMiGroup::numMs() > 1 && consumer_scratch_idx == 0) {
-          has_peer_work = scheduler.has_next_work();
+        auto [skipped_peer_work_tile_info, skipped_peer_increment_pipe] =
+          scheduler.fetch_next_work(work_tile_info, tile_scheduler_pipeline, tile_scheduler_pipe_consumer_state);
+        if (skipped_peer_increment_pipe) {
+          ++tile_scheduler_pipe_consumer_state;
+        }
+        bool has_skipped_peer_work = skipped_peer_work_tile_info.is_valid();
+        auto skipped_peer_work_k_tile_count = work_k_tile_count;
+        if constexpr (!IsMoEGemmKernel) {
+          if (has_skipped_peer_work) {
+            auto skipped_peer_problem_shape_MNKL = append<4>(
+              params.problem_shape.get_problem_shape(skipped_peer_work_tile_info.L_idx), 1);
+            skipped_peer_work_k_tile_count = TileScheduler::get_work_k_tile_count(
+              skipped_peer_work_tile_info, skipped_peer_problem_shape_MNKL, blk_shape) / 2;
+          }
+        }
+        bool has_peer_work = consumer_scratch_idx == 0 ? has_skipped_peer_work : true;
+        auto peer_work_k_tile_count = work_k_tile_count;
+        if constexpr (!IsMoEGemmKernel) {
+          peer_work_k_tile_count = consumer_scratch_idx == 0 ?
+            skipped_peer_work_k_tile_count : previous_peer_work_k_tile_count;
         }
 
         if (threadIdx.x%128 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
@@ -1371,9 +1420,14 @@ public:
         #pragma unroll (StrassenMiGroup::numMs())
         for (int consumer_sub_m_iter = 0; consumer_sub_m_iter < StrassenMiGroup::numMs(); consumer_sub_m_iter++) {
           const uint32_t mainloop_advance_chunks = (StrassenMiGroup::numMs() > 1) ?
-          (has_peer_work ? NumMmaWarpGroups : 1) :
+            (has_peer_work ? NumMmaWarpGroups : 1) :
             ((consumer_sub_m_iter + 1 < ConsumerSubMIterations) ?
             1 : (NumMmaWarpGroups * ConsumerSubMIterations - (ConsumerSubMIterations - 1)));
+          const bool defer_peer_advance = StrassenMiGroup::numMs() > 1 &&
+            consumer_scratch_idx == 1 && consumer_sub_m_iter + 1 == ConsumerSubMIterations;
+          const uint32_t mainloop_advance = (StrassenMiGroup::numMs() > 1 && has_peer_work && !defer_peer_advance) ?
+            work_k_tile_count + peer_work_k_tile_count :
+            work_k_tile_count * (defer_peer_advance ? 1 : mainloop_advance_chunks);
           auto sub_m_idx = consumer_sub_m_iter;
           if (sub_m_idx == 0 ||
             (StrassenMiGroup::numMs() >= 2 && sub_m_idx == 1) ||
@@ -1447,7 +1501,11 @@ public:
             math_wg_order_barrier.wait();
 
             // Update starting mainloop pipeline state for the next tile
-            mainloop_pipe_consumer_state.advance(work_k_tile_count * mainloop_advance_chunks);
+            if (IsMoEGemmKernel) {
+              mainloop_pipe_consumer_state.advance(work_k_tile_count * mainloop_advance_chunks);
+            } else {
+              mainloop_pipe_consumer_state.advance(mainloop_advance);
+            }
           }
 
           // Perform reduction across splits, if needed
@@ -1559,27 +1617,29 @@ public:
 
         //TODO: Originally this was the case:
         // Get next work tile
-        skipped_peer_work = false;
-        auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, tile_scheduler_pipeline, tile_scheduler_pipe_consumer_state);
-        work_tile_info = next_work_tile_info;
-        if (increment_pipe) {
-          ++tile_scheduler_pipe_consumer_state;
-        }
+        skipped_peer_work = has_skipped_peer_work;
+        work_tile_info = skipped_peer_work_tile_info;
 
         // Skip a tile for pingpong
         if (work_tile_info.is_valid()) {
-          skipped_peer_work = true;
           if constexpr (IsGroupedGemmKernel) {
             problem_shape_MNKL = append<4>(params.problem_shape.get_problem_shape(work_tile_info.L_idx), 1);
           }
-          work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape)/2;
-          // mainloop_pipe_consumer_state.advance(work_k_tile_count);
 
           // Go to next tile
           auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info, tile_scheduler_pipeline, tile_scheduler_pipe_consumer_state);
           work_tile_info = next_work_tile_info;
           if (increment_pipe) {
             ++tile_scheduler_pipe_consumer_state;
+          }
+          if (!IsMoEGemmKernel && consumer_scratch_idx == 1 && work_tile_info.is_valid()) {
+            work_k_tile_count = skipped_peer_work_k_tile_count;
+            mainloop_pipe_consumer_state.advance(work_k_tile_count);
+          }
+          if constexpr (!IsMoEGemmKernel) {
+            if (consumer_scratch_idx == 1) {
+              previous_peer_work_k_tile_count = work_k_tile_count;
+            }
           }
         }
 
