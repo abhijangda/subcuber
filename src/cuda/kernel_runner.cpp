@@ -78,6 +78,16 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_kernel_presum);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_fused_presum);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_cutlass_128x128_pingpong);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_cutlass_128x256_cooperative);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_grouped_cutlass_128x128_pingpong);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_grouped_cutlass_128x256_cooperative);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_2x256);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_2x128);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_4x128);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128);
 DECLARE_KERNEL_RUN_FN(run_hopper_f64_cutlass_128x64);
 DECLARE_KERNEL_RUN_FN(run_hopper_f64_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_cutlass_128x128);
@@ -150,6 +160,16 @@ static const KernelEntry kKernels[] = {
     {"ampere_f32_cutlass_256x128", "ampere", "f32", 0, run_ampere_f32_cutlass_256x128},
     {"hopper_f16_cutlass_128x128_pingpong", "hopper", "f16", 0, run_hopper_f16_cutlass_128x128_pingpong},
     {"hopper_f16_cutlass_128x256_cooperative", "hopper", "f16", 0, run_hopper_f16_cutlass_128x256_cooperative},
+    {"hopper_f16_grouped_cutlass_128x128_pingpong", "hopper", "f16", 0, run_hopper_f16_grouped_cutlass_128x128_pingpong, true},
+    {"hopper_f16_grouped_cutlass_128x256_cooperative", "hopper", "f16", 0, run_hopper_f16_grouped_cutlass_128x256_cooperative, true},
+    {"hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256, true},
+    {"hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256, true},
+    {"hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_2x256", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_2x256, true},
+    {"hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256, true},
+    {"hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_2x128", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_2x128, true},
+    {"hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_4x128", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_4x128, true},
+    {"hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128, true},
+    {"hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128, true},
     {"hopper_f64_cutlass_128x64", "hopper", "f64", 0, run_hopper_f64_cutlass_128x64},
     {"hopper_f64_cutlass_128x128", "hopper", "f64", 0, run_hopper_f64_cutlass_128x128},
     {"hopper_f32_cutlass_128x128", "hopper", "f32", 0, run_hopper_f32_cutlass_128x128},

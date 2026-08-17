@@ -47,6 +47,8 @@ AMPERE_CUBIC_SRCS := \
 HOPPER_CUBIC_SRCS := \
 	kernels/hopper/cubic/hopper_f16_cutlass_128x128_pingpong.cu \
 	kernels/hopper/cubic/hopper_f16_cutlass_128x256_cooperative.cu \
+	kernels/hopper/cubic/hopper_f16_grouped_cutlass_128x128_pingpong.cu \
+	kernels/hopper/cubic/hopper_f16_grouped_cutlass_128x256_cooperative.cu \
 	kernels/hopper/cubic/hopper_f64_cutlass_128x64.cu \
 	kernels/hopper/cubic/hopper_f64_cutlass_128x128.cu \
 	kernels/hopper/cubic/hopper_f32_cutlass_128x128.cu \
@@ -87,6 +89,12 @@ HOPPER_V2_SRCS := \
 	kernels/hopper/strassen_winograd/hopper_f32_sw_fused_presum.cu
 
 HOPPER_V3_SRCS := \
+	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_tma_reduce.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion.cu \
@@ -149,7 +157,7 @@ $(BUILD_DIR)/kernels/%.o: $(CUDA_SRC_DIR)/kernels/%.cu $(CUDA_SRC_DIR)/kernel_ru
 	  $(if $(findstring /hopper/,$<),$(HOPPER_GENCODE),$(if $(findstring /volta/,$<),$(VOLTA_GENCODE),$(AMPERE_GENCODE))) \
 	    $(if $(findstring /hopper/cubic/hopper_f16_cutlass_,$<),$(V3_FLAGS), \
 	    $(if $(findstring /cubic/,$<),$(CUBIC_FLAGS), \
-	  $(if $(findstring hopper_f16_sw_interleaved_presum,$<),$(V3_FLAGS), \
+	  $(if $(or $(findstring hopper_f16_sw_interleaved_presum,$<),$(findstring hopper_f16_moe_sw_interleaved_presum,$<)),$(V3_FLAGS), \
 	    $(if $(findstring _sw_tile,$<),$(TILE_FLAGS), \
 	    $(if $(findstring _fused_presum.cu,$<),$(FUSED_FLAGS), \
 	    $(if $(findstring _kernel_presum.cu,$<),$(KERNEL_PRESUM_FLAGS),$(PRESUM_FLAGS))))))) \

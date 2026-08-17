@@ -573,7 +573,7 @@ struct Options {
 
     if (cmd.check_cmd_line_flag("groups")) {
       for (auto const* values : {&m_values, &n_values, &k_values}) {
-        if (values->size() > 1 && values->size() != static_cast<size_t>(groups)) {
+        if (values->size() > 1 && values->size() < static_cast<size_t>(groups)) {
           valid = false;
           error_message = "Each dimension list must contain one value or exactly --groups values.";
           return;
