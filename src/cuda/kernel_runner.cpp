@@ -487,7 +487,7 @@ int main(int argc, char **argv) {
   int iterations = 0;
   int warmup = 0;
   int streams = 0;
-  int expert_count = 8;
+  int expert_count = 1;
   std::string dtype_arg;
   std::string arch_arg;
   std::string strassen_level_arg;
@@ -558,6 +558,7 @@ int main(int argc, char **argv) {
   for (KernelEntry const &kernel : kKernels) {
     if (kernel.dtype == dtype && kernel.arch == arch &&
         (all_strassen_levels || kernel.strassen_level == strassen_level) &&
+        (!kernel.grouped_moe || has_expert_count) &&
         (!has_expert_count || expert_count == 1 || kernel.grouped_moe) &&
         (!has_kernel_regex || std::regex_search(kernel.name, kernel_regex))) {
       candidates.push_back(kernel);
