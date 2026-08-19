@@ -562,11 +562,18 @@ struct CollectiveStrassenMma<
       stride_b = args.dB;
     }
 
-    auto presum_tile_log_multiplier_a = get_presum_log_multiplier(init_K, init_N);
-    auto presum_tile_log_multiplier_b = get_presum_log_multiplier(init_K, presum_M);
-    auto presum_tile_log_divider_a = get_presum_log_divider(init_K, init_N);
-    auto presum_tile_log_divider_b = get_presum_log_divider(init_K, presum_M);
+    auto first_K = get<2>(problem_shapes.get_host_problem_shape(0));
+    auto first_N = get<1>(problem_shapes.get_host_problem_shape(0));
+    auto first_M = get<0>(problem_shapes.get_host_problem_shape(0));
 
+    auto presum_tile_log_multiplier_a = get_presum_log_multiplier(first_K, first_N);
+    if (problem_shapes.groups() > 1 && get<0>(problem_shapes.get_host_problem_shape(0)) != get<0>(problem_shapes.get_host_problem_shape(1)))
+      printf("567 fix this");
+    auto presum_tile_log_multiplier_b = get_presum_log_multiplier(first_K, first_M);
+    auto presum_tile_log_divider_a = get_presum_log_divider(first_K, first_N);
+    auto presum_tile_log_divider_b = get_presum_log_divider(first_K, first_M);
+    printf("575 %d %d %d ; %d %d %d %d\n", first_K, first_N, first_M, presum_tile_log_multiplier_a, presum_tile_log_multiplier_b,
+      presum_tile_log_divider_a, presum_tile_log_divider_b);
     Tensor tensor_a = make_tensor(ptr_A_first_batch, make_layout(make_shape(presum_M,init_K,init_L), stride_a));
     Tensor tensor_b = make_tensor(ptr_B_first_batch, make_layout(make_shape(init_N,moe_K,init_L), stride_b));
     TMA_A tma_load_a = make_tma_copy(
@@ -1138,7 +1145,8 @@ struct CollectiveStrassenMma<
                 make_coord(
                   presum_offset_A / size<0>(PresumTileShapeA{}) +
                   wid * (halfM / size<0>(PresumTileShapeA{})) +
-                    m_coord * kPresumComputeIterationsA + presum_write_iter,
+                    m_coord * kPresumComputeIterationsA +
+                    n_coord_div * presumComputeIterationsA + presum_write_iter,
                   presum_tile + new_n_coord,
                   0));
               auto store_slice = mainloop_params.tma_store_presumld_a.get_slice(Int<0>{});
