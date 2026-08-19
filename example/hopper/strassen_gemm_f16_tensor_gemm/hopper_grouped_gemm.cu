@@ -757,7 +757,7 @@ bool initialize_block(
     cutlass::TensorView<Element, Layout> view(block, layout, extent);
 
     cutlass::reference::device::TensorFill(
-      view, Element(1+int(group)));
+      view, Element(1.0f+float(group)/4));
   }
 
   return true;
