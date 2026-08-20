@@ -154,7 +154,7 @@ using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
 using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
 #endif
 
-using PresumOpts = cutlass::gemm::device::PresumOpt<>;//0,0,0,0>;
+using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
 //StageCount = 6 is a little slower than this with swizzle = 8.
 //TODO: Stages 5 produces wrong results for C2
 
@@ -264,12 +264,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, Al
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0, EpilogueScheduleM0, false, FusedMiGroup<7, 0>>,
-                                                        ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
-                                                                                // FusedMiGroup<7, 4>>
+                                                        ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                                                                                            FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
+                                                      //  ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
