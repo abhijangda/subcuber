@@ -60,6 +60,7 @@ make -j all
 make -j kernel_runner_volta
 make -j kernel_runner_ampere
 make -j kernel_runner_hopper
+make -j kernel_runner_blackwell
 
 # Build the runner without CUDA declarations enabled in the runner objects
 make -j no_cuda_declarations
