@@ -572,8 +572,7 @@ struct CollectiveStrassenMma<
     auto presum_tile_log_multiplier_b = get_presum_log_multiplier(first_K, first_M);
     auto presum_tile_log_divider_a = get_presum_log_divider(first_K, first_N);
     auto presum_tile_log_divider_b = get_presum_log_divider(first_K, first_M);
-    printf("575 %d %d %d ; %d %d %d %d\n", first_K, first_N, first_M, presum_tile_log_multiplier_a, presum_tile_log_multiplier_b,
-      presum_tile_log_divider_a, presum_tile_log_divider_b);
+
     Tensor tensor_a = make_tensor(ptr_A_first_batch, make_layout(make_shape(presum_M,init_K,init_L), stride_a));
     Tensor tensor_b = make_tensor(ptr_B_first_batch, make_layout(make_shape(init_N,moe_K,init_L), stride_b));
     TMA_A tma_load_a = make_tma_copy(
