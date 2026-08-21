@@ -24,6 +24,13 @@
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cuda/kernel_runner_support.cuh"
 
+#if !defined(STRASSEN_ENABLE_VOLTA) && !defined(STRASSEN_ENABLE_AMPERE) && \
+  !defined(STRASSEN_ENABLE_HOPPER)
+#define STRASSEN_ENABLE_VOLTA
+#define STRASSEN_ENABLE_AMPERE
+#define STRASSEN_ENABLE_HOPPER
+#endif
+
 using KernelRunFn = int (*)(KernelRunnerBuffers, int, int, int, int, int,
                             cudaStream_t *, int, int, float *);
 
@@ -39,11 +46,12 @@ DECLARE_KERNEL_RUN_FN(run_cublaslt_f32);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f16);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f64);
 
-#ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+#if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
 extern "C" int fill_hopper_f16_runner_operand(void *ptr, size_t capacity, uint64_t seed);
 #endif
 
 #ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+#ifdef STRASSEN_ENABLE_AMPERE
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_tile);
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_tile_128x128);
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_interleaved_presum);
@@ -66,6 +74,8 @@ DECLARE_KERNEL_RUN_FN(run_ampere_f16_sw_interleaved_presum_max_fusion);
 DECLARE_KERNEL_RUN_FN(run_ampere_f16_sw_interleaved_presum_low_fusion);
 DECLARE_KERNEL_RUN_FN(run_ampere_f16_sw_interleaved_presum_level_2);
 DECLARE_KERNEL_RUN_FN(run_ampere_f16_sw_kernel_presum);
+#endif
+#ifdef STRASSEN_ENABLE_HOPPER
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_tile);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_interleaved_presum);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_interleaved_presum_level_2);
@@ -110,6 +120,8 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_0000);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no);
+#endif
+#ifdef STRASSEN_ENABLE_VOLTA
 DECLARE_KERNEL_RUN_FN(run_volta_f32_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_cutlass_256x128);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_tile);
@@ -117,6 +129,7 @@ DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_interleaved_presum);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_interleaved_presum_level_2);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_kernel_presum);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_fused_presum);
+#endif
 #endif
 
 #undef DECLARE_KERNEL_RUN_FN
@@ -131,6 +144,7 @@ struct KernelEntry {
 };
 
 static const KernelEntry kKernels[] = {
+#ifdef STRASSEN_ENABLE_VOLTA
     {"cublas_f32", "volta", "f32", 0, run_cublas_f32},
     {"cublas_f16", "volta", "f16", 0, run_cublas_f16},
     {"cublas_f64", "volta", "f64", 0, run_cublas_f64},
@@ -138,6 +152,8 @@ static const KernelEntry kKernels[] = {
   {"cublaslt_f32", "volta", "f32", 0, run_cublaslt_f32},
   {"cublaslt_f16", "volta", "f16", 0, run_cublaslt_f16},
   {"cublaslt_f64", "volta", "f64", 0, run_cublaslt_f64},
+#endif
+#ifdef STRASSEN_ENABLE_AMPERE
     {"cublas_f32", "ampere", "f32", 0, run_cublas_f32},
     {"cublas_f16", "ampere", "f16", 0, run_cublas_f16},
     {"cublas_f64", "ampere", "f64", 0, run_cublas_f64},
@@ -145,6 +161,8 @@ static const KernelEntry kKernels[] = {
   {"cublaslt_f32", "ampere", "f32", 0, run_cublaslt_f32},
   {"cublaslt_f16", "ampere", "f16", 0, run_cublaslt_f16},
   {"cublaslt_f64", "ampere", "f64", 0, run_cublaslt_f64},
+#endif
+#ifdef STRASSEN_ENABLE_HOPPER
   {"cublas_f32", "hopper", "f32", 0, run_cublas_f32},
   {"cublas_f16", "hopper", "f16", 0, run_cublas_f16},
   {"cublas_f64", "hopper", "f64", 0, run_cublas_f64},
@@ -152,12 +170,16 @@ static const KernelEntry kKernels[] = {
   {"cublaslt_f32", "hopper", "f32", 0, run_cublaslt_f32},
   {"cublaslt_f16", "hopper", "f16", 0, run_cublaslt_f16},
   {"cublaslt_f64", "hopper", "f64", 0, run_cublaslt_f64},
+#endif
 #ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+#ifdef STRASSEN_ENABLE_AMPERE
     {"ampere_f16_cutlass_128x256", "ampere", "f16", 0, run_ampere_f16_cutlass_128x256},
   {"ampere_f64_cutlass_64x64", "ampere", "f64", 0, run_ampere_f64_cutlass_64x64},
   {"ampere_f64_cutlass_128x128", "ampere", "f64", 0, run_ampere_f64_cutlass_128x128},
     {"ampere_f32_cutlass_128x128", "ampere", "f32", 0, run_ampere_f32_cutlass_128x128},
     {"ampere_f32_cutlass_256x128", "ampere", "f32", 0, run_ampere_f32_cutlass_256x128},
+  #endif
+  #ifdef STRASSEN_ENABLE_HOPPER
     {"hopper_f16_cutlass_128x128_pingpong", "hopper", "f16", 0, run_hopper_f16_cutlass_128x128_pingpong},
     {"hopper_f16_cutlass_128x256_cooperative", "hopper", "f16", 0, run_hopper_f16_cutlass_128x256_cooperative},
     {"hopper_f16_grouped_cutlass_128x128_pingpong", "hopper", "f16", 0, run_hopper_f16_grouped_cutlass_128x128_pingpong, true},
@@ -174,6 +196,8 @@ static const KernelEntry kKernels[] = {
     {"hopper_f64_cutlass_128x128", "hopper", "f64", 0, run_hopper_f64_cutlass_128x128},
     {"hopper_f32_cutlass_128x128", "hopper", "f32", 0, run_hopper_f32_cutlass_128x128},
     {"hopper_f32_cutlass_256x128", "hopper", "f32", 0, run_hopper_f32_cutlass_256x128},
+  #endif
+  #ifdef STRASSEN_ENABLE_AMPERE
     {"ampere_f32_tile_64x128", "ampere", "f32", 1, run_ampere_f32_sw_tile},
     {"ampere_f32_tile_128x128", "ampere", "f32", 1, run_ampere_f32_sw_tile_128x128},
     {"ampere_f32_sw_interleaved_presum_256x128", "ampere", "f32", 1, run_ampere_f32_sw_interleaved_presum},
@@ -191,6 +215,8 @@ static const KernelEntry kKernels[] = {
     {"ampere_f16_sw_interleaved_presum_low_fusion", "ampere", "f16", 1, run_ampere_f16_sw_interleaved_presum_low_fusion},
     {"ampere_f16_sw_interleaved_presum_level_2", "ampere", "f16", 2, run_ampere_f16_sw_interleaved_presum_level_2},
     {"ampere_f16_sw_kernel_presum", "ampere", "f16", 1, run_ampere_f16_sw_kernel_presum},
+  #endif
+  #ifdef STRASSEN_ENABLE_HOPPER
     {"hopper_f32_sw_interleaved_presum", "hopper", "f32", 1, run_hopper_f32_sw_interleaved_presum},
     {"hopper_f32_sw_interleaved_presum_level_2", "hopper", "f32", 2, run_hopper_f32_sw_interleaved_presum_level_2},
     {"hopper_f64_sw_interleaved_presum_128x64", "hopper", "f64", 1, run_hopper_f64_sw_interleaved_presum_128x64},
@@ -219,6 +245,8 @@ static const KernelEntry kKernels[] = {
     {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_0000},
     {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no},
     {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no},
+  #endif
+  #ifdef STRASSEN_ENABLE_VOLTA
     {"volta_f32_cutlass_128x128", "volta", "f32", 0, run_volta_f32_cutlass_128x128},
     {"volta_f32_cutlass_256x128", "volta", "f32", 0, run_volta_f32_cutlass_256x128},
     {"volta_f32_sw_tile", "volta", "f32", 1, run_volta_f32_sw_tile},
@@ -226,7 +254,8 @@ static const KernelEntry kKernels[] = {
     // {"volta_f32_sw_interleaved_presum_level_2", "volta", "f32", 2, run_volta_f32_sw_interleaved_presum_level_2},
     {"volta_f32_sw_kernel_presum", "volta", "f32", 1, run_volta_f32_sw_kernel_presum},
     {"volta_f32_sw_fused_presum", "volta", "f32", 1, run_volta_f32_sw_fused_presum},
-  #endif
+#endif
+#endif
 };
 
 static std::string lower(std::string value) {
@@ -325,7 +354,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
   int range_end = std::is_same<Element, cutlass::half_t>::value ? 4 : 16;
   int range_start = std::is_same<Element, cutlass::half_t>::value ? -4 : -16;
     if constexpr (std::is_same<Element, cutlass::half_t>::value) {
-#ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+#if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
       if (arch == "hopper") {
         int fill_status = fill_hopper_f16_runner_operand(
             tensor_a.device_data(), tensor_a.capacity(), 2023);
@@ -344,7 +373,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
             tensor_b.host_view(), 1, Element(range_end), Element(range_start), 2);
         tensor_a.sync_device();
         tensor_b.sync_device();
-  #ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+  #if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
       }
   #endif
     } else {

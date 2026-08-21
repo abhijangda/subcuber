@@ -3,6 +3,7 @@ NVCC ?= $(CUDA_HOME)/bin/nvcc
 CXX ?= g++
 SPLIT_COMPILE ?= 1
 PRESUM_LEVEL_2_SPLIT_COMPILE ?= 10
+.DEFAULT_GOAL := all
 
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 CUDA_SRC_DIR := $(MAKEFILE_DIR)src/cuda
@@ -30,6 +31,7 @@ CXX_LDFLAGS := -L$(CUDA_HOME)/lib64
 LDLIBS := -lcublasLt -lcublas
 CXX_LDLIBS := $(LDLIBS) -lcudart
 SPLIT_COMPILE_FLAGS = --split-compile=$(if $(findstring presum_level_2,$<),$(PRESUM_LEVEL_2_SPLIT_COMPILE),$(SPLIT_COMPILE))
+RUNNER_ARCH_FLAGS ?=
 
 VOLTA_GENCODE := --generate-code=arch=compute_80,code=[compute_80,sm_80] -DGENCODE_ARCH=700
 AMPERE_GENCODE := --generate-code=arch=compute_80,code=[compute_80,sm_80] -DGENCODE_ARCH=800
@@ -109,7 +111,10 @@ VOLTA_V2_SRCS := \
 	kernels/volta/strassen_winograd/volta_f32_sw_kernel_presum.cu \
 	kernels/volta/strassen_winograd/volta_f32_sw_fused_presum.cu
 
-KERNEL_SRCS := $(AMPERE_V2_SRCS) $(AMPERE_CUBIC_SRCS) $(HOPPER_CUBIC_SRCS) $(VOLTA_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS) $(VOLTA_V2_SRCS)
+VOLTA_KERNEL_SRCS := $(VOLTA_CUBIC_SRCS) $(VOLTA_V2_SRCS)
+AMPERE_KERNEL_SRCS := $(AMPERE_CUBIC_SRCS) $(AMPERE_V2_SRCS)
+HOPPER_KERNEL_SRCS := $(HOPPER_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS)
+KERNEL_SRCS := $(VOLTA_KERNEL_SRCS) $(AMPERE_KERNEL_SRCS) $(HOPPER_KERNEL_SRCS)
 RUNNER_OBJS := $(addprefix $(BUILD_DIR)/,$(RUNNER_SRC:.cpp=.o))
 KERNEL_OBJS := $(addprefix $(BUILD_DIR)/,$(KERNEL_SRCS:.cu=.o))
 OBJS := $(RUNNER_OBJS) $(KERNEL_OBJS)
@@ -125,9 +130,31 @@ KERNEL_PRESUM_FLAGS := -DCUTLASS_API_v2 -Dkernel_PRESUM -DTILE_SIZE_256 -DSPLIT_
 CUBIC_FLAGS := -DCUTLASS_API_v2 -DSPLIT_K=1
 V3_FLAGS := -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED
 
-.PHONY: all clean run disable_cuda_declarations no_cuda_declarations no-cuda-declarations
+.PHONY: all clean run kernel_runner_volta kernel_runner_ampere kernel_runner_hopper \
+	disable_cuda_declarations no_cuda_declarations no-cuda-declarations
 
 all: $(TARGET)
+
+kernel_runner_volta:
+	$(MAKE) TARGET=$(BUILD_ROOT)/kernel_runner_volta \
+		BUILD_DIR=$(BUILD_ROOT)/obj/kernel_runner_volta \
+		KERNEL_SRCS='$(VOLTA_KERNEL_SRCS)' \
+		RUNNER_ARCH_FLAGS=-DSTRASSEN_ENABLE_VOLTA \
+		$(BUILD_ROOT)/kernel_runner_volta
+
+kernel_runner_ampere:
+	$(MAKE) TARGET=$(BUILD_ROOT)/kernel_runner_ampere \
+		BUILD_DIR=$(BUILD_ROOT)/obj/kernel_runner_ampere \
+		KERNEL_SRCS='$(AMPERE_KERNEL_SRCS)' \
+		RUNNER_ARCH_FLAGS=-DSTRASSEN_ENABLE_AMPERE \
+		$(BUILD_ROOT)/kernel_runner_ampere
+
+kernel_runner_hopper:
+	$(MAKE) TARGET=$(BUILD_ROOT)/kernel_runner_hopper \
+		BUILD_DIR=$(BUILD_ROOT)/obj/kernel_runner_hopper \
+		KERNEL_SRCS='$(HOPPER_KERNEL_SRCS)' \
+		RUNNER_ARCH_FLAGS=-DSTRASSEN_ENABLE_HOPPER \
+		$(BUILD_ROOT)/kernel_runner_hopper
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)
@@ -145,7 +172,7 @@ $(NO_CUDA_DECL_TARGET): $(NO_CUDA_DECL_OBJS)
 
 $(BUILD_DIR)/%.o: $(CUDA_SRC_DIR)/%.cpp $(CUDA_SRC_DIR)/kernel_runner_support.cuh
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXX_FLAGS) $(CXX_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXX_FLAGS) $(RUNNER_ARCH_FLAGS) $(CXX_INCLUDES) -MMD -MP -c $< -o $@
 
 $(NO_CUDA_DECL_BUILD_DIR)/%.o: $(CUDA_SRC_DIR)/%.cpp $(CUDA_SRC_DIR)/kernel_runner_support.cuh
 	@mkdir -p $(dir $@)

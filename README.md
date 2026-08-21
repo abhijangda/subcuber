@@ -37,10 +37,10 @@ Build `kernel_runner`
 From the repository root, run:
 
 ```bash
-make
+make -j
 ```
 
-This builds all registered runner objects and writes outputs under root-level `build/`:
+This builds all registered kernels into the default runner and writes outputs under root-level `build/`:
 
 ```text
 build/
@@ -48,14 +48,21 @@ build/
 `-- obj/kernel_runner/
 ```
 
+Architecture-specific runners are built only when their target is explicitly requested. They use separate object directories under `build/obj/kernel_runner_<architecture>/`.
+
 Useful build variants:
 
 ```bash
 # Build the default kernel runner
-make all
+make -j all
+
+# Build only the kernels registered for one architecture
+make -j kernel_runner_volta
+make -j kernel_runner_ampere
+make -j kernel_runner_hopper
 
 # Build the runner without CUDA declarations enabled in the runner objects
-make no_cuda_declarations
+make -j no_cuda_declarations
 
 # Remove root-level kernel_runner build artifacts
 make clean
