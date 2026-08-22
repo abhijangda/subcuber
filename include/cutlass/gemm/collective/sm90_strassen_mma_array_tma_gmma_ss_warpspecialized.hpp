@@ -462,16 +462,11 @@ struct CollectiveStrassenMma<
     //TODO: We want k/2 is a divisor of Number of threads (which is usually 256 for us)
     if (k <= m_or_n) return 0;
     int multiplier = (k + m_or_n - 1)/m_or_n;
-    if (multiplier > 8) {
-      return 4;
-    } else if (multiplier > 4) {
-      return 3; //multiply with 8
-    } else if (multiplier > 2) {
-      return 2; //multiply with 4
-    } else if (multiplier > 1) {
-      return 1; //multiply with 2
+    uint32_t log_multiplier = 0;
+    for (uint64_t covered = 1; covered < uint64_t(multiplier); covered *= 2) {
+      ++log_multiplier;
     }
-    return 0;
+    return log_multiplier;
   }
 
   CUTLASS_HOST_DEVICE
