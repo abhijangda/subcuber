@@ -75,7 +75,8 @@ template <
   int AlignmentD,
   class FusionOpOrCallbacks,
   class DispatchPolicy,
-  class ProblemShape
+  class ProblemShape,
+  class SubMatLayoutC
 >
 struct Sm90TmaStrassenBuilderImpl {
   // C/D should meet TMA alignment requirement if not void
@@ -149,7 +150,8 @@ struct Sm90TmaStrassenBuilderImpl {
       decltype(detail::sm90_get_smem_store_op_for_accumulator<UnderlyingGmemStrideTypeD, ElementD, EpilogueTile_MN>()),
       CopyAtomC,
       CopyOpR2R,
-      ProblemShape
+      ProblemShape,
+      SubMatLayoutC
     >;
 };
 }
@@ -244,7 +246,8 @@ template <
   int AlignmentD,
   class Schedule,
   class FusionOperation,
-  class ProblemShape
+  class ProblemShape,
+  class SubMatLayoutC
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -266,7 +269,8 @@ struct CollectiveStrassenBuilder<
     cute::enable_if_t<cute::is_same_v<Schedule, TmaWarpSpecialized> ||
               cute::is_same_v<Schedule, TmaWarpSpecializedCooperative> ||
               detail::sm90_is_ptr_array_tma_v<Schedule>>,
-    ProblemShape> {
+          ProblemShape,
+          SubMatLayoutC> {
 private:
   using ElementD = cute::conditional_t<cute::is_void_v<ElementD_>,
                      fusion::get_element_aux_t<FusionOperation>, ElementD_>;
@@ -309,7 +313,8 @@ public:
       AlignmentD,
       FusionOperation,
       DispatchPolicy,
-      ProblemShape
+      ProblemShape,
+      SubMatLayoutC
     >::CollectiveOp;
 };
 

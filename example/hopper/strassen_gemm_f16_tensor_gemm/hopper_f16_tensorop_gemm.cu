@@ -61,6 +61,7 @@
 #include "cutlass/cutlass.h"
 
 #include "cute/tensor.hpp"
+#include "cutlass/layout/strassen_layout.hpp"
 #include "cutlass/tensor_ref.h"
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
 #include "cutlass/epilogue/thread/linear_combination.h"
@@ -96,16 +97,19 @@ using namespace cute;
 // A matrix configuration
 using         ElementA    = cutlass::half_t;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
+using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = cutlass::half_t;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
+using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
 using         ElementC    = cutlass::half_t;                                // Element type for C and D matrix operands
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
+using         SubMatLayoutC = cutlass::layout::OriginalLayout;
 constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
 
 // Core kernel configurations
@@ -134,8 +138,8 @@ using TileShapeM2To6        = Shape<_128,_256,_64>;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = 4 ;
-using PresumTileShapeA    = Shape<_4, _256>;
-using PresumTileShapeB    = Shape<_4, _256>;
+using PresumTileShapeA    = Shape<_2, _256>;
+using PresumTileShapeB    = Shape<_2, _256>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecializedCooperative;
 using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
@@ -154,7 +158,7 @@ using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
 using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
 #endif
 
-using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
+using PresumOpts = cutlass::gemm::device::PresumOpt<>;//<0,0,0,0>;
 //StageCount = 6 is a little slower than this with swizzle = 8.
 //TODO: Stages 5 produces wrong results for C2
 
@@ -162,7 +166,7 @@ using AllPresumsKernel = AllPresums<>;
                           // using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
                                         //  PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
 using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                   PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+                                  PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//  PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
@@ -381,8 +385,9 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
 
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups, ScheduleStrassenGroups1,
                                                                        ProblemShape,
-                                                                       ElementA, LayoutA, ElementB, LayoutB,
-                                                                       ElementC, LayoutC,
+                                                                       ElementA, LayoutA, SubMatLayoutA,
+                                                                       ElementB, LayoutB, SubMatLayoutB,
+                                                                       ElementC, LayoutC, SubMatLayoutC,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,

@@ -143,7 +143,7 @@ using EpilogueScheduleM2To6 = EpilogueScheduleM0;
 #elif defined(COOPERATIVE)
 using TileShapeM0           = Shape<_128,_256,_64>;                           // Threadblock-level tile size
 using TileShapeM2To6        = Shape<_128,_256,_64>;
-using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
+using ClusterShape        = Shape<_1,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = 4 ;
 using PresumTileShapeA    = Shape<_2, _256>;
@@ -166,15 +166,15 @@ using KernelScheduleM0 = cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperat
 using EpilogueScheduleM0 = cutlass::epilogue::PtrArrayTmaWarpSpecializedCooperative;
 #endif
 
-using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
+using PresumOpts = cutlass::gemm::device::PresumOpt<>;//<0,0,0,0>;
 //StageCount = 6 is a little slower than this with swizzle = 8.
 //TODO: Stages 5 produces wrong results for C2
 
 using AllPresumsKernel = AllPresums<>;
-                          // using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
-                                        //  PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
-using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                   PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
+                                    PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
+// using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
+                                  // PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
@@ -222,16 +222,16 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, Al
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0,    EpilogueScheduleM0,    false, FusedMiGroup<7, 0>>,
-                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
-                                                                                                                          //  FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                                                                                           FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
+                                                      //  ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
-#elif 1
+#elif 0
 #if defined(COOPERATIVE_PINGPONG)
 #error "This schedule do not work with mixed schedule"
 #endif
@@ -393,8 +393,9 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
 
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups, ScheduleStrassenGroups1,
                                                                        ProblemShape,
-                                                                       ElementA, LayoutA *, ElementB, LayoutB *,
-                                                                       ElementC, LayoutC *,
+                                                                       ElementA, LayoutA *, cutlass::layout::OriginalLayout,
+                                                                       ElementB, LayoutB *, cutlass::layout::OriginalLayout,
+                                                                       ElementC, LayoutC *, cutlass::layout::OriginalLayout,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
@@ -1122,7 +1123,7 @@ int run(Options &options)
   cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
   // Check if the problem size is supported or not
-  CUTLASS_CHECK(gemm.can_implement(arguments));
+  // CUTLASS_CHECK(gemm.can_implement(arguments));
 
   // Initialize CUTLASS kernel with arguments and workspace pointer
   CUTLASS_CHECK(gemm.initialize(arguments, options.swizzles, workspace.get()));

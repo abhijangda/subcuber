@@ -61,7 +61,8 @@ template <
   class EpilogueScheduleType,
   class FusionOpOrCallbacks = cutlass::epilogue::fusion::LinearCombination<ElementD,ElementCompute,ElementC,ElementCompute>,
   class Enable = void,
-  class ProblemShape = void
+  class ProblemShape = void,
+  class SubMatLayoutC = void
 >
 struct CollectiveStrassenBuilder {
   static_assert(cutlass::detail::dependent_false<ArchTag>,

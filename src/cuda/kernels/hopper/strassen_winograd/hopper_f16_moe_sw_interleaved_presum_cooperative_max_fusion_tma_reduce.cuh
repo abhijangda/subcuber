@@ -13,7 +13,9 @@ using MoeCooperativeTmaReduceScheduleStrassenGroups = ScheduleStrassenGroups<
 template<int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
 using MoeCooperativeTmaReduceStrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<
     StrassenGroupsTmaReduce<StageCount>, MoeCooperativeTmaReduceScheduleStrassenGroups,
-    MoeProblemShape, ElementA, LayoutA *, ElementB, LayoutB *, ElementC, LayoutC *,
+    MoeProblemShape, ElementA, LayoutA *, cutlass::layout::OriginalLayout,
+    ElementB, LayoutB *, cutlass::layout::OriginalLayout,
+    ElementC, LayoutC *, cutlass::layout::OriginalLayout,
     ElementAccumulator, ClusterShape, cute::Int<StageCount>, PresumTileShapeA,
     PresumTileShapeB, cutlass::gemm::device::PresumOpt<0,0,0,0>>;
 

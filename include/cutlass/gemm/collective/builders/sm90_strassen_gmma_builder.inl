@@ -67,7 +67,9 @@ template <
   class PresumTileShapeA_,
   class PresumTileShapeB_,
   class PresumOpt_,
-  class ProblemShape_
+  class ProblemShape_,
+  class SubMatLayoutA_,
+  class SubMatLayoutB_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -96,6 +98,9 @@ struct CollectiveStrassenBuilder<
                          KernelPtrArrayTmaWarpSpecializedCooperative,
                          KernelPtrArrayTmaWarpSpecializedPingpong>) &&
        not detail::is_use_rmem_A<ElementA, GmemLayoutATag, ElementB, GmemLayoutBTag>()>
+              ,
+              SubMatLayoutA_,
+              SubMatLayoutB_
 > {
   static_assert(is_static<TileShape_MNK>::value);
   static_assert(is_static<ClusterShape_MNK>::value);
@@ -213,7 +218,9 @@ struct CollectiveStrassenBuilder<
       PresumSmemLayoutAtomB,
       PresumSmemCopyAtomB,
       PresumOpt_,
-      ProblemShape_
+      ProblemShape_,
+      SubMatLayoutA_,
+      SubMatLayoutB_
     >;
 };
 

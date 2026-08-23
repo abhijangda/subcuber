@@ -63,6 +63,7 @@
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "cutlass/gemm/device/strassen_decls.h"
 #include "cutlass/strassen_presum_global_kernel.h"
+#include "cutlass/layout/strassen_layout.hpp"
 
 #include "cutlass/epilogue/collective/collective_strassen_builder.hpp"
 #include "cutlass/gemm/collective/collective_strassen_gemm_builder.hpp"
@@ -176,8 +177,10 @@ struct PresumOpt {
 
 template<typename StrassenGroups_, typename ScheduleStrassenGroups_,
          typename ProblemShape,
-         typename ElementA, typename LayoutA, typename ElementB, typename LayoutB,
-         typename ElementC, typename LayoutC, typename ElementAccum,
+         typename ElementA, typename LayoutA, typename SubMatLayoutA,
+         typename ElementB, typename LayoutB, typename SubMatLayoutB,
+         typename ElementC, typename LayoutC, typename SubMatLayoutC,
+         typename ElementAccum,
          typename ClusterShape,
          typename StageCount,
          typename PresumTileShapeA = void, typename PresumTileShapeB = void,
@@ -213,7 +216,8 @@ public:
       float
     >,
     void,
-    ProblemShape
+    ProblemShape,
+    SubMatLayoutC
   >;
 
   template<typename ParallelGroup, typename StrassenMiGroup>
@@ -231,7 +235,10 @@ public:
     PresumTileShapeA,
     PresumTileShapeB,
     PresumOpt,
-    ProblemShape
+    ProblemShape,
+    void,
+    SubMatLayoutA,
+    SubMatLayoutB
   >;
 
   template<typename ParallelGroup, typename StrassenMiGroup>

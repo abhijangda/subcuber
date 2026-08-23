@@ -24,7 +24,9 @@ using MoeCooperativePingpongStrassenKernels =
     cutlass::gemm::device::StrassenGemmKernels<
         CooperativePingpongStrassenGroups<4>, MoeCooperativePingpongSchedule,
         MoeCooperativePingpongProblemShape,
-        ElementA, LayoutA *, ElementB, LayoutB *, ElementC, LayoutC *,
+        ElementA, LayoutA *, cutlass::layout::OriginalLayout,
+        ElementB, LayoutB *, cutlass::layout::OriginalLayout,
+        ElementC, LayoutC *, cutlass::layout::OriginalLayout,
         ElementAccumulator, ClusterShape, cute::Int<4>,
         Shape<_2,_256>, Shape<_2,_256>,
         cutlass::gemm::device::PresumOpt<0,0,0,0>>;

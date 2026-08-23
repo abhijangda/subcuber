@@ -83,7 +83,8 @@ template <
   class CopyOpR2S_,
   class CopyAtomC_,
   class CopyOpR2R_,
-  class ProblemShape_
+  class ProblemShape_,
+  class SubMatLayoutC_
 >
 class CollectiveStrassenEpilogue<
     StrassenMiGroup_,
@@ -109,7 +110,8 @@ class CollectiveStrassenEpilogue<
     CopyOpR2S_,
     CopyAtomC_,
     CopyOpR2R_,
-    ProblemShape_
+    ProblemShape_,
+    SubMatLayoutC_
 > {
 public:
   //
@@ -117,6 +119,7 @@ public:
   //
   using StrassenMiGroup = StrassenMiGroup_;
   using ProblemShape = ProblemShape_;
+  using SubMatLayoutC = SubMatLayoutC_;
   using DispatchPolicy = Sm90PtrArrayTmaWarpSpecialized<StagesC_,
                                                         StagesD_,
                                                         FragmentSize_,

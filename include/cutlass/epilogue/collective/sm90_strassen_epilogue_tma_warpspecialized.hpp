@@ -82,7 +82,8 @@ template <
   class CopyOpR2S_,
   class CopyAtomC_,
   class CopyOpR2R_,
-  class ProblemShape_
+  class ProblemShape_,
+  class SubMatLayoutC_
 >
 class CollectiveStrassenEpilogue<
     StrassenMiGroup_,
@@ -102,7 +103,8 @@ class CollectiveStrassenEpilogue<
     CopyOpR2S_,
     CopyAtomC_,
     CopyOpR2R_,
-    ProblemShape_
+    ProblemShape_,
+    SubMatLayoutC_
 > {
 public:
   //
@@ -126,6 +128,7 @@ public:
   using CopyAtomC = CopyAtomC_;
   using CopyOpR2R = CopyOpR2R_;
   using ProblemShape = ProblemShape_;
+  using SubMatLayoutC = SubMatLayoutC_;
 
   using ThreadEpilogueOp = typename epilogue::fusion::FusionCallbacksTraits<FusionCallbacks>::Operation;
   using GmemTiledCopyC = CopyOpG2S;

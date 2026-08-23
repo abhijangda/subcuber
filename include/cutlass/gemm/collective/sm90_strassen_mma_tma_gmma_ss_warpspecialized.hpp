@@ -88,7 +88,9 @@ template <
   class PresumSmemLayoutAtomB,
   class PresumSmemCopyAtomB,
   class PresumOpt_,
-  class ProblemShape_>
+  class ProblemShape_,
+  class SubMatLayoutA_,
+  class SubMatLayoutB_>
 struct CollectiveStrassenMma<
     StrassenMiGroup_,
     MainloopSm90TmaGmmaWarpSpecialized<Stages, ClusterShape, KernelSchedule>,
@@ -116,7 +118,9 @@ struct CollectiveStrassenMma<
     PresumSmemLayoutAtomB,
     PresumSmemCopyAtomB,
     PresumOpt_,
-    ProblemShape_>
+    ProblemShape_,
+    SubMatLayoutA_,
+    SubMatLayoutB_>
 {
   //
   // Type Aliases
@@ -124,6 +128,8 @@ struct CollectiveStrassenMma<
   using StrassenMiGroup = StrassenMiGroup_;
   using PresumOpt = PresumOpt_;
   using ProblemShape = ProblemShape_;
+  using SubMatLayoutA = SubMatLayoutA_;
+  using SubMatLayoutB = SubMatLayoutB_;
   using DispatchPolicy = MainloopSm90TmaGmmaWarpSpecialized<Stages, ClusterShape, KernelSchedule>;
   using TileShape = TileShape_;
   using ElementA = ElementA_;

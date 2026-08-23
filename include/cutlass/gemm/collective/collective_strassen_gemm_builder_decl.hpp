@@ -56,7 +56,9 @@ template <
   class PresumTileShapeB = void,
   class PresumOpt = void,
   class ProblemShape = void,
-  class Enable = void
+  class Enable = void,
+  class SubMatLayoutA = void,
+  class SubMatLayoutB = void
 >
 struct CollectiveStrassenBuilder {
   static_assert(sizeof(ElementA) == 0, "Could not build a collective for given parameters.");
