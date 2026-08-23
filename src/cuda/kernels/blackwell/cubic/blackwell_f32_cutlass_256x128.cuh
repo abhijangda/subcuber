@@ -19,7 +19,7 @@ class BlackwellF32Cutlass256x128 {
       cutlass::arch::Sm100,
       cutlass::arch::OpClassSimt,
       float, Layout, 1,
-      float, Layout, 1,
+      float, Layout, 4,
       float,
       TileShape,
       ClusterShape,
@@ -34,8 +34,8 @@ class BlackwellF32Cutlass256x128 {
       cutlass::epilogue::collective::EpilogueTileAuto,
       float,
       float,
-      float, Layout, 1,
-      float, Layout, 1,
+      float, Layout, 4,
+      float, Layout, 4,
       cutlass::epilogue::EpilogueSimtVectorized>::CollectiveOp;
 
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<

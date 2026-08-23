@@ -343,7 +343,8 @@ static bool tunes_split_k(KernelEntry const &kernel) {
   return (std::strcmp(kernel.dtype, "f32") == 0 &&
           (std::strstr(kernel.name, "_f32_sw_tile") != nullptr ||
            std::strstr(kernel.name, "_f32_tile_") != nullptr)) ||
-         std::strstr(kernel.name, "_f32_cutlass_") != nullptr ||
+         (std::strstr(kernel.name, "_f32_cutlass_") != nullptr &&
+          std::strstr(kernel.name, "blackwell_") == nullptr) ||
          std::strstr(kernel.name, "ampere_f16_cutlass_") != nullptr;
 }
 

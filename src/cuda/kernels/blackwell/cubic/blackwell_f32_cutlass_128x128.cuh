@@ -12,18 +12,18 @@
 
 class BlackwellF32Cutlass128x128 {
   using Layout = cutlass::layout::RowMajor;
-  using TileShape = cute::Shape<cute::_128, cute::_128, cute::_16>;
+  using TileShape = cute::Shape<cute::_64, cute::_128, cute::_16>;
   using ClusterShape = cute::Shape<cute::_1, cute::_1, cute::_1>;
 
   using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
       cutlass::arch::Sm100,
       cutlass::arch::OpClassSimt,
       float, Layout, 1,
-      float, Layout, 1,
+      float, Layout, 4,
       float,
       TileShape,
       ClusterShape,
-      cutlass::gemm::collective::StageCount<3>,
+      cutlass::gemm::collective::StageCount<2>,
       cutlass::gemm::KernelMultistage>::CollectiveOp;
 
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBuilder<
@@ -34,8 +34,8 @@ class BlackwellF32Cutlass128x128 {
       cutlass::epilogue::collective::EpilogueTileAuto,
       float,
       float,
-      float, Layout, 1,
-      float, Layout, 1,
+      float, Layout, 4,
+      float, Layout, 4,
       cutlass::epilogue::EpilogueSimtVectorized>::CollectiveOp;
 
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
