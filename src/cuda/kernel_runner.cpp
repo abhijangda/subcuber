@@ -123,9 +123,12 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no);
 #endif
 #ifdef STRASSEN_ENABLE_BLACKWELL
-DECLARE_KERNEL_RUN_FN(run_blackwell_f64_cutlass_64x32);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f64_cutlass_32x64);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f32_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f32_cutlass_256x128);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f64_sw_interleaved_presum_32x64);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f64_sw_interleaved_presum_level_2_32x64);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f64_sw_fused_presum_32x64);
 #endif
 #ifdef STRASSEN_ENABLE_VOLTA
 DECLARE_KERNEL_RUN_FN(run_volta_f32_cutlass_128x128);
@@ -213,9 +216,12 @@ static const KernelEntry kKernels[] = {
     {"hopper_f32_cutlass_256x128", "hopper", "f32", 0, run_hopper_f32_cutlass_256x128},
   #endif
   #ifdef STRASSEN_ENABLE_BLACKWELL
-    {"blackwell_f64_cutlass_64x32", "blackwell", "f64", 0, run_blackwell_f64_cutlass_64x32},
+    {"blackwell_f64_cutlass_32x64", "blackwell", "f64", 0, run_blackwell_f64_cutlass_32x64},
     {"blackwell_f32_cutlass_128x128", "blackwell", "f32", 0, run_blackwell_f32_cutlass_128x128},
     {"blackwell_f32_cutlass_256x128", "blackwell", "f32", 0, run_blackwell_f32_cutlass_256x128},
+    {"blackwell_f64_sw_interleaved_presum_32x64", "blackwell", "f64", 1, run_blackwell_f64_sw_interleaved_presum_32x64},
+    {"blackwell_f64_sw_interleaved_presum_level_2_32x64", "blackwell", "f64", 2, run_blackwell_f64_sw_interleaved_presum_level_2_32x64},
+    {"blackwell_f64_sw_fused_presum_32x64", "blackwell", "f64", 1, run_blackwell_f64_sw_fused_presum_32x64},
   #endif
   #ifdef STRASSEN_ENABLE_AMPERE
     {"ampere_f32_tile_64x128", "ampere", "f32", 1, run_ampere_f32_sw_tile},
@@ -337,8 +343,18 @@ static bool get_required_string_arg(int argc, char **argv, const char *name, std
   return parse_arg(argc, argv, name, out) && !out.empty();
 }
 
+static bool has_flag(int argc, char **argv, const char *name) {
+  std::string flag = std::string("--") + name;
+  for (int i = 1; i < argc; ++i) {
+    if (argv[i] == flag) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static void usage(char const *program) {
-  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX]\n";
+  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX] [--disable_split_k]\n";
 }
 
 static bool tunes_split_k(KernelEntry const &kernel) {
@@ -360,7 +376,8 @@ template <typename Element>
 int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int k,
                   std::string const &dtype, std::string const &arch,
                   std::string const &strassen_level_label,
-                  int iterations, int warmup, int num_streams, int expert_count) {
+                  int iterations, int warmup, int num_streams, int expert_count,
+                  bool disable_split_k) {
   bool has_grouped_moe = std::any_of(
       candidates.begin(), candidates.end(),
       [](KernelEntry const &kernel) { return kernel.grouped_moe; });
@@ -372,7 +389,6 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
   cutlass::gemm::GemmCoord problem_size(m, n, k);
   cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_a({input_rows, k});
   cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_b(problem_size.kn());
-  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_c({input_rows, n});
   cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_d({input_rows, n});
 
   int range_end = std::is_same<Element, cutlass::half_t>::value ? 4 : 16;
@@ -408,11 +424,11 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
     tensor_a.sync_device();
     tensor_b.sync_device();
     }
-  cutlass::reference::host::TensorFill(tensor_c.host_view());
-  cutlass::reference::host::TensorFill(tensor_d.host_view());
-
-  tensor_c.sync_device();
-  tensor_d.sync_device();
+  cudaError_t clear_err = cudaMemset(
+      tensor_d.device_data(), 0, tensor_d.capacity() * sizeof(Element));
+  if (clear_err != cudaSuccess) {
+    return static_cast<int>(clear_err);
+  }
 
   KernelRunnerBuffers buffers{tensor_a.device_data(), tensor_b.device_data(),
                               nullptr, tensor_d.device_data()};
@@ -439,7 +455,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
             << std::setw(16) << "gflops" << "\n";
 
   for (KernelEntry const &kernel : candidates) {
-    bool tune_split_k = tunes_split_k(kernel);
+    bool tune_split_k = !disable_split_k && tunes_split_k(kernel);
     int first_split_k = 1;
     int last_split_k = tune_split_k && allows_split_k_greater_than_one(m, n) ? 4 : 1;
     float kernel_best_ms = std::numeric_limits<float>::infinity();
@@ -448,8 +464,12 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
     int last_rc = 0;
 
     for (int split_k = first_split_k; split_k <= last_split_k; ++split_k) {
-      cutlass::reference::host::TensorFill(tensor_d.host_view());
-      tensor_d.sync_device();
+      clear_err = cudaMemset(
+          tensor_d.device_data(), 0, tensor_d.capacity() * sizeof(Element));
+      if (clear_err != cudaSuccess) {
+        last_rc = static_cast<int>(clear_err);
+        continue;
+      }
 
       float avg_ms = 0.0f;
       int rc = kernel.run(buffers, m, n, k, warmup, iterations, runner_streams,
@@ -559,6 +579,8 @@ int main(int argc, char **argv) {
   valid_args = get_required_string_arg(argc, argv, "dtype", dtype_arg) && valid_args;
   valid_args = get_required_string_arg(argc, argv, "gpu_arch", arch_arg) && valid_args;
   bool has_kernel_regex = parse_arg(argc, argv, "kernel_regex", kernel_regex_arg);
+  bool disable_split_k = has_flag(argc, argv, "disable_split_k") ||
+                         has_flag(argc, argv, "disable-split-k");
   std::string expert_count_arg;
   bool has_expert_count = parse_arg(argc, argv, "experts", expert_count_arg) ||
                           parse_arg(argc, argv, "groups", expert_count_arg);
@@ -630,12 +652,12 @@ int main(int argc, char **argv) {
 
   if (dtype == "f32") {
     return run_benchmark<float>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                iterations, warmup, streams, expert_count);
+                                iterations, warmup, streams, expert_count, disable_split_k);
   }
   if (dtype == "f64") {
     return run_benchmark<double>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                 iterations, warmup, streams, expert_count);
+                                 iterations, warmup, streams, expert_count, disable_split_k);
   }
   return run_benchmark<cutlass::half_t>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                        iterations, warmup, streams, expert_count);
+                                        iterations, warmup, streams, expert_count, disable_split_k);
 }

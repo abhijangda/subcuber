@@ -3,7 +3,7 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/device/gemm.h"
 
-class BlackwellF64Cutlass64x32 {
+class BlackwellF64Cutlass32x64 {
   using EpilogueOp = cutlass::epilogue::thread::LinearCombination<
       double,
       2,

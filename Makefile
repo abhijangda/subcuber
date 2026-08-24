@@ -58,9 +58,14 @@ HOPPER_CUBIC_SRCS := \
 	kernels/hopper/cubic/hopper_f32_cutlass_256x128.cu
 
 BLACKWELL_CUBIC_SRCS := \
-	kernels/blackwell/cubic/blackwell_f64_cutlass_64x32.cu \
+	kernels/blackwell/cubic/blackwell_f64_cutlass_32x64.cu \
 	kernels/blackwell/cubic/blackwell_f32_cutlass_128x128.cu \
 	kernels/blackwell/cubic/blackwell_f32_cutlass_256x128.cu
+
+BLACKWELL_V2_SRCS := \
+	kernels/blackwell/strassen_winograd/blackwell_f64_sw_interleaved_presum_32x64.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f64_sw_interleaved_presum_level_2_32x64.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f64_sw_fused_presum_32x64.cu
 
 VOLTA_CUBIC_SRCS := \
 	kernels/volta/cubic/volta_f32_cutlass_128x128.cu \
@@ -120,8 +125,8 @@ VOLTA_V2_SRCS := \
 VOLTA_KERNEL_SRCS := $(VOLTA_CUBIC_SRCS) $(VOLTA_V2_SRCS)
 AMPERE_KERNEL_SRCS := $(AMPERE_CUBIC_SRCS) $(AMPERE_V2_SRCS)
 HOPPER_KERNEL_SRCS := $(HOPPER_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS)
-BLACKWELL_KERNEL_SRCS := $(BLACKWELL_CUBIC_SRCS)
-KERNEL_SRCS := $(AMPERE_V2_SRCS) $(AMPERE_CUBIC_SRCS) $(HOPPER_CUBIC_SRCS) $(BLACKWELL_CUBIC_SRCS) $(VOLTA_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS) $(VOLTA_V2_SRCS)
+BLACKWELL_KERNEL_SRCS := $(BLACKWELL_CUBIC_SRCS) $(BLACKWELL_V2_SRCS)
+KERNEL_SRCS := $(AMPERE_V2_SRCS) $(AMPERE_CUBIC_SRCS) $(HOPPER_CUBIC_SRCS) $(BLACKWELL_CUBIC_SRCS) $(BLACKWELL_V2_SRCS) $(VOLTA_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS) $(VOLTA_V2_SRCS)
 
 RUNNER_OBJS := $(addprefix $(BUILD_DIR)/,$(RUNNER_SRC:.cpp=.o))
 KERNEL_OBJS := $(addprefix $(BUILD_DIR)/,$(KERNEL_SRCS:.cu=.o))
