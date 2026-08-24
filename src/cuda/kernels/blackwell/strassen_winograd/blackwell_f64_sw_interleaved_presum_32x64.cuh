@@ -3,7 +3,7 @@
 
 using EpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
   double,
-  1,
+  2,
   double,
   double>;
 

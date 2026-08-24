@@ -87,7 +87,7 @@
 
 using EpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
   double,                                     // <- data type of output matrix
-  1,                                         // <- This is the number of elements per
+  2,                                         // <- This is the number of elements per
                                              // vectorized memory access. For half
                                              // precision, it's 8 elements. This becomes
                                              // the vector width of math instructions in
@@ -97,7 +97,7 @@ using EpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
 
 using InterimEpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
   double,                                     // <- data type of output matrix
-  4,                                         // <- This is the number of elements per
+  2,                                         // <- This is the number of elements per
                                              // vectorized memory access. For half
                                              // precision, it's 8 elements. This becomes
                                              // the vector width of math instructions in

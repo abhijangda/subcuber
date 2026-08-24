@@ -3,13 +3,13 @@
 
 using EpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
   double,
-  1,
+  2,
   double,
   double>;
 
 using InterimEpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
   double,
-  4,
+  2,
   double,
   double>;
 
