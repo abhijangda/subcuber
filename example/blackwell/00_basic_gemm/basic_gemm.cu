@@ -89,10 +89,10 @@ using ClusterShape = cute::Shape<cute::_2, cute::_1, cute::_1>;
 
 #ifdef TILE_SIZE_256
 using TileShape = cute::Shape<cute::_256, cute::_128, cute::_16>;
-static const Stages = 3;
+static const int Stages = 3;
 #elif defined(TILE_SIZE_128)
 using TileShape = cute::Shape<cute::_64, cute::_128, cute::_16>;
-static const Stages = 2;
+static const int Stages = 2;
 #endif
 
 using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<

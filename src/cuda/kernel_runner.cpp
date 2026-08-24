@@ -123,6 +123,7 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no);
 #endif
 #ifdef STRASSEN_ENABLE_BLACKWELL
+DECLARE_KERNEL_RUN_FN(run_blackwell_f64_cutlass_64x32);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f32_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f32_cutlass_256x128);
 #endif
@@ -212,6 +213,7 @@ static const KernelEntry kKernels[] = {
     {"hopper_f32_cutlass_256x128", "hopper", "f32", 0, run_hopper_f32_cutlass_256x128},
   #endif
   #ifdef STRASSEN_ENABLE_BLACKWELL
+    {"blackwell_f64_cutlass_64x32", "blackwell", "f64", 0, run_blackwell_f64_cutlass_64x32},
     {"blackwell_f32_cutlass_128x128", "blackwell", "f32", 0, run_blackwell_f32_cutlass_128x128},
     {"blackwell_f32_cutlass_256x128", "blackwell", "f32", 0, run_blackwell_f32_cutlass_256x128},
   #endif
@@ -345,6 +347,7 @@ static bool tunes_split_k(KernelEntry const &kernel) {
            std::strstr(kernel.name, "_f32_tile_") != nullptr)) ||
          (std::strstr(kernel.name, "_f32_cutlass_") != nullptr &&
           std::strstr(kernel.name, "blackwell_") == nullptr) ||
+         std::strstr(kernel.name, "blackwell_f64_cutlass_") != nullptr ||
          std::strstr(kernel.name, "ampere_f16_cutlass_") != nullptr;
 }
 

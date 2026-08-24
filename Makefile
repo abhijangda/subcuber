@@ -58,6 +58,7 @@ HOPPER_CUBIC_SRCS := \
 	kernels/hopper/cubic/hopper_f32_cutlass_256x128.cu
 
 BLACKWELL_CUBIC_SRCS := \
+	kernels/blackwell/cubic/blackwell_f64_cutlass_64x32.cu \
 	kernels/blackwell/cubic/blackwell_f32_cutlass_128x128.cu \
 	kernels/blackwell/cubic/blackwell_f32_cutlass_256x128.cu
 

@@ -191,12 +191,22 @@ int kernel_runner_run_gemm_cutlass2(KernelRunnerBuffers buffers, int m, int n, i
   using LayoutC = typename Kernel::LayoutC;
   using Arguments = typename Gemm::Arguments;
 
+  int problem_m = m;
+  int problem_n = n;
+  void const *operand_a = buffers.a;
+  void const *operand_b = buffers.b;
+  if constexpr (requires { Gemm::kTransposeProblem; }) {
+    if constexpr (Gemm::kTransposeProblem) {
+      std::swap(problem_m, problem_n);
+      std::swap(operand_a, operand_b);
+    }
+  }
   Arguments args(
-      cutlass::gemm::GemmCoord(m, n, k),
-      {reinterpret_cast<ElementA const *>(buffers.a), LayoutA::packed({m, k})},
-      {reinterpret_cast<ElementB const *>(buffers.b), LayoutB::packed({k, n})},
-      {reinterpret_cast<ElementC const *>(buffers.c), LayoutC::packed({m, n})},
-      {reinterpret_cast<ElementC *>(buffers.d), LayoutC::packed({m, n})},
+      cutlass::gemm::GemmCoord(problem_m, problem_n, k),
+      {reinterpret_cast<ElementA const *>(operand_a), LayoutA::packed({problem_m, k})},
+      {reinterpret_cast<ElementB const *>(operand_b), LayoutB::packed({k, problem_n})},
+      {reinterpret_cast<ElementC const *>(buffers.c), LayoutC::packed({problem_m, problem_n})},
+      {reinterpret_cast<ElementC *>(buffers.d), LayoutC::packed({problem_m, problem_n})},
       {1.0f, 0.0f},
       split_k_slices);
 
