@@ -10,7 +10,7 @@ class BlackwellF64Cutlass64x32 {
       double,
       double>;
 
-  using ColumnMajor = cutlass::layout::ColumnMajor;
+  using RowMajor = cutlass::layout::RowMajor;
   using ThreadBlockShape = cutlass::gemm::GemmShape<32, 64, 16>;
   using WarpShape = cutlass::gemm::GemmShape<16, 32, 16>;
   using InstructionShape = cutlass::gemm::GemmShape<8, 8, 4>;
@@ -19,11 +19,11 @@ class BlackwellF64Cutlass64x32 {
 
 public:
   using CutlassGemm = cutlass::gemm::device::Gemm<double,
-                                                  ColumnMajor,
+                                                  RowMajor,
                                                   double,
-                                                  ColumnMajor,
+                                                  RowMajor,
                                                   double,
-                                                  ColumnMajor,
+                                                  RowMajor,
                                                   double,
                                                   cutlass::arch::OpClassTensorOp,
                                                   cutlass::arch::Sm80,
