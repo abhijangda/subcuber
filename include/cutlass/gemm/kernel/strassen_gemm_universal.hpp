@@ -35,7 +35,7 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// #include "cutlass/gemm/kernel/sm70_gemm.hpp"
+#include "cutlass/gemm/kernel/sm70_strassen_gemm.hpp"
 // #include "cutlass/gemm/kernel/sm70_gemm_array.hpp"
 // #include "cutlass/gemm/kernel/sm90_gemm_tma.hpp"
 // #include "cutlass/gemm/kernel/sm90_gemm_warpspecialized.hpp"

@@ -58,6 +58,7 @@ template <
   class ElementD,
   class GmemLayoutTagD,
   int AlignmentD,
+  class ProblemShape,
   class EpilogueScheduleType,
   class FusionOpOrCallbacks = cutlass::epilogue::fusion::LinearCombination<ElementD,ElementCompute,ElementC,ElementCompute>,
   class Enable = void,
@@ -116,7 +117,7 @@ struct CollectiveStrassenBuilder {
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "builders/sm90_strassen_gemm_builder.inl"
-// #include "builders/sm100_builder.inl"  
+#include "builders/sm100_strassen_gemm_builder.inl"
 // #include "builders/sm103_builder.inl"
 // #include "builders/sm120_builder.inl"
 

@@ -178,19 +178,25 @@ struct PresumOpt {
 
 template<typename StrassenGroups_, typename ScheduleStrassenGroups_,
          typename ProblemShape,
+<<<<<<< HEAD
          typename ElementA, typename LayoutA, typename SubMatLayoutA,
          typename ElementB, typename LayoutB, typename SubMatLayoutB,
          typename ElementC, typename LayoutC, typename SubMatLayoutC,
          typename ElementAccum,
+=======
+         typename SM, typename OpClass,
+         typename ElementA, typename LayoutA, typename ElementB, typename LayoutB,
+         typename ElementC, typename LayoutC, typename ElementAccum,
+>>>>>>> 359d0d4 (blackwell f32 strassen compiles)
          typename ClusterShape,
          typename StageCount,
          typename PresumTileShapeA = void, typename PresumTileShapeB = void,
-         typename PresumOpt_ = void>
+         typename PresumOpt_ = void,
+         int AlignmentA = 128 / cutlass::sizeof_bits<ElementA>::value,  // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
+         int AlignmentB = 128 / cutlass::sizeof_bits<ElementB>::value,  // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
+         int AlignmentC = 128 / cutlass::sizeof_bits<ElementC>::value>  // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
 class StrassenGemmKernels {
 public:
-  static const int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
-  static const int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
-  static const int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
   using StrassenGroups = StrassenGroups_;
   using ScheduleStrassenGroups = ScheduleStrassenGroups_;
   using PresumOpt = typename std::conditional<std::is_same<PresumOpt_, void>::value, cutlass::gemm::device::PresumOpt<>, PresumOpt_>::type;
@@ -201,13 +207,14 @@ public:
   template<typename ParallelGroup, typename StrassenMiGroup>
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveStrassenBuilder<
     StrassenMiGroup,
-    cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
+    SM, OpClass,
     typename std::conditional<StrassenMiGroup::hasAnyM(), typename StrassenMiGroup::ThreadBlockShape, DefaultTileShape>::type,
     ClusterShape,
     cutlass::epilogue::collective::EpilogueTileAuto,
     ElementAccum, ElementAccum,
     ElementC, LayoutC, AlignmentC,
     ElementC, LayoutC, AlignmentC,
+    ProblemShape,
     cute::conditional_t<!cute::is_same_v<typename ParallelGroup::EpilogueSchedule, void>,
               typename ParallelGroup::EpilogueSchedule, DefaultEpilogueSchedule>,
     cutlass::epilogue::fusion::LinearCombination<
@@ -224,7 +231,7 @@ public:
   template<typename ParallelGroup, typename StrassenMiGroup>
   using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveStrassenBuilder<
     StrassenMiGroup,
-    cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
+    SM, OpClass,
     ElementA, LayoutA, AlignmentA,
     ElementB, LayoutB, AlignmentB,
     ElementAccum,
@@ -805,12 +812,12 @@ public:
     if (ParallelGroup0::HasAKernel()) {
       err = initialize_parallel_kernels<ParallelGroup0>(
                                         typename GemmKernelM0::Arguments(args0), paramsM0_,
-                                        typename GemmKernelM0::Arguments(args1), paramsM1_,
-                                        typename GemmKernelM0::Arguments(args2), paramsM2_,
-                                        typename GemmKernelM0::Arguments(args3), paramsM3_,
-                                        typename GemmKernelM0::Arguments(args4), paramsM4_,
-                                        typename GemmKernelM0::Arguments(args5), paramsM5_,
-                                        typename GemmKernelM0::Arguments(args6), paramsM6_,
+                                        typename GemmKernelM1::Arguments(args1), paramsM1_,
+                                        typename GemmKernelM2::Arguments(args2), paramsM2_,
+                                        typename GemmKernelM3::Arguments(args3), paramsM3_,
+                                        typename GemmKernelM4::Arguments(args4), paramsM4_,
+                                        typename GemmKernelM5::Arguments(args5), paramsM5_,
+                                        typename GemmKernelM6::Arguments(args6), paramsM6_,
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
@@ -821,12 +828,12 @@ public:
     if (ParallelGroup1::HasAKernel()) {
       err = initialize_parallel_kernels<ParallelGroup1>(
                                         typename GemmKernelM0::Arguments(args0), paramsM0_,
-                                        typename GemmKernelM0::Arguments(args1), paramsM1_,
-                                        typename GemmKernelM0::Arguments(args2), paramsM2_,
-                                        typename GemmKernelM0::Arguments(args3), paramsM3_,
-                                        typename GemmKernelM0::Arguments(args4), paramsM4_,
-                                        typename GemmKernelM0::Arguments(args5), paramsM5_,
-                                        typename GemmKernelM0::Arguments(args6), paramsM6_,
+                                        typename GemmKernelM1::Arguments(args1), paramsM1_,
+                                        typename GemmKernelM2::Arguments(args2), paramsM2_,
+                                        typename GemmKernelM3::Arguments(args3), paramsM3_,
+                                        typename GemmKernelM4::Arguments(args4), paramsM4_,
+                                        typename GemmKernelM5::Arguments(args5), paramsM5_,
+                                        typename GemmKernelM6::Arguments(args6), paramsM6_,
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
@@ -837,12 +844,12 @@ public:
     if (ParallelGroup2::HasAKernel()) {
       err = initialize_parallel_kernels<ParallelGroup2>(
                                         typename GemmKernelM0::Arguments(args0), paramsM0_,
-                                        typename GemmKernelM0::Arguments(args1), paramsM1_,
-                                        typename GemmKernelM0::Arguments(args2), paramsM2_,
-                                        typename GemmKernelM0::Arguments(args3), paramsM3_,
-                                        typename GemmKernelM0::Arguments(args4), paramsM4_,
-                                        typename GemmKernelM0::Arguments(args5), paramsM5_,
-                                        typename GemmKernelM0::Arguments(args6), paramsM6_,
+                                        typename GemmKernelM1::Arguments(args1), paramsM1_,
+                                        typename GemmKernelM2::Arguments(args2), paramsM2_,
+                                        typename GemmKernelM3::Arguments(args3), paramsM3_,
+                                        typename GemmKernelM4::Arguments(args4), paramsM4_,
+                                        typename GemmKernelM5::Arguments(args5), paramsM5_,
+                                        typename GemmKernelM6::Arguments(args6), paramsM6_,
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
@@ -853,12 +860,12 @@ public:
     if (ParallelGroup3::HasAKernel()) {
       err = initialize_parallel_kernels<ParallelGroup3>(
                                         typename GemmKernelM0::Arguments(args0), paramsM0_,
-                                        typename GemmKernelM0::Arguments(args1), paramsM1_,
-                                        typename GemmKernelM0::Arguments(args2), paramsM2_,
-                                        typename GemmKernelM0::Arguments(args3), paramsM3_,
-                                        typename GemmKernelM0::Arguments(args4), paramsM4_,
-                                        typename GemmKernelM0::Arguments(args5), paramsM5_,
-                                        typename GemmKernelM0::Arguments(args6), paramsM6_,
+                                        typename GemmKernelM1::Arguments(args1), paramsM1_,
+                                        typename GemmKernelM2::Arguments(args2), paramsM2_,
+                                        typename GemmKernelM3::Arguments(args3), paramsM3_,
+                                        typename GemmKernelM4::Arguments(args4), paramsM4_,
+                                        typename GemmKernelM5::Arguments(args5), paramsM5_,
+                                        typename GemmKernelM6::Arguments(args6), paramsM6_,
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
@@ -869,12 +876,12 @@ public:
     if (ParallelGroup4::HasAKernel()) {
       err = initialize_parallel_kernels<ParallelGroup4>(
                                         typename GemmKernelM0::Arguments(args0), paramsM0_,
-                                        typename GemmKernelM0::Arguments(args1), paramsM1_,
-                                        typename GemmKernelM0::Arguments(args2), paramsM2_,
-                                        typename GemmKernelM0::Arguments(args3), paramsM3_,
-                                        typename GemmKernelM0::Arguments(args4), paramsM4_,
-                                        typename GemmKernelM0::Arguments(args5), paramsM5_,
-                                        typename GemmKernelM0::Arguments(args6), paramsM6_,
+                                        typename GemmKernelM1::Arguments(args1), paramsM1_,
+                                        typename GemmKernelM2::Arguments(args2), paramsM2_,
+                                        typename GemmKernelM3::Arguments(args3), paramsM3_,
+                                        typename GemmKernelM4::Arguments(args4), paramsM4_,
+                                        typename GemmKernelM5::Arguments(args5), paramsM5_,
+                                        typename GemmKernelM6::Arguments(args6), paramsM6_,
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
@@ -885,12 +892,12 @@ public:
     if (ParallelGroup5::HasAKernel()) {
       err = initialize_parallel_kernels<ParallelGroup5>(
                                         typename GemmKernelM0::Arguments(args0), paramsM0_,
-                                        typename GemmKernelM0::Arguments(args1), paramsM1_,
-                                        typename GemmKernelM0::Arguments(args2), paramsM2_,
-                                        typename GemmKernelM0::Arguments(args3), paramsM3_,
-                                        typename GemmKernelM0::Arguments(args4), paramsM4_,
-                                        typename GemmKernelM0::Arguments(args5), paramsM5_,
-                                        typename GemmKernelM0::Arguments(args6), paramsM6_,
+                                        typename GemmKernelM1::Arguments(args1), paramsM1_,
+                                        typename GemmKernelM2::Arguments(args2), paramsM2_,
+                                        typename GemmKernelM3::Arguments(args3), paramsM3_,
+                                        typename GemmKernelM4::Arguments(args4), paramsM4_,
+                                        typename GemmKernelM5::Arguments(args5), paramsM5_,
+                                        typename GemmKernelM6::Arguments(args6), paramsM6_,
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
@@ -901,12 +908,12 @@ public:
     if (ParallelGroup6::HasAKernel()) {
       err = initialize_parallel_kernels<ParallelGroup6>(
                                         typename GemmKernelM0::Arguments(args0), paramsM0_,
-                                        typename GemmKernelM0::Arguments(args1), paramsM1_,
-                                        typename GemmKernelM0::Arguments(args2), paramsM2_,
-                                        typename GemmKernelM0::Arguments(args3), paramsM3_,
-                                        typename GemmKernelM0::Arguments(args4), paramsM4_,
-                                        typename GemmKernelM0::Arguments(args5), paramsM5_,
-                                        typename GemmKernelM0::Arguments(args6), paramsM6_,
+                                        typename GemmKernelM1::Arguments(args1), paramsM1_,
+                                        typename GemmKernelM2::Arguments(args2), paramsM2_,
+                                        typename GemmKernelM3::Arguments(args3), paramsM3_,
+                                        typename GemmKernelM4::Arguments(args4), paramsM4_,
+                                        typename GemmKernelM5::Arguments(args5), paramsM5_,
+                                        typename GemmKernelM6::Arguments(args6), paramsM6_,
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,

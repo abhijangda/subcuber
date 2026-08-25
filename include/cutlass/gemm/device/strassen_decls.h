@@ -1901,19 +1901,19 @@ public:
   static constexpr size_t SharedStorageSize() {
     size_t max_size = 0;
     if (ParallelGroup::HasGroup(0))
-      max_size = std::max(max_size, sizeof(typename GemmKernel0::SharedStorage));
+      max_size = std::max(max_size, size_t(GemmKernel0::SharedStorageSize));
     if (ParallelGroup::HasGroup(1))
-      max_size = std::max(max_size, sizeof(typename GemmKernel1::SharedStorage));
+      max_size = std::max(max_size, size_t(GemmKernel1::SharedStorageSize));
     if (ParallelGroup::HasGroup(2))
-      max_size = std::max(max_size, sizeof(typename GemmKernel2::SharedStorage));
+      max_size = std::max(max_size, size_t(GemmKernel2::SharedStorageSize));
     if (ParallelGroup::HasGroup(3))
-      max_size = std::max(max_size, sizeof(typename GemmKernel3::SharedStorage));
+      max_size = std::max(max_size, size_t(GemmKernel3::SharedStorageSize));
     if (ParallelGroup::HasGroup(4))
-      max_size = std::max(max_size, sizeof(typename GemmKernel4::SharedStorage));
+      max_size = std::max(max_size, size_t(GemmKernel4::SharedStorageSize));
     if (ParallelGroup::HasGroup(5))
-      max_size = std::max(max_size, sizeof(typename GemmKernel5::SharedStorage));
+      max_size = std::max(max_size, size_t(GemmKernel5::SharedStorageSize));
     if (ParallelGroup::HasGroup(6))
-      max_size = std::max(max_size, sizeof(typename GemmKernel6::SharedStorage));
+      max_size = std::max(max_size, size_t(GemmKernel6::SharedStorageSize));
     return std::max(max_size, 1024UL);
   }
 
