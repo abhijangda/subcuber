@@ -303,12 +303,12 @@ using StrassenGroups = MmaStrassen::StrassenLevel1Groups<StrassenPresum<kStrasse
                                                                     RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                     AllPresumsM1To6>
                                               >;
-  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0, 1>>,
-                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
-                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 3>>,
-                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>,
-                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 5>>,
-                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 6>>
+  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0, 1>>
+                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
+                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 3>>,
+                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>,
+                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 5>>,
+                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 6>>
                                                          >;
 #endif
 
