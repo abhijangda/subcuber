@@ -157,9 +157,9 @@ static __global__ void postsumcheck(Elem* postsum) {
   
   for (int c = 0; c < 4; c++) {
     uint col = c*blockDim.x + threadIdx.x;
-    if (row < 8*1024/2 && col < 8*1024/2 && float(postsum[1*R*C + row*C + col]) != 4096.0f)
+    if (row < 8*1024/2 && col < 8*1024/2 && float(postsum[2*R*C + row*C + col]) != 8192.0f)
       printf("63: %d %d: M0 %f M2 %f\n", row, col,
-             float(postsum[0*R*C + row*C + col]), float(postsum[1*R*C + row*C + col]));
+             float(postsum[0*R*C + row*C + col]), float(postsum[2*R*C + row*C + col]));
             // &presum[row*512+threadIdx.x]);
   }
 }
@@ -178,16 +178,10 @@ struct PresumOpt {
 
 template<typename StrassenGroups_, typename ScheduleStrassenGroups_,
          typename ProblemShape,
-<<<<<<< HEAD
          typename ElementA, typename LayoutA, typename SubMatLayoutA,
          typename ElementB, typename LayoutB, typename SubMatLayoutB,
          typename ElementC, typename LayoutC, typename SubMatLayoutC,
          typename ElementAccum,
-=======
-         typename SM, typename OpClass,
-         typename ElementA, typename LayoutA, typename ElementB, typename LayoutB,
-         typename ElementC, typename LayoutC, typename ElementAccum,
->>>>>>> 359d0d4 (blackwell f32 strassen compiles)
          typename ClusterShape,
          typename StageCount,
          typename PresumTileShapeA = void, typename PresumTileShapeB = void,
@@ -1031,7 +1025,6 @@ public:
       // Account for dynamic smem capacity if needed
       //
       int smem_size = ParallelGroup::SharedStorageSize();
-      printf("693 %d\n", smem_size);
       CUTLASS_ASSERT(cuda_adapter == nullptr);
 
       if (smem_size >= (48 << 10)) {
@@ -1279,6 +1272,7 @@ public:
     dim3 grid = get_grid_shape<GemmKernelM0>(params0);
     dim3 origGrid = grid;
     grid.z = ParallelMiKernels::NumKernels()*grid.z;
+
     ParallelMiKernels parallel_kernels(params0, params1, params2, params3, params4, params5, params6);
 
     // configure smem size and carveout
@@ -1463,6 +1457,7 @@ public:
 
     if (false) {
       cudaDeviceSynchronize();
+      printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(cudaGetLastError()));
       #if 0
       uint R = 8*1024/2, C = 8*1024/2;
       ElementB* h_presum_b = new ElementB[R*C];
@@ -1500,6 +1495,7 @@ public:
       presumcheck<ElementA><<<8192/2,1024>>>(256, 8192, paramsM0_.presum_m_a_workspace);
       // postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
       cudaDeviceSynchronize();
+      printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(cudaGetLastError()));
       exit(EXIT_SUCCESS);
     }
 

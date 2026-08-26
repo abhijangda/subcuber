@@ -38,6 +38,12 @@
 
 #include "cute/tensor.hpp"
 
+#include "cutlass/gemm/threadblock/presum_detail.h"
+#include "cutlass/gemm/device/strassen_decls.h"
+
+using namespace cutlass::gemm::threadblock;
+using namespace MmaStrassen;
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
@@ -107,6 +113,7 @@ public:
   // Type Aliases
   //
   // derived types of output thread level operator
+  using StrassenMiGroup = StrassenMiGroup_;
   using ThreadEpilogueOp = ThreadEpilogueOp_;
   using ElementAccumulator = typename ThreadEpilogueOp::ElementAccumulator;
   using ElementCompute = typename ThreadEpilogueOp::ElementCompute;
@@ -195,6 +202,7 @@ public:
     StrideD dD{};
     ElementBias const* ptr_Bias = nullptr;
     StrideBias dBias{};
+    void* ptr_postsum_m;
   };
 
   template<class ThreadEpiOp>
@@ -221,6 +229,7 @@ public:
   static constexpr Params
   to_underlying_arguments(
       [[maybe_unused]] ProblemShape const& _,
+      ElementD* postsum_m,
       Arguments const& args,
       [[maybe_unused]] void* workspace) {
     typename ThreadEpilogueOp::Params thread_op_args;
@@ -238,7 +247,8 @@ public:
         args.ptr_D,
         args.dD,
         args.thread.bias_ptr,
-        args.thread.dBias
+        args.thread.dBias,
+        postsum_m
       };
     }
     else {
@@ -249,7 +259,8 @@ public:
         args.ptr_D,
         args.dD,
         args.thread.bias_ptr,
-        args.thread.dBias
+        args.thread.dBias,
+        postsum_m
       };
     }
   }
@@ -294,7 +305,88 @@ public:
     class ResidueMNK
   >
   CUTLASS_DEVICE void
-  operator()(
+  store_m0(
+      ProblemShapeMNKL problem_shape_mnkl,
+      BlockShapeMNK blk_shape_MNK,
+      BlockCoordMNKL blk_coord_mnkl,
+      cute::Tensor<FrgEngine,FrgLayout> const& accumulators,                   // (MMA,MMA_M,MMA_N)
+      TiledMma tiled_mma,
+      ResidueMNK residue_mnk,
+      int thread_idx,
+      char* smem_buf,
+      int sub_m_idx = 0) {
+    auto [M, N, K, L] = problem_shape_mnkl;
+    auto [m_coord, n_coord, k_coord, l_coord] = blk_coord_mnkl;
+
+    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<1>(BlockShapeMNK{})) + n_coord)*size<0>(BlockShapeMNK{})*size<1>(BlockShapeMNK{});
+    using VectorType = cutlass::Array<float, 16/sizeof(ElementD)>;
+    using RWCTypes = typename StrassenMiGroup::RWCTypes;
+    constexpr uint NumMMAThreads = size(TiledMma{});
+
+    VectorType* arrs = (VectorType*)&accumulators;
+
+    #pragma unroll 4
+    for (int co = 0; co < 4; co++) {
+      auto dest_global_op = RWCTypes::PostsumGlobalDestByOutputIndex(co);
+
+      if (!dest_global_op.is_layout_interim_linear()) continue;
+
+      auto postsum_dst = postsum_m0 + (M/2*N/2 * dest_global_op.get_op());
+
+      for (int elem = 0; elem < accumulators.size(); elem += VectorType::kElements) {
+        VectorType arr = arrs[elem/VectorType::kElements];
+
+        for (int ci = 0; ci < 4; ci++) {
+          auto src_global_op = RWCTypes::PostsumSrcByOutputIndex(co, ci);
+          if (src_global_op.valid() && src_global_op.is_mem_global() && src_global_op.is_layout_interim_linear()) {
+            const VectorType* postsum_src = (const VectorType*) (postsum_m0 + (M/2*N/2 * src_global_op.get_op()) + elem * NumMMAThreads + thread_idx*VectorType::kElements);
+            VectorType src_val;
+            src_val.clear();
+
+            arch::global_load<VectorType, sizeof(VectorType)>(src_val, postsum_src, true);
+            //TODO: Does this use f32x2 packed?
+            arr = arr + src_val;
+          }
+        }
+
+        arch::global_store<VectorType, sizeof(VectorType)>(arr, &postsum_dst[elem * NumMMAThreads + thread_idx*VectorType::kElements], true);
+      }
+    }
+  }
+
+  CUTLASS_DEVICE PostsumOp
+  get_dst_postsum_op(PostsumOp src_ops[2], bool is_matrix) {
+    using RWCTypes = typename StrassenMiGroup::RWCTypes;
+    #pragma unroll 4
+    for (int co = 0; co < 4; co++) {
+      auto dest_global_op = RWCTypes::PostsumGlobalDestByOutputIndex(co);
+      if (is_matrix && (dest_global_op.is_layout_final() || dest_global_op.is_layout_interim_matrix())) {
+        for (int ci = 0; ci < 2; ci++) {
+          auto src_global_op = RWCTypes::PostsumSrcByOutputIndex(co, ci);
+          src_ops[ci] = src_global_op;
+        }
+        return dest_global_op;
+      } else if (!is_matrix && dest_global_op.is_layout_interim_linear()) {
+        for (int ci = 0; ci < 2; ci++) {
+          auto src_global_op = RWCTypes::PostsumSrcByOutputIndex(co, ci);
+          src_ops[ci] = src_global_op;
+        }
+        return dest_global_op;
+      }
+    }
+    return PostsumOp();
+  }
+
+  template<
+    class ProblemShapeMNKL,
+    class BlockShapeMNK,
+    class BlockCoordMNKL,
+    class FrgEngine, class FrgLayout,
+    class TiledMma,
+    class ResidueMNK
+  >
+  CUTLASS_DEVICE void
+  store(
       ProblemShapeMNKL problem_shape_mnkl,
       BlockShapeMNK blk_shape_MNK,
       BlockCoordMNKL blk_coord_mnkl,
@@ -310,6 +402,7 @@ public:
     static_assert(is_static<BlockShapeMNK>::value, "ThreadBlock tile shape must be static");
     static_assert(cute::rank(BlockShapeMNK{}) == 3, "BlockShapeMNK must be rank 3");
     static_assert(cute::rank(BlockCoordMNKL{}) == 4, "BlockCoordMNKL must be rank 3");
+    constexpr uint NumMMAThreads = size(TiledMma{});
 
     // synchronizing function for smem reads/writes
 #if CUDA_BARRIER_ENABLED
@@ -322,6 +415,11 @@ public:
     auto M = get<0>(problem_shape_mnkl);
     auto N = get<1>(problem_shape_mnkl);
     auto L = get<3>(problem_shape_mnkl);
+    
+    PostsumOp src1_ops[4], src2_ops[4];
+
+    PostsumOp dst1_op = get_dst_postsum_op(src1_ops, true);
+    PostsumOp dst2_op = get_dst_postsum_op(src2_ops, false);
 
     // Represent the full output tensor
     Tensor mC_mnl = make_tensor(make_gmem_ptr(params.ptr_C), make_shape(M,N,L), params.dC);             //             (m,n,l)
@@ -334,9 +432,16 @@ public:
 
     // Slice to get the tile this CTA is responsible for
     auto [m_coord, n_coord, k_coord, l_coord] = blk_coord_mnkl;
-    Tensor gC = gC_mnl(_,_,m_coord,n_coord,l_coord);                                                   // (BLK_M,BLK_N)
-    Tensor gD = gD_mnl(_,_,m_coord,n_coord,l_coord);                                                   // (BLK_M,BLK_N)
+    const uint dst1_m_idx = (M/2)*(dst1_op.get_op()/2)/size<0>(blk_shape_MNK);
+    const uint dst1_n_idx = (N/2)*(dst1_op.get_op()%2)/size<1>(blk_shape_MNK);
+
+    Tensor gC = gC_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);                                                   // (BLK_M,BLK_N)
+    Tensor gD = gD_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);                                                   // (BLK_M,BLK_N)
     Tensor gBias = gBias_mnl(_,_,m_coord,n_coord,l_coord);                                             // (BLK_M,BLK_N)
+
+    ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<1>(BlockShapeMNK{})) + n_coord)*size<0>(BlockShapeMNK{})*size<1>(BlockShapeMNK{});
+    using VectorType = cutlass::Array<float, 16/sizeof(ElementD)>;
+    using RWCTypes = typename StrassenMiGroup::RWCTypes;
 
     // Construct a tensor in SMEM that we can partition for rearranging data
     SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
@@ -413,6 +518,39 @@ public:
 
         // Step 0. Copy Bias from GMEM to fragment
         copy_if(tSR_pD_flt, tSR_gBias_flt, tSR_rBias_flt);
+      }
+    }
+
+    {
+      VectorType* arrs = (VectorType*)&accumulators;
+
+      for (int elem = 0; elem < accumulators.size(); elem += VectorType::kElements) {
+        VectorType& arr = arrs[elem/VectorType::kElements];
+
+        if (dst2_op.valid() && dst2_op.is_mem_global() && dst2_op.is_layout_interim_linear()) {
+          auto postsum_dst = postsum_m0 + (M/2*N/2 * dst2_op.get_op());
+          arch::global_store<VectorType, sizeof(VectorType)>(arr, &postsum_dst[elem * NumMMAThreads + thread_idx*VectorType::kElements], true);
+        }
+
+        if (src1_ops[0].valid() && src1_ops[0].is_mem_global() && src1_ops[0].is_layout_interim_linear()) {
+          const VectorType* postsum_src = (const VectorType*) (postsum_m0 + (M/2*N/2 * src1_ops[0].get_op()) + elem * NumMMAThreads + thread_idx*VectorType::kElements);
+          VectorType src_val;
+          src_val.clear();
+
+          arch::global_load<VectorType, sizeof(VectorType)>(src_val, postsum_src, true);
+          //TODO: Does this use f32x2 packed?
+          arr = arr + src_val;
+        }
+
+        if (src1_ops[1].valid() && src1_ops[1].is_mem_global() && src1_ops[1].is_layout_interim_linear()) {
+          const VectorType* postsum_src = (const VectorType*) (postsum_m0 + (M/2*N/2 * src1_ops[1].get_op()) + elem * NumMMAThreads + thread_idx*VectorType::kElements);
+          VectorType src_val;
+          src_val.clear();
+
+          arch::global_load<VectorType, sizeof(VectorType)>(src_val, postsum_src, true);
+          //TODO: Does this use f32x2 packed?
+          arr = arr + src_val;
+        }
       }
     }
 

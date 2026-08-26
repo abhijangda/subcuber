@@ -261,12 +261,12 @@ using StrassenGroups = MmaStrassen::StrassenLevel1Groups<StrassenPresum<kStrasse
 
   //[m0], [m1], [m2], [m3], [m4], [m5], [m6]
   using AllPresumsKernel = AllPresums<>;
-  using AllPresumsM0    = AllPresums<PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,    PresumCompute,  PresumCompute,    PresumCompute>;
-  // using AllPresumsM0    = AllPresums<PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,    PresumGlobalKernel,  PresumGlobalKernel,    PresumGlobalKernel>;
+  // using AllPresumsM0    = AllPresums<PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,    PresumCompute,  PresumCompute,    PresumCompute>;
+  using AllPresumsM0    = AllPresums<PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,    PresumGlobalKernel,  PresumGlobalKernel,    PresumGlobalKernel>;
   using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable>;
 
   using StrassenGroups = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, ThreadBlockShape,
-                                                              AllPresumsKernel>,
+                                                              AllPresumsM0>,
                                               StrassenLevel1M0Group<kStrassenLevel, 0, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<KeepAccums>,
                                                                     RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
@@ -303,12 +303,12 @@ using StrassenGroups = MmaStrassen::StrassenLevel1Groups<StrassenPresum<kStrasse
                                                                     RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                     AllPresumsM1To6>
                                               >;
-  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0, 1>>
-                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
-                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 3>>,
-                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>,
-                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 5>>,
-                                                        //  ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 6>>
+  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0, 1>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 3>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 5>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 6>>
                                                          >;
 #endif
 
@@ -482,10 +482,11 @@ cudaError_t CutlassSgemmNN(
   args.scheduler.raster_order = RasterOrderOptions::AlongN;
   args.scheduler.max_swizzle_size = 1;
 
-  cutlass::Status status = CutlassGemm::can_implement(args);
-  if (status != cutlass::Status::kSuccess) {
-    return cudaErrorInvalidValue;
-  }
+  cutlass::Status status;// = CutlassGemm::can_implement(args);
+  // if (status != cutlass::Status::kSuccess) {
+    // printf("invalid problem");
+    // return cudaErrorInvalidValue;
+  // }
 
   size_t workspace_size = CutlassGemm::get_workspace_size(args);
   cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
@@ -687,7 +688,7 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, float alpha, float b
   cudaStreamCreate(&streams[5]);
   cudaStreamCreate(&streams[6]);
   float elapsedTime = 0;
-
+  printf("691\n");
   result = CutlassSgemmNN(M, N, K, level, alpha, A, lda, B, ldb, beta, C_cutlass, ldc, streams, num_streams, elapsedTime, 1, split_k_slices);
   result = cudaDeviceSynchronize();
   // printf("executed\n");
@@ -765,6 +766,9 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, float alpha, float b
     {
       bool eq = true;
       for (int i = 0; i < host_cutlass.size(); i++) {
+        int row = i/N, col = i%N;
+        // if ((row < N/2 && col < N/2) || (row > N/2 && col < N/2) || (row > N/2 && col < N/2) )
+        {
         float c = host_cutlass[i];
         float r = host_reference[i];
 
@@ -786,6 +790,7 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, float alpha, float b
           std::cerr << "CUTLASS results incorrect." << std::endl;
           break;
         }
+        }
       }
 
       if (eq) printf("Passed\n");
@@ -797,6 +802,7 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, float alpha, float b
   }
   
   //warmup
+  
   result = CutlassSgemmNN(M, N, K, level, alpha, A, lda, B, ldb, beta, C_cutlass, ldc, streams, num_streams, elapsedTime, 10, split_k_slices);
   cudaDeviceSynchronize();
   elapsedTime = 0;

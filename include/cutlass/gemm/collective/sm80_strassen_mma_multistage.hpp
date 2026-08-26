@@ -687,6 +687,115 @@ struct CollectiveStrassenMma<
     };
   }
 
+  template <class ProblemShape_MNKL>
+  CUTLASS_DEVICE auto
+  load_init(ProblemShape_MNKL const& problem_shape_MNKL, Params const& mainloop_params) const {
+    using X = Underscore;
+    // Separate out problem shape for convenience
+    auto [M,N,K,L] = problem_shape_MNKL;
+    auto halfM = M/2; auto halfN = N/2; auto halfK = K/2;
+
+    const int32_t init_L = 1;
+
+    // TMA requires special handling of strides to deal with coord codomain mapping
+    // Represent the full tensors -- get these from TMA
+    Tensor mA_mkl = make_tensor(make_gmem_ptr(mainloop_params.ptr_A), make_shape(M,K,L), mainloop_params.dA); //(m,k,l)
+    Tensor mB_nkl = make_tensor(make_gmem_ptr(mainloop_params.ptr_B), make_shape(N,K,L), mainloop_params.dB); //(n,k,l)
+
+    // Make tiled views, defer the slice
+    Tensor gA_mkl = local_tile(mA_mkl, TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});  // (BLK_M,BLK_K,m,k,l)
+    Tensor gB_nkl = local_tile(mB_nkl, TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});  // (BLK_N,BLK_K,n,k,l)
+
+    auto& stride_a = mainloop_params.dA;
+    auto& stride_b = mainloop_params.dB;
+
+    Tensor presum_mA_mkl = make_tensor(make_gmem_ptr(mainloop_params.ptr_presum_A), make_shape(4*halfM,halfK,init_L), make_stride(get<0>(stride_a)/2, get<1>(stride_a), get<2>(stride_a))); //(m,k,l)
+    Tensor presum_mB_nkl = make_tensor(make_gmem_ptr(mainloop_params.ptr_presum_B), make_shape(halfN,4*halfK,init_L), make_stride(get<0>(stride_b), get<1>(stride_b)/2, get<2>(stride_b))); //(n,k,l)
+
+    // Make tiled views, defer the slice
+    Tensor gA00_mkl = local_tile(domain_offset(make_coord(0, 0, 0), mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+    Tensor gA01_mkl = local_tile(domain_offset(make_coord(0, halfK, 0), mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+    Tensor gA10_mkl = local_tile(domain_offset(make_coord(halfM, 0, 0), mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+    Tensor gA11_mkl = local_tile(domain_offset(make_coord(halfM, halfK, 0), mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+
+    Tensor gB00_nkl = local_tile(domain_offset(make_coord(0, 0, 0), mB_nkl), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});        // (BLK_N,BLK_K,n,k,l)
+    Tensor gB01_nkl = local_tile(domain_offset(make_coord(halfN, 0, 0), mB_nkl), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+    Tensor gB10_nkl = local_tile(domain_offset(make_coord(0, halfK, 0), mB_nkl), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+    Tensor gB11_nkl = local_tile(domain_offset(make_coord(halfN, halfK, 0), mB_nkl), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+
+    Tensor gPresumA02 = local_tile(domain_offset(make_coord(StrassenMiGroup::AllPresums::indexAPresum(StrassenMiGroup::APresums::A02)*halfM, 0, 0), presum_mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+    Tensor gPresumS1 = local_tile(domain_offset(make_coord(StrassenMiGroup::AllPresums::indexAPresum(StrassenMiGroup::APresums::S1)*halfM, 0, 0), presum_mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+    Tensor gPresumS2 = local_tile(domain_offset(make_coord(StrassenMiGroup::AllPresums::indexAPresum(StrassenMiGroup::APresums::S2)*halfM, 0, 0), presum_mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+    Tensor gPresumA1S2 = local_tile(domain_offset(make_coord(StrassenMiGroup::AllPresums::indexAPresum(StrassenMiGroup::APresums::A1S2)*halfM, 0, 0), presum_mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+
+    Tensor gPresumB31 = local_tile(domain_offset(make_coord(0, StrassenMiGroup::AllPresums::indexBPresum(StrassenMiGroup::BPresums::B31)*halfK, 0), presum_mB_nkl), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+    Tensor gPresumB10 = local_tile(domain_offset(make_coord(0, StrassenMiGroup::AllPresums::indexBPresum(StrassenMiGroup::BPresums::B10)*halfK, 0), presum_mB_nkl), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+    Tensor gPresumS3 = local_tile(domain_offset(make_coord(0, StrassenMiGroup::AllPresums::indexBPresum(StrassenMiGroup::BPresums::S3)*halfK, 0), presum_mB_nkl), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+    Tensor gPresumS3B2 = local_tile(domain_offset(make_coord(0, StrassenMiGroup::AllPresums::indexBPresum(StrassenMiGroup::BPresums::S3B2)*halfK, 0), presum_mB_nkl), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+
+    return cute::make_tuple(gA00_mkl, gA01_mkl, gA10_mkl, gA11_mkl,
+                            gPresumA02, gPresumS1, gPresumS2, gPresumA1S2,
+                            gB00_nkl, gB01_nkl, gB10_nkl, gB11_nkl,
+                            gPresumB31, gPresumB10, gPresumS3, gPresumS3B2);
+  }
+
+  template<typename Tuple>
+  CUTLASS_DEVICE auto
+  get_inputs(Tuple const& load_inputs, int sub_m_idx = 0) {
+    auto load_inputs_a = take<0, 8  >(load_inputs);
+    auto load_inputs_b = take<8, 8+8>(load_inputs);
+
+    if constexpr (StrassenMiGroup::hasM0()) {
+      if (!is_fused || sub_m_idx == 0) {
+        return make_tuple(get<MmaStrassen::APresums::A0>(load_inputs_a),
+                          get<MmaStrassen::BPresums::B0>(load_inputs_b));
+      }
+    }
+    if constexpr (StrassenMiGroup::hasM1()) {
+      if (!is_fused || sub_m_idx == 1) {
+        return make_tuple(get<MmaStrassen::APresums::A1>(load_inputs_a),
+                          get<MmaStrassen::BPresums::B2>(load_inputs_b));
+      }
+    }
+
+    constexpr bool IsFusedM2M3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
+    constexpr bool IsFusedM2M3M6 = StrassenMiGroup::hasM6() && IsFusedM2M3;
+    constexpr bool IsFusedM4M5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
+
+    if constexpr (StrassenMiGroup::hasM2()) {
+      if (!IsFusedM2M3 || sub_m_idx == 0) {
+        return make_tuple(get<MmaStrassen::APresums::S2>(load_inputs_a),
+                          get<MmaStrassen::BPresums::S3>(load_inputs_b));
+      }
+    }
+    if constexpr (StrassenMiGroup::hasM3()) {
+      if (!IsFusedM2M3 || sub_m_idx == 1) {
+        return make_tuple(get<StrassenMiGroup::APresums::A02>(load_inputs_a),
+                          get<StrassenMiGroup::BPresums::B31>(load_inputs_b));
+      }
+    }
+    if constexpr (StrassenMiGroup::hasM4()) {
+      if (!IsFusedM4M5 || sub_m_idx == 0) {
+        return make_tuple(get<StrassenMiGroup::APresums::S1>(load_inputs_a),
+                          get<StrassenMiGroup::BPresums::B10>(load_inputs_b));
+      }
+    }
+    if constexpr (StrassenMiGroup::hasM5()) {
+      if (!IsFusedM4M5 || sub_m_idx == 1) {
+        return make_tuple(get<StrassenMiGroup::APresums::A1S2>(load_inputs_a),
+                          get<StrassenMiGroup::BPresums::B3>(load_inputs_b));
+      }
+    }
+    if constexpr (StrassenMiGroup::hasM6()) {
+      if (!IsFusedM2M3M6 || sub_m_idx == 2) {
+        return make_tuple(get<StrassenMiGroup::APresums::A3>(load_inputs_a),
+                          get<StrassenMiGroup::BPresums::S3B2>(load_inputs_b));
+      }
+    }
+
+    CUTE_GCC_UNREACHABLE;
+  }
+
   /// Perform a collective-scoped matrix multiply-accumulate
   template <
     class FrgTensorD,

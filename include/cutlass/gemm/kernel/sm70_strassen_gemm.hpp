@@ -258,7 +258,7 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
       args.mode,
       args.problem_shape,
       CollectiveMainloop::to_underlying_arguments(args.problem_shape, presum_m_a, presum_m_b, args.mainloop, workspace),
-      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, workspace),
+      CollectiveEpilogue::to_underlying_arguments(args.problem_shape, postsum_m, args.epilogue, workspace),
       const_cast<ElementA*>(args.mainloop.ptr_A),
       const_cast<ElementB*>(args.mainloop.ptr_B),
       const_cast<ElementD*>(args.epilogue.ptr_D),
@@ -296,8 +296,8 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
     }
 
     return dim3(
-      cute::size(cute::ceil_div(cute::shape<0>(params.problem_shape), cute::shape<0>(TileShape{}))),
-      cute::size(cute::ceil_div(cute::shape<1>(params.problem_shape), cute::shape<1>(TileShape{}))),
+      cute::size(cute::ceil_div(cute::shape<0>(params.problem_shape)/2, cute::shape<0>(TileShape{}))),
+      cute::size(cute::ceil_div(cute::shape<1>(params.problem_shape)/2, cute::shape<1>(TileShape{}))),
       batch_count
     );
   }
@@ -309,12 +309,12 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
 
   CUTLASS_DEVICE
   void
-  operator()(Params const& params, char* smem_buf, char* in_accums = nullptr, dim3 base_block = {0,0,0}) {
-    operator()(params, *(SharedStorage*)smem_buf, in_accums, base_block);
+  operator()(Params const& params, char* smem_buf, char* accums_store = nullptr, dim3 base_block = {0,0,0}) {
+    operator()(params, *(SharedStorage*)smem_buf, accums_store, base_block);
   }
 
   CUTLASS_DEVICE
-  void operator()(Params const& params, SharedStorage& shared_storage, char* in_accums = nullptr, dim3 base_block = {0,0,0}) {
+  void operator()(Params const& params, SharedStorage& shared_storage, char* accums_store = nullptr, dim3 base_block = {0,0,0}) {
     char* smem_buf = reinterpret_cast<char*>(&shared_storage);
     using namespace cute;
     using X = Underscore;
@@ -339,22 +339,18 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
     auto [m_coord, n_coord, l_coord] = static_cast<uint3>(blockIdx);
     auto blk_coord_mnkl = make_coord(int(m_coord), int(n_coord), _, int(l_coord));                         // (m,n,k,l)
 
-    // Represent the full tensors
-    Tensor mA_mkl = make_tensor(make_gmem_ptr(params.mainloop.ptr_A), make_shape(M,K,L), params.mainloop.dA); //(m,k,l)
-    Tensor mB_nkl = make_tensor(make_gmem_ptr(params.mainloop.ptr_B), make_shape(N,K,L), params.mainloop.dB); //(n,k,l)
+    CollectiveMainloop collective_mma;
 
-    // Get batch slice
-    Tensor mA_mk = mA_mkl(_,_,l_coord);                                                                        // (m,k)
-    Tensor mB_nk = mB_nkl(_,_,l_coord);                                                                        // (n,k)
+    auto all_inputs = collective_mma.load_init(problem_shape_MNKL, params.mainloop);
+    auto load_inputs = collective_mma.get_inputs(all_inputs, 0);
 
-    // Slice to get the tiles this thread block is responsible for
-    Tensor gA = local_tile(mA_mk, blk_shape, take<0,3>(blk_coord_mnkl), Step<_1, X,_1>{});           // (BLK_M,BLK_K,k)
-    Tensor gB = local_tile(mB_nk, blk_shape, take<0,3>(blk_coord_mnkl), Step< X,_1,_1>{});           // (BLK_N,BLK_K,k)
+    Tensor gA = get<0>(load_inputs)(_, _, get<0>(blk_coord_mnkl), _, get<3>(blk_coord_mnkl)); // (BLK_M,BLK_K,k)
+    Tensor gB = get<1>(load_inputs)(_, _, get<1>(blk_coord_mnkl), _, get<3>(blk_coord_mnkl)); // (BLK_N,BLK_K,k)
 
     // Compute tile residues for predication
-    auto m_max_coord = M - size<0>(gA) * get<0>(blk_coord_mnkl);                             // M - BLK_M * m_coord
-    auto n_max_coord = N - size<0>(gB) * get<1>(blk_coord_mnkl);                             // N - BLK_N * n_coord
-    auto k_residue   = K - size<1>(gA) * size<2>(gA);                                        // K - BLK_K * k_coord_max
+    auto m_max_coord = M / 2 - size<0>(gA) * get<0>(blk_coord_mnkl);                         // M/2 - BLK_M * m_coord
+    auto n_max_coord = N / 2 - size<0>(gB) * get<1>(blk_coord_mnkl);                         // N/2 - BLK_N * n_coord
+    auto k_residue   = K / 2 - size<2>(TileShape{}) * cute::ceil_div(K / 2, size<2>(TileShape{}));
     auto residue_mnk = make_tuple(m_max_coord, n_max_coord, k_residue);
 
     // Allocate the tiled_mma and the accumulators for the (M,N) blk_shape
@@ -362,11 +358,60 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
     Tensor accumulators = partition_fragment_C(tiled_mma, take<0,2>(blk_shape)); // (MMA,MMA_M,MMA_N)
     clear(accumulators);
 
+    using RWMTypes = typename StrassenMiGroup::RWMTypes;
+
+    {
+      int myRW = RWMTypes::MyVal;
+      int sign = MmaStrassen::SIGN(myRW);
+      myRW = MmaStrassen::ABS(myRW);
+
+      if (myRW > 0) {
+        switch(myRW) {
+          case MmaStrassen::ContinueAccums: {
+            typename Mma::FragmentC& accumStore = reinterpret_cast<typename Mma::FragmentC&>(*accums_store);
+            accumulators = accumStore;
+            break;
+          }
+        }
+      }
+    }
+
     auto k_tile_iter  = cute::make_coord_iterator(shape<2>(gA));
-    int  k_tile_count = size<2>(gA);
+    int  k_tile_count = cute::ceil_div(K / 2, size<2>(TileShape{}));
+
+    bool is_neg = false;
+    bool has_global_src = false;
+    bool any_global_dst_matrix = false;
+    bool any_global_dst_valid = false;
+
+    const uint sub_m_idx = 0;
+    for (int c = 0; c < 4; c++) {
+      using RWCTypes = typename StrassenMiGroup::RWCTypes;
+
+      const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+      const MmaStrassen::PostsumOp postsum_shared_dest = RWCTypes::PostsumSharedDestByOutputIndex(c);
+      uint mi = StrassenMiGroup::getMi(sub_m_idx);
+
+      int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+      if (misign == 0 || (!postsum_global_dest.valid())) continue;
+
+      is_neg = misign == -1;
+
+      any_global_dst_matrix = any_global_dst_matrix || postsum_global_dest.is_layout_final() ||
+                                                      postsum_global_dest.is_layout_interim_matrix();
+      any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
+
+      #pragma unroll 4
+      for (int read_c = 0; read_c < 4; read_c++) {
+        auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+        if (postsum_src.valid() && postsum_src.is_mem_global()) {
+          has_global_src = true;
+        }
+      }
+    }
 
     // Perform the collective scoped MMA
-    CollectiveMainloop collective_mma;
     collective_mma(
       accumulators,
       gA,
@@ -377,18 +422,58 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
       thread_idx,
       smem_buf
     );
+
+    if (is_neg)
+      for (int i = 0; i < accumulators.size(); i++)
+        accumulators[i] = -1 * accumulators[i];
+
     // Epilogue and write to gD
     CollectiveEpilogue epilogue{params.epilogue};
-    epilogue(
-      problem_shape_MNKL,
-      blk_shape,
-      blk_coord_mnkl,
-      accumulators,
-      tiled_mma,
-      residue_mnk,
-      thread_idx,
-      smem_buf
-    );
+    if (any_global_dst_valid) {
+      if (any_global_dst_matrix) {
+        epilogue.store(
+          problem_shape_MNKL,
+          blk_shape,
+          blk_coord_mnkl,
+          accumulators,
+          tiled_mma,
+          residue_mnk,
+          thread_idx,
+          smem_buf
+        );
+      } else {
+        epilogue.store_m0(
+          problem_shape_MNKL,
+          blk_shape,
+          blk_coord_mnkl,
+          accumulators,
+          tiled_mma,
+          residue_mnk,
+          thread_idx,
+          smem_buf
+        );
+      }
+    }
+
+    {
+      int myRW = RWMTypes::MyVal;
+      int sign = MmaStrassen::SIGN(myRW);
+      myRW = MmaStrassen::ABS(myRW);
+
+      if (myRW > 0) {
+        switch(myRW) {
+          case MmaStrassen::KeepAccums:{
+            typename Mma::FragmentC& accumStore = reinterpret_cast<typename Mma::FragmentC&>(*accums_store);
+            accumStore = accumulators;
+            break;
+          }
+          case MmaStrassen::ContinueAccums:
+          {
+            break;
+          }
+        }
+      }
+    }
   }
 };
 
