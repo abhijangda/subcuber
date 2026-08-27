@@ -358,21 +358,21 @@ public:
   }
 
   CUTLASS_DEVICE PostsumOp
-  get_dst_postsum_op(PostsumOp src_ops[2], bool is_matrix) {
+  get_dst_postsum_op(PostsumOp src_ops[4], bool is_matrix) {
     using RWCTypes = typename StrassenMiGroup::RWCTypes;
     #pragma unroll 4
     for (int co = 0; co < 4; co++) {
       auto dest_global_op = RWCTypes::PostsumGlobalDestByOutputIndex(co);
       if (is_matrix && (dest_global_op.is_layout_final() || dest_global_op.is_layout_interim_matrix())) {
-        #pragma unroll 2
-        for (int ci = 0; ci < 2; ci++) {
+        #pragma unroll 4
+        for (int ci = 0; ci < 4; ci++) {
           auto src_global_op = RWCTypes::PostsumSrcByOutputIndex(co, ci);
           src_ops[ci] = src_global_op;
         }
         return dest_global_op;
       } else if (!is_matrix && dest_global_op.is_layout_interim_linear()) {
-        #pragma unroll 2
-        for (int ci = 0; ci < 2; ci++) {
+        #pragma unroll 4
+        for (int ci = 0; ci < 4; ci++) {
           auto src_global_op = RWCTypes::PostsumSrcByOutputIndex(co, ci);
           src_ops[ci] = src_global_op;
         }
@@ -429,10 +429,22 @@ public:
     // Represent the full output tensor
     Tensor mC_mnl = make_tensor(make_gmem_ptr(params.ptr_C), make_shape(M,N,L), params.dC);             //             (m,n,l)
     Tensor mD_mnl = make_tensor(make_gmem_ptr(params.ptr_D), make_shape(M,N,L), params.dD);             //             (m,n,l)
+    ElementD* postsum_base = static_cast<ElementD*>(params.ptr_postsum_m);
+    auto postsum_stride = make_stride(get<0>(params.dD)/2, get<1>(params.dD), get<2>(params.dD)/4);
+    auto postsum_shape = make_shape(M/2,N/2,L);
+    auto postsum_matrix_size = (M/2)*(N/2);
+    int matrix_src0_idx = src1_ops[0].is_layout_interim_matrix() ? src1_ops[0].get_op() : 0;
+    int matrix_src2_idx = src1_ops[2].is_layout_interim_matrix() ? src1_ops[2].get_op() : 0;
+    Tensor mPostsum_mnl = make_tensor(make_gmem_ptr(postsum_base + dst1_op.get_op()*postsum_matrix_size), postsum_shape, postsum_stride);             //             (m,n,l)
+    Tensor mPostsumSrc0_mnl = make_tensor(make_gmem_ptr(postsum_base + matrix_src0_idx*postsum_matrix_size), postsum_shape, postsum_stride);
+    Tensor mPostsumSrc2_mnl = make_tensor(make_gmem_ptr(postsum_base + matrix_src2_idx*postsum_matrix_size), postsum_shape, postsum_stride);
     Tensor mBias_mnl = make_tensor(make_gmem_ptr(params.ptr_Bias), make_shape(M,N,L), params.dBias);    //             (m,n,l)
-
+    
     Tensor gC_mnl = local_tile(mC_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
     Tensor gD_mnl = local_tile(mD_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
+    Tensor gPostsum_mnl = local_tile(mPostsum_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
+    Tensor gPostsumSrc0_mnl = local_tile(mPostsumSrc0_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});
+    Tensor gPostsumSrc2_mnl = local_tile(mPostsumSrc2_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});
     Tensor gBias_mnl = local_tile(mBias_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});       // (BLK_M,BLK_N,m,n,l)
 
     // Slice to get the tile this CTA is responsible for
@@ -441,7 +453,10 @@ public:
     const uint dst1_n_idx = (N/2)*(dst1_op.get_op()%2)/size<1>(blk_shape_MNK);
 
     Tensor gC = gC_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);                                                   // (BLK_M,BLK_N)
-    Tensor gD = gD_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);                                                   // (BLK_M,BLK_N)
+    Tensor gD = gD_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);     
+    Tensor gPostsum = gPostsum_mnl(_,_,m_coord,n_coord,l_coord);
+    Tensor gPostsumSrc0 = gPostsumSrc0_mnl(_,_,m_coord,n_coord,l_coord);
+    Tensor gPostsumSrc2 = gPostsumSrc2_mnl(_,_,m_coord,n_coord,l_coord);
     Tensor gBias = gBias_mnl(_,_,m_coord,n_coord,l_coord);                                             // (BLK_M,BLK_N)
 
     ElementD* postsum_m0 = (ElementD*)params.ptr_postsum_m + (m_coord*((N/2)/size<1>(BlockShapeMNK{})) + n_coord)*size<0>(BlockShapeMNK{})*size<1>(BlockShapeMNK{});
@@ -462,6 +477,9 @@ public:
     auto tile  = make_shape(size<0>(sAcc), size<1>(sAcc));
     Tensor gCt = flat_divide(gC, tile);                                                // (SMEM_M,SMEM_N,TILE_M,TILE_N)
     Tensor gDt = flat_divide(gD, tile);                                                // (SMEM_M,SMEM_N,TILE_M,TILE_N)
+    Tensor gPostsumt = flat_divide(gPostsum, tile);
+    Tensor gPostsumSrc0t = flat_divide(gPostsumSrc0, tile);
+    Tensor gPostsumSrc2t = flat_divide(gPostsumSrc2, tile);
     Tensor gBiast = flat_divide(gBias, tile);                                          // (SMEM_M,SMEM_N,TILE_M,TILE_N)
 
     // Partition sAcc, gC, and gD for the output
@@ -470,6 +488,9 @@ public:
     Tensor tSR_sAcc = thread_s2r.partition_S(sAcc);                      //               ((Atom,AtomNum),ATOM_M,ATOM_N)
     Tensor tSR_gC = thread_s2r.partition_D(gCt);                         // ((Atom,AtomNum),ATOM_M,ATOM_N,TILE_M,TILE_N)
     Tensor tSR_gD = thread_s2r.partition_D(gDt);                         // ((Atom,AtomNum),ATOM_M,ATOM_N,TILE_M,TILE_N)
+    Tensor tSR_gPostsum = thread_s2r.partition_D(gPostsumt);
+    Tensor tSR_gPostsumSrc0 = thread_s2r.partition_D(gPostsumSrc0t);
+    Tensor tSR_gPostsumSrc2 = thread_s2r.partition_D(gPostsumSrc2t);
     Tensor tSR_gBias = thread_s2r.partition_D(gBiast);                   // ((Atom,AtomNum),ATOM_M,ATOM_N,TILE_M,TILE_N)
 
     // Allocate intermediate registers on the dst tensors
@@ -584,11 +605,31 @@ public:
         synchronize();
 
         Tensor tSR_gDmn = tSR_gD(_,_,_,step_m,step_n);
+        Tensor tSR_gPostsummn = tSR_gPostsum(_,_,_,step_m,step_n);
+        Tensor tSR_gPostsumSrc0mn = tSR_gPostsumSrc0(_,_,_,step_m,step_n);
+        Tensor tSR_gPostsumSrc2mn = tSR_gPostsumSrc2(_,_,_,step_m,step_n);
         Tensor tSR_cDmn = tSR_cD(_,_,_,step_m,step_n);
+
+        CUTLASS_PRAGMA_UNROLL
+        for (int m = 0; m < size<1>(tSR_gDmn); ++m) {
+          CUTLASS_PRAGMA_UNROLL
+          for (int n = 0; n < size<2>(tSR_gDmn); ++n) {
+            if (elem_less(tSR_cDmn(0,m,n), take<0,2>(residue_mnk))) {
+              CUTLASS_PRAGMA_UNROLL
+              for (int i = 0; i < size<0>(tSR_rAcc); ++i) {
+                if (src1_ops[0].valid() && src1_ops[0].is_mem_global() && src1_ops[0].is_layout_interim_matrix()) {
+                  tSR_rAcc(i,m,n) += src1_ops[0].get_sign() * tSR_gPostsumSrc0mn(i,m,n);
+                }
+                if (src1_ops[2].valid() && src1_ops[2].is_mem_global() && src1_ops[2].is_layout_interim_matrix()) {
+                  tSR_rAcc(i,m,n) += src1_ops[2].get_sign() * tSR_gPostsumSrc2mn(i,m,n);
+                }
+              }
+            }
+          }
+        }
 
         if constexpr (IsEpilogueBiasSupported) {
           Tensor tSR_rBiasmn = tSR_rBias(_,_,_,step_m,step_n);
-
           if (epilogue_op.is_source_needed()) {
             // source is needed
             Tensor tSR_gCmn = tSR_gC(_,_,_,step_m,step_n);
@@ -644,6 +685,7 @@ public:
             }
           }
         } else {
+          
           if (epilogue_op.is_source_needed()) {
             // source is needed
             Tensor tSR_gCmn = tSR_gC(_,_,_,step_m,step_n);
@@ -686,7 +728,10 @@ public:
               // Predication
               if (elem_less(tSR_cDmn(0,m,n), take<0,2>(residue_mnk))) {
                 // The Last Step. Copy to GMEM
-                copy(CopyAtomR2G{}, tSR_rD(_,m,n), tSR_gDmn(_,m,n));
+                if (dst1_op.is_layout_final())
+                  copy(CopyAtomR2G{}, tSR_rD(_,m,n), tSR_gDmn(_,m,n));
+                else if (dst1_op.is_layout_interim_matrix())
+                  copy(CopyAtomR2G{}, tSR_rD(_,m,n), tSR_gPostsummn(_,m,n));
               }
             }
           }

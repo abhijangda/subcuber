@@ -1853,6 +1853,10 @@ public:
                     params(params0, params1, params2, params3, params4, params5, params6)
   {}
 
+  static constexpr bool HasGroup(int i) {
+    return ParallelGroup::HasGroup(i);
+  }
+
   cutlass::gemm::GemmCoord grid_single_tiled_shape() {
     //TODO: convert this to loop?
     //TODO: when grid_tiled_shape is different then?

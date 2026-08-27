@@ -404,6 +404,9 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
 
     // Perform the collective scoped MMA
     collective_mma(
+      params.mainloop,
+      blk_coord_mnkl,
+      problem_shape_MNKL,
       accumulators,
       gA,
       gB,

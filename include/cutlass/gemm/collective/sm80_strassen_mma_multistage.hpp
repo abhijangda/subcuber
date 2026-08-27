@@ -149,15 +149,11 @@ struct CollectiveStrassenMma<
   using PresumIOToComputeTypeB = NumericArrayConverter<PresumComputeType, ElementA, PresumVecTypeB::kElements>;
   static const int NumMMAThreads = size(TiledMma{});
   static constexpr int PresumStoreWarpSize = NumMMAThreads/4;
-  static const int kPresumThreads = NumMMAThreads/4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
+  static const int kPresumThreads = NumMMAThreads;///4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<ElementA, kPresumThreads,  
                                                              PresumShape, PresumStoreVecType, false, false>;
   using PresumGlobalIteratorB = PresumDetail::GlobalIterator<ElementB, kPresumThreads, 
                                                              PresumShape, PresumStoreVecType, true, false>;
-  // using PresumSharedIterator = PresumDetail::SharedIterator<ElementA, PresumVecType, NumThreads,
-  //                                                           Base::SharedStorage::PresumBuffer::NumLoadsForPresum,
-  //                                                           Base::SharedStorage::PresumBuffer::SingleStageSize,
-  //                                                           Stages, PresumAccessPerIter>;
   static const uint kPresumComputeIterationsA = size<0>(TileShape{})/size<0>(PresumTileShapeA{});
   static const uint kPresumComputeIterationsB = size<0>(TileShape{})/size<0>(PresumTileShapeB{});
 
@@ -495,7 +491,8 @@ struct CollectiveStrassenMma<
   using ElementB = ElementB_;
   using StrideB = StrideB_;
   using TiledMma = TiledMma_;
-  using ElementAccumulator = typename TiledMma::ValTypeC;  using GmemTiledCopyA = GmemTiledCopyA_;
+  using ElementAccumulator = typename TiledMma::ValTypeC;
+  using GmemTiledCopyA = GmemTiledCopyA_;
   using FragmentC = decltype(partition_fragment_C(TiledMma(), take<0,2>(TileShape{})));
   using GmemTiledCopyB = GmemTiledCopyB_;
   using SmemLayoutAtomA = SmemLayoutAtomA_;
@@ -510,8 +507,8 @@ struct CollectiveStrassenMma<
   using PresumShapeB = PresumShape;
   using PresumTileShapeA = PresumTileShapeA_;
   using PresumTileShapeB = PresumTileShapeB_;
-  using PresumVecTypeA = Array<ElementA, (size<0>(PresumTileShapeA{})*sizeof(ElementA))/sizeof(ElementA)>;
-  using PresumVecTypeB = Array<ElementA, (size<0>(PresumTileShapeB{})*sizeof(ElementA))/sizeof(ElementA)>;
+  using PresumVecTypeA = Array<ElementA, 16/sizeof(ElementA)>;
+  using PresumVecTypeB = Array<ElementA, 16/sizeof(ElementA)>;
   using PresumStoreVecType = Array<ElementA, 16/sizeof(ElementA)>;
   using PresumComputeType = ElementAccumulator;
   using PresumComputeToIOTypeA = NumericArrayConverter<ElementA, PresumComputeType, PresumVecTypeA::kElements>;
@@ -520,7 +517,7 @@ struct CollectiveStrassenMma<
   using PresumIOToComputeTypeB = NumericArrayConverter<PresumComputeType, ElementA, PresumVecTypeB::kElements>;
   static const int NumMMAThreads = size(TiledMma{});
   static constexpr int PresumStoreWarpSize = NumMMAThreads/4;
-  static const int kPresumThreads = NumMMAThreads/4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
+  static const int kPresumThreads = NumMMAThreads;///4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<ElementA, kPresumThreads,  
                                                              PresumShape, PresumStoreVecType, false, false>;
   using PresumGlobalIteratorB = PresumDetail::GlobalIterator<ElementB, kPresumThreads, 
@@ -556,11 +553,33 @@ struct CollectiveStrassenMma<
 
   static_assert(DispatchPolicy::Stages >= 2, "CpAsync mainloop must have at least 2 stages in the pipeline.");
 
-  struct SharedStorage
+  static const size_t PresumSingleStageSizeA = size<0>(PresumTileShapeA{})*size<1>(PresumTileShapeA{});
+  static const size_t PresumSingleStageSizeB = size<0>(PresumTileShapeB{})*size<1>(PresumTileShapeB{});
+
+  struct SharedStorageNoPresum
   {
     cute::array_aligned<ElementA, cute::cosize_v<SmemLayoutA>> smem_a;
     cute::array_aligned<ElementB, cute::cosize_v<SmemLayoutB>> smem_b;
+    struct {
+      cute::array_aligned<ElementA, 8> _;
+    } smem_presum;
   };
+
+  struct SharedStoragePresum
+  {
+    cute::array_aligned<ElementA, cute::cosize_v<SmemLayoutA>> smem_a;
+    cute::array_aligned<ElementB, cute::cosize_v<SmemLayoutB>> smem_b;
+
+    struct {
+      cute::array_aligned<ElementA, PresumSingleStageSizeA*PresumStages> smem0;
+      cute::array_aligned<ElementA, PresumSingleStageSizeA*PresumStages> smem1;
+      cute::array_aligned<ElementA, PresumSingleStageSizeA*PresumStages> smem2;
+      cute::array_aligned<ElementA, PresumSingleStageSizeA*PresumStages> smem3;
+    } smem_presum;
+  };
+
+  using SharedStorage = cute::conditional_t<StrassenMiGroup::hasM0() && (StrassenMiGroup::AllPresums::computeAnyAPresum() || StrassenMiGroup::AllPresums::computeAnyBPresum()),
+                                            SharedStoragePresum, SharedStorageNoPresum>;
 
   // Host side kernel arguments
   struct Arguments {
@@ -798,15 +817,20 @@ struct CollectiveStrassenMma<
 
   /// Perform a collective-scoped matrix multiply-accumulate
   template <
+    class BlockCoord,
     class FrgTensorD,
     class TensorA,
     class TensorB,
     class FrgTensorC,
     class KTileIterator,
-    class ResidueMNK
+    class ResidueMNK,
+    class ProblemShape_MNKL
   >
   CUTLASS_DEVICE void
   operator() (
+      Params const& mainloop_params,
+      BlockCoord const& blk_coord,
+      ProblemShape_MNKL const& problem_shape,
       FrgTensorD &accum,
       TensorA gA,                   // (BLK_M, BLK_K, K_TILES)
       TensorB gB,                   // (BLK_N, BLK_K, K_TILES)
@@ -824,6 +848,10 @@ struct CollectiveStrassenMma<
     static_assert(is_rmem<FrgTensorC>::value, "C tensor must be rmem resident.");
     static_assert(cute::rank(SmemLayoutA{}) == 3, "Smem layout must be rank 3.");
     static_assert(cute::rank(SmemLayoutB{}) == 3, "Smem layout must be rank 3.");
+
+    auto [m_coord, n_coord, k_coord, l_coord] = blk_coord;
+    auto [M,N,K,L] = problem_shape;
+    auto halfM = M/2, halfN = N/2, halfK = K/2, halfL = L;
 
     // Construct shared memory tiles
     SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
@@ -889,8 +917,47 @@ struct CollectiveStrassenMma<
     clear(tAsA);
     clear(tBsB);
 
+    int block_idx = m_coord + n_coord * 1;///params.grid_tiled_shape.m();
+    int n_coord_div = (n_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) % (1<<mainloop_params.get_presum_tile_log_divider_a());
+    int new_n_coord = (n_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) >> mainloop_params.get_presum_tile_log_divider_a();
+
+    PresumGlobalIteratorA iter_PresumA(
+      (ElementA*)mainloop_params.ptr_A, K, //params.ref_A.stride(0),
+      {M, K},
+      {m_coord * size<0>(TileShape{}), n_coord * size<1>(TileShape{}) /* (1 << params.presum_a_log_tile_multiplier)*/},
+      block_idx, {0, 0}, thread_idx, {0, halfK}, {halfM, 0}, {halfM, halfK}
+    );
+
+    PresumGlobalIteratorB iter_PresumB(
+      (ElementB*)mainloop_params.ptr_B, N, //params.ref_B.stride(0),
+      {K, N},
+      {m_coord * size<0>(TileShape{}), n_coord * size<1>(TileShape{})}, //Mma::PresumShapeB::kM * (1 << params.presum_b_log_tile_multiplier), threadblock_tile_offset.n() * Mma::PresumShapeB::kN},
+      block_idx, {0, 0}, thread_idx, {0, halfN}, {halfK, 0}, {halfK, halfN}
+    );
+
+    PresumGlobalIteratorA iter_PresumA_M(
+      mainloop_params.ptr_presum_A, halfK,
+      {halfM, halfK},
+      {m_coord * size<0>(TileShape{}) + ((n_coord_div * size<0>(TileShape{})) >> mainloop_params.get_presum_tile_log_divider_a()),
+        new_n_coord * size<1>(TileShape{})},
+      block_idx, {0, 0}, thread_idx%kPresumThreads, {1*halfM, 0}, {2*halfM, 0}, {3*halfM, 0}
+    );
+    PresumGlobalIteratorB iter_PresumB_M(
+      mainloop_params.ptr_presum_B, halfN,
+      {halfK, halfN},
+      {(m_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_b()) * (size<0>(TileShape{}))) >> mainloop_params.get_presum_tile_log_divider_b(),
+       n_coord * size<1>(TileShape{})},
+      block_idx, {0, 0}, thread_idx%kPresumThreads, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}
+    );
+
+    using PresumSharedIterator = PresumDetail::SharedIterator<ElementA, PresumVecTypeA, NumMMAThreads,
+                                                              4,
+                                                              PresumSingleStageSizeB,
+                                                              PresumStages, 4>;
+    PresumSharedIterator sharedPreSums((ElementA*)&storage.smem_presum, thread_idx);
+
     // Start async loads for 0th k-tile, where we take care of the k residue
-    {
+    if (false) {
       constexpr int k_pipe = 0;
 
       Tensor tAgAk = tAgA(_,_,_,*k_tile_iter);
@@ -912,16 +979,211 @@ struct CollectiveStrassenMma<
       --k_tile_count;
     }
 
+    int presumIter = 0;
+    auto presumAComputeLoads = StrassenMiGroup::AllPresums::APresumComputeLoads();
+    auto presumBComputeLoads = StrassenMiGroup::AllPresums::BPresumComputeLoads();
+    const bool need_presum_A = presumAComputeLoads.numAccess() > 0;
+    const bool need_presum_B = presumBComputeLoads.numAccess() > 0;
+    const int presumComputeIterationsA = kPresumComputeIterationsA;// * (1<<presum_a_log_tile_multiplier);
+    const int presumComputeIterationsB = kPresumComputeIterationsB;// * (1<<presum_b_log_tile_multiplier);
+
+    auto presum_load = [&] (bool is_prologue) {
+      if (need_presum_A && presumIter < presumComputeIterationsA*1 - (PresumStages - 1)) {
+          int presum_tile = (presumIter + ((is_prologue) ? 0 : PresumStages-1))/kPresumComputeIterationsA;
+          iter_PresumA.reset(presum_tile);
+          iter_PresumA.set_iteration(presumIter+ ((is_prologue) ? 0 : PresumStages-1) - presum_tile*kPresumComputeIterationsA);
+          uint presum_write_stage = (presumIter + ((is_prologue) ? 0 : PresumStages-1))% PresumStages;
+          // printf("1073 %d : %d %d %d ; %d %p\n", StrassenMiGroup::getMi(), presumIter, presum_tile, kPresumComputeIterationsA, presum_write_stage, sharedPreSums.get(0, presum_write_stage, 0));
+
+          if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A0)) {
+            PresumDetail::cp_async_presum(sharedPreSums.get(presumAComputeLoads.index(MmaStrassen::APresums::A0), presum_write_stage, 0),
+                                          iter_PresumA.get(0), iter_PresumA_M.validTB() && iter_PresumA_M.valid());
+            // if (threadIdx.x == 0 && m_coord == 0 && n_coord == 0) {
+            //   auto a0 = *iter_PresumA.get(0);
+            //   printf("1002 %d,%d : %d %d %f; %p %d %d\n", iter_PresumA.row, iter_PresumA.col, presumIter, presum_write_stage, a0[0],
+            //     iter_PresumA.get(0), iter_PresumA.validTB(), iter_PresumA.valid());
+            // }
+          }
+          if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A1)) {
+            PresumDetail::cp_async_presum(sharedPreSums.get(presumAComputeLoads.index(MmaStrassen::APresums::A1), presum_write_stage, 0),
+                                          iter_PresumA.get(1), iter_PresumA_M.validTB() && iter_PresumA_M.valid());
+          }
+          if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A2)) {
+            PresumDetail::cp_async_presum(sharedPreSums.get(presumAComputeLoads.index(MmaStrassen::APresums::A2), presum_write_stage, 0),
+                                          iter_PresumA.get(2), iter_PresumA_M.validTB() && iter_PresumA_M.valid());
+          }
+          if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A3)) {
+            PresumDetail::cp_async_presum(sharedPreSums.get(presumAComputeLoads.index(MmaStrassen::APresums::A3), presum_write_stage, 0),
+                                          iter_PresumA.get(3), iter_PresumA_M.validTB() && iter_PresumA_M.valid());
+          }
+
+          // iter_PresumA.inc();
+        } else if (need_presum_B and 
+                    presumIter < presumComputeIterationsA + presumComputeIterationsB - (PresumStages - 1)) {
+          // iter_PresumB.reset();
+          // iter_PresumB.row += (presumIter + Base::kStages - 1 - kPresumComputeIterations) * iter_PresumB_M.row_increment();
+          uint presum_write_stage = (presumIter + ((is_prologue) ? 0 : PresumStages-1))% PresumStages;
+          int presum_tile = (presumIter - presumComputeIterationsA + ((is_prologue) ? 0 : PresumStages-1))/kPresumComputeIterationsB;
+          iter_PresumB.reset(presum_tile);
+          iter_PresumB.set_iteration(presumIter - presumComputeIterationsA - presum_tile*kPresumComputeIterationsB + ((is_prologue) ? 0 : PresumStages-1));
+          if (presumBComputeLoads.hasAccess(MmaStrassen::BPresums::B0)) {
+            PresumDetail::cp_async_presum(sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B0), presum_write_stage, 0),
+                                          iter_PresumB.get(0), iter_PresumB_M.validTB() && iter_PresumB_M.valid());
+          }
+          if (presumBComputeLoads.hasAccess(MmaStrassen::BPresums::B1)) {
+            PresumDetail::cp_async_presum(sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B1), presum_write_stage, 0),
+                                          iter_PresumB.get(1), iter_PresumB_M.validTB() && iter_PresumB_M.valid());
+          }
+          if (presumBComputeLoads.hasAccess(MmaStrassen::BPresums::B2)) {
+            PresumDetail::cp_async_presum(sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B2), presum_write_stage, 0),
+                                          iter_PresumB.get(2), iter_PresumB_M.validTB() && iter_PresumB_M.valid());
+          }
+          if (presumBComputeLoads.hasAccess(MmaStrassen::BPresums::B3)) {
+            PresumDetail::cp_async_presum(sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B3), presum_write_stage, 0),
+                                          iter_PresumB.get(3), iter_PresumB_M.validTB() && iter_PresumB_M.valid());
+          }
+          // iter_PresumB.inc();
+        }
+    };
+
+    auto presum_compute_and_store = [&] () {
+      if (presumIter < presumComputeIterationsA) {
+        //This code above mac_loop_iter gives some improvement.
+        //Changes done after commit: 853df006e0f2bfad3313460b2fcfdabb15d31067
+        uint presum_read_stage = presumIter % PresumStages;
+        uint presum_tile = presumIter/kPresumComputeIterationsA;
+        iter_PresumA_M.reset(presum_tile);
+        iter_PresumA_M.set_iteration(presumIter - presum_tile * kPresumComputeIterationsA);
+        if (iter_PresumA_M.validTB() && iter_PresumA_M.valid())
+        for (int v = 0; v < 1; v += 1) {
+          // iter_PresumA_M.reset();
+          // iter_PresumA_M.row += presumIter * iter_PresumA_M.row_increment();
+
+          PresumVecTypeA a0; a0.clear();
+          PresumVecTypeA a1; a1.clear();
+          PresumVecTypeA a2; a2.clear();
+          PresumVecTypeA a3; a3.clear();
+
+          if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A0))
+            a0 = PresumDetail::shared_load_128b<PresumVecTypeA>(sharedPreSums.get(presumAComputeLoads.index(MmaStrassen::APresums::A0), presum_read_stage, 0));
+          if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A1))
+            a1 = PresumDetail::shared_load_128b<PresumVecTypeA>(sharedPreSums.get(presumAComputeLoads.index(MmaStrassen::APresums::A1), presum_read_stage, 0));
+          if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A2))
+            a2 = PresumDetail::shared_load_128b<PresumVecTypeA>(sharedPreSums.get(presumAComputeLoads.index(MmaStrassen::APresums::A2), presum_read_stage, 0));
+          if (presumAComputeLoads.hasAccess(MmaStrassen::APresums::A3))
+            a3 = PresumDetail::shared_load_128b<PresumVecTypeA>(sharedPreSums.get(presumAComputeLoads.index(MmaStrassen::APresums::A3), presum_read_stage, 0));
+
+          PresumIOToComputeTypeA presum_io_to_compute_type;
+          PresumComputeToIOTypeA presum_compute_to_io_type;
+
+          auto s1   = presum_io_to_compute_type(a2) + presum_io_to_compute_type(a3);
+          auto s2   = s1 - presum_io_to_compute_type(a0);
+          auto a02  = presum_io_to_compute_type(a0) - presum_io_to_compute_type(a2);
+          auto a1s2 = presum_io_to_compute_type(a1) - s2;
+          // if (StrassenMiGroup::hasM0() && StrassenMiGroup::Level == 2 &&
+          //     threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0)
+          //     printf("1623 %d ; %f %f %f %f\n", iter_PresumA_M.stride, float(a0[0]), float(a1[0]), float(a2[0]), float(a3[0]));
+          // auto s1   = a2 + a3;
+          // auto s2   = s1 - a0;
+          // auto a02  = a0 - a2;
+          // auto a1s2 = a1 - s2;
+
+          using AllPresums = typename StrassenMiGroup::AllPresums;
+
+          if (AllPresums::doesComputeA(MmaStrassen::APresums::A02)) {
+            arch::global_store<PresumVecTypeA, sizeof(PresumVecTypeA)>(presum_compute_to_io_type(a02), iter_PresumA_M.get(AllPresums::indexAPresum(MmaStrassen::APresums::A02)),
+                                                                      iter_PresumA_M.validTB() && iter_PresumA_M.valid());
+          }
+          if (AllPresums::doesComputeA(MmaStrassen::APresums::S1)) {
+            arch::global_store<PresumVecTypeA, sizeof(PresumVecTypeA)>(presum_compute_to_io_type(s1), iter_PresumA_M.get(AllPresums::indexAPresum(MmaStrassen::APresums::S1)),
+                                                                      iter_PresumA_M.validTB() && iter_PresumA_M.valid());
+          }
+          if (AllPresums::doesComputeA(MmaStrassen::APresums::S2)) {
+            arch::global_store<PresumVecTypeA, sizeof(PresumVecTypeA)>(presum_compute_to_io_type(s2), iter_PresumA_M.get(AllPresums::indexAPresum(MmaStrassen::APresums::S2)),
+                                                                      iter_PresumA_M.validTB() && iter_PresumA_M.valid());
+          }
+          if (AllPresums::doesComputeA(MmaStrassen::APresums::A1S2)) {
+            arch::global_store<PresumVecTypeA, sizeof(PresumVecTypeA)>(presum_compute_to_io_type(a1s2), iter_PresumA_M.get(AllPresums::indexAPresum(MmaStrassen::APresums::A1S2)),
+                                                                      iter_PresumA_M.validTB() && iter_PresumA_M.valid());
+          }
+
+          iter_PresumA_M.inc();
+        }
+      } else if (need_presum_B and presumIter < presumComputeIterationsA + presumComputeIterationsB) {
+        uint presum_read_stage = presumIter % PresumStages;
+        uint presum_tile = (presumIter - presumComputeIterationsA)/kPresumComputeIterationsB;
+        iter_PresumB_M.reset(presum_tile);
+        iter_PresumB_M.set_iteration(presumIter - presumComputeIterationsA - presum_tile * kPresumComputeIterationsB);
+        if (iter_PresumB_M.validTB() and iter_PresumB_M.valid())
+        for (int v = 0; v < 1; v += 1) {
+          // iter_PresumB_M.reset();
+          // iter_PresumB_M.row += (presumIter - kPresumComputeIterations) * iter_PresumB_M.row_increment();
+
+          PresumVecTypeB b0; b0.clear();
+          PresumVecTypeB b1; b1.clear();
+          PresumVecTypeB b2; b2.clear();
+          PresumVecTypeB b3; b3.clear();
+
+          if (presumBComputeLoads.hasAccess(MmaStrassen::BPresums::B0))
+            // PresumDetail::shared_load_128b(&b0, sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B0), presum_read_stage, 0));
+            b0 = PresumDetail::shared_load_128b<PresumVecTypeB>(sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B0), presum_read_stage, 0));
+          if (presumBComputeLoads.hasAccess(MmaStrassen::BPresums::B1))
+            b1 = PresumDetail::shared_load_128b<PresumVecTypeB>(sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B1), presum_read_stage, 0));
+          if (presumBComputeLoads.hasAccess(MmaStrassen::BPresums::B2))
+            b2 = PresumDetail::shared_load_128b<PresumVecTypeB>(sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B2), presum_read_stage, 0));
+          if (presumBComputeLoads.hasAccess(MmaStrassen::BPresums::B3))
+            b3 = PresumDetail::shared_load_128b<PresumVecTypeB>(sharedPreSums.get(presumBComputeLoads.index(MmaStrassen::BPresums::B3), presum_read_stage, 0));
+
+          PresumIOToComputeTypeB presum_io_to_compute_type;
+          PresumComputeToIOTypeB presum_compute_to_io_type;
+
+          auto b10  = presum_io_to_compute_type(b1) - presum_io_to_compute_type(b0);
+          auto b31  = presum_io_to_compute_type(b3) - presum_io_to_compute_type(b1);
+          auto s3   = b31 + presum_io_to_compute_type(b0);
+          auto s3b2 = s3 - presum_io_to_compute_type(b2);
+
+          using AllPresums = typename StrassenMiGroup::AllPresums;
+            // if (StrassenMiGroup::hasM0() && StrassenMiGroup::Level == 2 &&
+            //     iter_PresumB_M.tb_offset.column() == 0 && iter_PresumB_M.col == 0 && iter_PresumB_M.tb_offset.row() + iter_PresumB_M.row == 512)
+            //     printf("1632 %p %d ; %d %d; %f %f %f %f\n", iter_PresumB_M.get(AllPresums::indexBPresum(MmaStrassen::BPresums::B31)),
+            //     iter_PresumB_M.tb_offset.row() + iter_PresumB_M.row, iter_PresumB_M.stride, iter_PresumB_M.VectorLoadElems,
+            //     float(b10[0]), float(b31[0]), float(s3[0]), float(s3b2[0]));
+              // printf("1632 %p\n", iter_PresumB_M.get(AllPresums::indexBPresum(MmaStrassen::BPresums::B31)));
+          if (AllPresums::doesComputeB(MmaStrassen::BPresums::B10)) {
+            arch::global_store<PresumVecTypeB, sizeof(PresumVecTypeB)>(presum_compute_to_io_type(b10), iter_PresumB_M.get(AllPresums::indexBPresum(MmaStrassen::BPresums::B10)),
+                                                                      iter_PresumB_M.validTB() && iter_PresumB_M.valid());
+          }
+          if (AllPresums::doesComputeB(MmaStrassen::BPresums::B31)) {
+            arch::global_store<PresumVecTypeB, sizeof(PresumVecTypeB)>(presum_compute_to_io_type(b31), iter_PresumB_M.get(AllPresums::indexBPresum(MmaStrassen::BPresums::B31)),
+                                                                      iter_PresumB_M.validTB() && iter_PresumB_M.valid());
+          }
+          if (AllPresums::doesComputeB(MmaStrassen::BPresums::S3)) {
+            arch::global_store<PresumVecTypeB, sizeof(PresumVecTypeB)>(presum_compute_to_io_type(s3), iter_PresumB_M.get(AllPresums::indexBPresum(MmaStrassen::BPresums::S3)),
+                                                                      iter_PresumB_M.validTB() && iter_PresumB_M.valid());
+          }
+          if (AllPresums::doesComputeB(MmaStrassen::BPresums::S3B2)) {
+            arch::global_store<PresumVecTypeB, sizeof(PresumVecTypeB)>(presum_compute_to_io_type(s3b2), iter_PresumB_M.get(AllPresums::indexBPresum(MmaStrassen::BPresums::S3B2)),
+                                                                      iter_PresumB_M.validTB() && iter_PresumB_M.valid());
+          }
+
+          iter_PresumB_M.inc();
+        }
+      }
+    };
+
     // Start async loads for 1st k-tile onwards, no k-residue handling needed
     CUTLASS_PRAGMA_UNROLL
-    for (int k_pipe = 1; k_pipe < DispatchPolicy::Stages-1; ++k_pipe) {
+    for (int k_pipe = 0; k_pipe < DispatchPolicy::Stages-1; ++k_pipe) {
       if (k_tile_count <= 0) {
         clear(tApA);
         clear(tBpB);
       }
       copy_if(gmem_tiled_copy_A, tApA, tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,k_pipe));  // CpAsync
       copy_if(gmem_tiled_copy_B, tBpB, tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,k_pipe));  // CpAsync
+      presum_load(true);
+      
       cp_async_fence();
+      ++presumIter;
       ++k_tile_iter;
       --k_tile_count;
     }
@@ -929,6 +1191,8 @@ struct CollectiveStrassenMma<
     //
     // MMA Atom partitioning
     //
+
+    presumIter = 0;
 
     // Tile MMA compute thread partitions and allocate accumulators
     TiledMma tiled_mma;
@@ -974,7 +1238,7 @@ struct CollectiveStrassenMma<
 
     // Size of the register pipeline
     auto K_BLOCK_MAX = size<2>(tCrA);
-
+    
     // PREFETCH register pipeline
     if (K_BLOCK_MAX > 1) {
       // Wait until our first prefetched tile is loaded in
@@ -1003,12 +1267,15 @@ struct CollectiveStrassenMma<
           // Commit the smem for smem_pipe_read
           cp_async_wait<DispatchPolicy::Stages-2>();
           __syncthreads();
+          presum_compute_and_store();
+          ++presumIter;
         }
 
         // Load A, B shmem->regs for k_block+1
         auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;  // static
         copy(smem_tiled_copy_A, tCsA_p(_,_,k_block_next), tCrA_copy_view(_,_,k_block_next));
         copy(smem_tiled_copy_B, tCsB_p(_,_,k_block_next), tCrB_copy_view(_,_,k_block_next));
+
         // Copy gmem to smem before computing gemm on each k-pipe
         if (k_block == 0)
         {
@@ -1019,7 +1286,9 @@ struct CollectiveStrassenMma<
           }
           copy_if(gmem_tiled_copy_A, tApA, tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,smem_pipe_write));
           copy_if(gmem_tiled_copy_B, tBpB, tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,smem_pipe_write));
+          presum_load(false);
           cp_async_fence();
+
           ++k_tile_iter;
 
           // Advance the pipe -- Doing it here accounts for K_BLOCK_MAX = 1 (no rmem pipe)

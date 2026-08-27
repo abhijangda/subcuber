@@ -129,11 +129,19 @@ using KernelSchedule = cutlass::gemm::KernelMultistage;
 using EpilogueSchedule = cutlass::epilogue::EpilogueSimtVectorized;
 
 #ifdef TILE_SIZE_256
-using TileShape = cute::Shape<cute::_256, cute::_128, cute::_16>;
-static const int Stages = 3;
+using TileShape = cute::Shape<cute::_128, cute::_256, cute::_16>;
+using ThreadBlockShapeM2M6 = TileShape;
+using ThreadBlockShapeM0M1 = cute::Shape<cute::_128, cute::_256, cute::_16>;
+static const int Stages = 5;
+using PresumTileShapeA = cute::Shape<cute::_4, cute::_256>;
+using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
 #elif defined(TILE_SIZE_128)
 using TileShape = cute::Shape<cute::_64, cute::_128, cute::_16>;
-static const int Stages = 2;
+using ThreadBlockShapeM2M6 = TileShape;
+using ThreadBlockShapeM0M1 = cute::Shape<cute::_128, cute::_256, cute::_16>;
+using PresumTileShapeA = cute::Shape<cute::_4, cute::_256>;
+using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
+static const int Stages = 3;
 #endif
 
 using namespace MmaStrassen;
@@ -255,52 +263,52 @@ using StrassenGroups = MmaStrassen::StrassenLevel1Groups<StrassenPresum<kStrasse
   const bool sub_gemm_parallel = SUB_GEMM_PARALLEL;
   constexpr int StageCountTypeM0 = Stages;
 
-  using PresumTileShapeA = cute::Shape<cute::_2, cute::_128>;
-  using PresumTileShapeB = cute::Shape<cute::_2, cute::_128>;
   using PresumOpts = cutlass::gemm::device::PresumOpt<0, 0, 0, 0>;
 
   //[m0], [m1], [m2], [m3], [m4], [m5], [m6]
   using AllPresumsKernel = AllPresums<>;
-  // using AllPresumsM0    = AllPresums<PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,    PresumCompute,  PresumCompute,    PresumCompute>;
-  using AllPresumsM0    = AllPresums<PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,    PresumGlobalKernel,  PresumGlobalKernel,    PresumGlobalKernel>;
+  using AllPresumsM0    = AllPresums<PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,
+                                     PresumCompute,    PresumCompute,  PresumCompute,    PresumCompute>;
+  // using AllPresumsM0    = AllPresums<PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,    PresumGlobalKernel,  PresumGlobalKernel,    PresumGlobalKernel>;
   using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable>;
-
-  using StrassenGroups = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, ThreadBlockShape,
+  static const auto LayoutM0 = (get<0>(ThreadBlockShapeM0M1{}) == get<0>(ThreadBlockShapeM2M6{})) ? LayoutInterim1D : LayoutInterim;
+ 
+  using StrassenGroups = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, ThreadBlockShapeM0M1,
                                                               AllPresumsM0>,
-                                              StrassenLevel1M0Group<kStrassenLevel, 0, ThreadBlockShape, ClusterShape, Stages,
+                                              StrassenLevel1M0Group<kStrassenLevel, 0, ThreadBlockShapeM0M1, ClusterShape, Stages,
                                                                     RWMTypes<KeepAccums>,
-                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
+                                                                    RWCTypes<CUW<1, LayoutM0, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
                                                                     AllPresumsM0>,
-                                              StrassenLevel1M1Group<kStrassenLevel, 0, ThreadBlockShape, ClusterShape, Stages,
+                                              StrassenLevel1M1Group<kStrassenLevel, 0, ThreadBlockShapeM0M1, ClusterShape, Stages,
                                                                     RWMTypes<ContinueAccums>,
                                                                     RWCTypes<CUW<0, LayoutFinal,   LayoutNone, Expr<Plus<1>>>>,//C0 = C0+M1
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M2Group<kStrassenLevel, 0, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Plus<2>>>>,
-                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C1 = C1+M2 ; Reg = C1
+                                                                    RWCTypes<CUW<1, LayoutM0, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutM0>>>>,//C1 = C1+M2 ; Reg = C1
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M3Group<kStrassenLevel, 0, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<3, LayoutFinal, LayoutNone, Expr<Plus<3>>>>,
-                                                                    RWCTypes<CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C2 = C1(Reg)+M3 
+                                                                    RWCTypes<CUW<2, LayoutM0, LayoutNone, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutM0>>>>,//C2 = C1(Reg)+M3 
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M4Group<kStrassenLevel, 0, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<0, LayoutFinal, LayoutNone, Expr<Plus<4>>>>,
                                                                     RWCTypes<CUW<0, LayoutInterim1D, LayoutNone, Expr<Plus<4>>>, //C1 = C1+M4
-                                                                             CUW<3, LayoutFinal,   LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>,//C3 = C2+M4
+                                                                             CUW<3, LayoutFinal,   LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutM0>>>>,//C3 = C2+M4
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M5Group<kStrassenLevel, 0, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>>>,
-                                                                    RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>,
+                                                                    RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutM0>,
                                                                                                                                  Plus<0, MemGlobal, LayoutInterim1D>>>>, //C1 = C1+M5
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M6Group<kStrassenLevel, 0, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Plus<6>>>>,
-                                                                    RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
+                                                                    RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutM0>>>>, //C2 = C2-M6
                                                                     AllPresumsM1To6>
                                               >;
   using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0, 1>>,

@@ -143,10 +143,10 @@ static __global__ void presumcheck(uint R, uint C, Elem* presum) {
   for (int c = 0; c < C/1024; c++) {
     col = c*blockDim.x + threadIdx.x;
     //For B, set c == 0 && row < R. For A, set row == 0 && c < C
-    if (row == 0 && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
-      printf("63: %d %d: %f; %p\n", row, col,
+    if (row == 64 && col == 0 && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
+      printf("63: %d %d: %f; %p %p\n", row, col,
             float(presum[2*R*C+row*C+col]),
-            &presum[2*R*C+row*C+col]);
+            &presum[2*R*C+row*C+col], presum);
   }
 }
 
@@ -1268,8 +1268,29 @@ public:
       CudaHostAdapter *cuda_adapter = nullptr,
       bool launch_with_pdl = false) {
     CUTLASS_TRACE_HOST("GemmUniversal::run()");
-    dim3 const block = GemmKernelM0::get_block_shape();
-    dim3 grid = get_grid_shape<GemmKernelM0>(params0);
+    dim3 const block(ParallelMiKernels::ThreadCount(), 1, 1);
+    dim3 grid;
+    if constexpr (ParallelMiKernels::HasGroup(0)) {
+      grid = get_grid_shape<GemmKernelM0>(params0);
+    }
+    else if constexpr (ParallelMiKernels::HasGroup(1)) {
+      grid = get_grid_shape<GemmKernelM1>(params1);
+    }
+    else if constexpr (ParallelMiKernels::HasGroup(2)) {
+      grid = get_grid_shape<GemmKernelM2>(params2);
+    }
+    else if constexpr (ParallelMiKernels::HasGroup(3)) {
+      grid = get_grid_shape<GemmKernelM3>(params3);
+    }
+    else if constexpr (ParallelMiKernels::HasGroup(4)) {
+      grid = get_grid_shape<GemmKernelM4>(params4);
+    }
+    else if constexpr (ParallelMiKernels::HasGroup(5)) {
+      grid = get_grid_shape<GemmKernelM5>(params5);
+    }
+    else if constexpr (ParallelMiKernels::HasGroup(6)) {
+      grid = get_grid_shape<GemmKernelM6>(params6);
+    }
     dim3 origGrid = grid;
     grid.z = ParallelMiKernels::NumKernels()*grid.z;
 
@@ -1279,14 +1300,24 @@ public:
     int smem_size = ParallelMiKernels::SharedStorageSize();
 
     Status launch_result{ Status::kSuccess };
+    constexpr bool is_static_1x1x1 =
+      cute::is_static_v<typename GemmKernelM0::DispatchPolicy::ClusterShape> and
+      cute::size(typename GemmKernelM0::DispatchPolicy::ClusterShape{}) == 1;
+    void* kernel_params[] = {&parallel_kernels, &origGrid};
+    void const* kernel = (void const*) KernelParallelMiGroup<ParallelMiKernels>;
+
+    if constexpr (is_static_1x1x1) {
+      cutlass::arch::synclog_setup();
+      cudaError_t launch_status = cudaLaunchKernel(
+        kernel, grid, block, kernel_params, smem_size, stream);
+      return launch_status == cudaSuccess ? Status::kSuccess : Status::kErrorInternal;
+    }
+
     // Use extended launch API only for mainloops that use it
     if constexpr (GemmKernelM0::ArchTag::kMinComputeCapability >= 90) {
 #if (CUTLASS_DEBUG_TRACE_LEVEL > 1)
       CUTLASS_TRACE_HOST("GemmUniversal::run: Use extended launch API");
 #endif
-      [[maybe_unused]] constexpr bool is_static_1x1x1 =
-        cute::is_static_v<typename GemmKernelM0::DispatchPolicy::ClusterShape> and
-        cute::size(typename GemmKernelM0::DispatchPolicy::ClusterShape{}) == 1;
       [[maybe_unused]] dim3 cluster(cute::size<0>(typename GemmKernelM0::DispatchPolicy::ClusterShape{}),
         cute::size<1>(typename GemmKernelM0::DispatchPolicy::ClusterShape{}),
         cute::size<2>(typename GemmKernelM0::DispatchPolicy::ClusterShape{}));
@@ -1303,9 +1334,7 @@ public:
         }
       }
       
-      [[maybe_unused]] void* kernel_params[] = {&parallel_kernels, &origGrid};
       CUTLASS_ASSERT(cuda_adapter == nullptr);
-      [[maybe_unused]] void const* kernel = (void const*) KernelParallelMiGroup<ParallelMiKernels>;
       static constexpr bool kClusterLaunch = GemmKernelM0::ArchTag::kMinComputeCapability == 90;
       if constexpr (kClusterLaunch) {
 #if (CUTLASS_DEBUG_TRACE_LEVEL > 1)

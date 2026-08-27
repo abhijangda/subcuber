@@ -12,7 +12,7 @@ ARCH = BLACKWELL
 GENCODE = $(BLACKWELL_GENCODE)
 
 NVCC = /usr/local/cuda/bin/nvcc
-NVCC_FLAGS = -std=c++20 -g --expt-relaxed-constexpr -Xptxas -v,-O3 --split-compile=$(SPLIT_COMPILE) -DCUTLASS_API_v3 -DNDEBUG
+NVCC_FLAGS = -std=c++20 -O3 --expt-relaxed-constexpr -Xptxas -v,-O3 --split-compile=$(SPLIT_COMPILE) -DCUTLASS_API_v3 -DNDEBUG -lineinfo
 INCLUDES = -I $(STRASSEN_CUTLASS) -I $(CUTLASS) -I $(CUTLASS_COMMON) -I $(UTIL_INCLUDE) -I $(STRASSEN_CUTLASS_COMMON) -I ../../../src
 
 # Targets
@@ -31,6 +31,9 @@ strassen_winograd_fused_in_sum: strassen_gemm.cu
 
 strassen_winograd_presum_256: strassen_gemm.cu
 	$(NVCC) $(NVCC_FLAGS) $< $(INCLUDES) -DPRESUM -DTILE_SIZE_256 -o $@ $(GENCODE) -DSUB_GEMM_PARALLEL
+
+strassen_winograd_presum_128: strassen_gemm.cu
+	$(NVCC) $(NVCC_FLAGS) $< $(INCLUDES) -DPRESUM -DTILE_SIZE_128 -o $@ $(GENCODE) -DSUB_GEMM_PARALLEL
 
 strassen_winograd_presum_256_splitk: strassen_gemm.cu
 	$(NVCC) $(NVCC_FLAGS) $< $(INCLUDES) -DPRESUM -DTILE_SIZE_256 -o $@ $(GENCODE) -DSPLIT_K
