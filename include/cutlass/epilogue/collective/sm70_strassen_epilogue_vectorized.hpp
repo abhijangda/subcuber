@@ -36,6 +36,7 @@
 
 #include "cutlass/cutlass.h"
 
+#include "cute/arch/simd_sm100.hpp"
 #include "cute/tensor.hpp"
 
 #include "cutlass/gemm/threadblock/presum_detail.h"
@@ -329,13 +330,15 @@ public:
     for (int co = 0; co < 4; co++) {
       auto dest_global_op = RWCTypes::PostsumGlobalDestByOutputIndex(co);
 
-      if (!dest_global_op.is_layout_interim_linear()) continue;
+      if (dest_global_op.is_layout_interim_linear()) {
 
       auto postsum_dst = postsum_m0 + (M/2*N/2 * dest_global_op.get_op());
-
+      
+      CUTLASS_PRAGMA_UNROLL
       for (int elem = 0; elem < accumulators.size(); elem += VectorType::kElements) {
         VectorType arr = arrs[elem/VectorType::kElements];
 
+        #pragma unroll 4
         for (int ci = 0; ci < 4; ci++) {
           auto src_global_op = RWCTypes::PostsumSrcByOutputIndex(co, ci);
           if (src_global_op.valid() && src_global_op.is_mem_global() && src_global_op.is_layout_interim_linear()) {
@@ -344,12 +347,12 @@ public:
             src_val.clear();
 
             arch::global_load<VectorType, sizeof(VectorType)>(src_val, postsum_src, true);
-            //TODO: Does this use f32x2 packed?
-            arr = arr + src_val;
+            packed_add_f32x2(arr, src_val);
           }
         }
 
         arch::global_store<VectorType, sizeof(VectorType)>(arr, &postsum_dst[elem * NumMMAThreads + thread_idx*VectorType::kElements], true);
+      }
       }
     }
   }
@@ -361,12 +364,14 @@ public:
     for (int co = 0; co < 4; co++) {
       auto dest_global_op = RWCTypes::PostsumGlobalDestByOutputIndex(co);
       if (is_matrix && (dest_global_op.is_layout_final() || dest_global_op.is_layout_interim_matrix())) {
+        #pragma unroll 2
         for (int ci = 0; ci < 2; ci++) {
           auto src_global_op = RWCTypes::PostsumSrcByOutputIndex(co, ci);
           src_ops[ci] = src_global_op;
         }
         return dest_global_op;
       } else if (!is_matrix && dest_global_op.is_layout_interim_linear()) {
+        #pragma unroll 2
         for (int ci = 0; ci < 2; ci++) {
           auto src_global_op = RWCTypes::PostsumSrcByOutputIndex(co, ci);
           src_ops[ci] = src_global_op;
@@ -538,8 +543,7 @@ public:
           src_val.clear();
 
           arch::global_load<VectorType, sizeof(VectorType)>(src_val, postsum_src, true);
-          //TODO: Does this use f32x2 packed?
-          arr = arr + src_val;
+          packed_add_f32x2(arr, src_val);
         }
 
         if (src1_ops[1].valid() && src1_ops[1].is_mem_global() && src1_ops[1].is_layout_interim_linear()) {
@@ -548,8 +552,7 @@ public:
           src_val.clear();
 
           arch::global_load<VectorType, sizeof(VectorType)>(src_val, postsum_src, true);
-          //TODO: Does this use f32x2 packed?
-          arr = arr + src_val;
+          packed_add_f32x2(arr, src_val);
         }
       }
     }
@@ -693,6 +696,21 @@ public:
   }
 
 private:
+  template <class VectorType>
+  CUTLASS_DEVICE
+  static void
+  packed_add_f32x2(VectorType& dst, VectorType const& src) {
+    static_assert(sizeof(VectorType) % sizeof(float2) == 0);
+    constexpr int PackedElements = sizeof(VectorType) / sizeof(float2);
+    float2* dst_f32x2 = reinterpret_cast<float2*>(&dst);
+    float2 const* src_f32x2 = reinterpret_cast<float2 const*>(&src);
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int packed_idx = 0; packed_idx < PackedElements; ++packed_idx) {
+      cute::add(dst_f32x2[packed_idx], dst_f32x2[packed_idx], src_f32x2[packed_idx]);
+    }
+  }
+
   Params params;
   ThreadEpilogueOp epilogue_op;
 };

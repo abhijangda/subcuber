@@ -380,7 +380,6 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
     int  k_tile_count = cute::ceil_div(K / 2, size<2>(TileShape{}));
 
     bool is_neg = false;
-    bool has_global_src = false;
     bool any_global_dst_matrix = false;
     bool any_global_dst_valid = false;
 
@@ -401,14 +400,6 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
       any_global_dst_matrix = any_global_dst_matrix || postsum_global_dest.is_layout_final() ||
                                                       postsum_global_dest.is_layout_interim_matrix();
       any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
-
-      #pragma unroll 4
-      for (int read_c = 0; read_c < 4; read_c++) {
-        auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-        if (postsum_src.valid() && postsum_src.is_mem_global()) {
-          has_global_src = true;
-        }
-      }
     }
 
     // Perform the collective scoped MMA
