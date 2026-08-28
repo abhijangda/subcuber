@@ -126,6 +126,9 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_
 DECLARE_KERNEL_RUN_FN(run_blackwell_f64_cutlass_32x64);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f32_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f32_cutlass_256x128);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f32_sw_interleaved_presum_128x256);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f32_sw_interleaved_presum_64x128);
+DECLARE_KERNEL_RUN_FN(run_blackwell_f32_sw_interleaved_presum_128x256_then_64x128);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f64_sw_interleaved_presum_32x64);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f64_sw_interleaved_presum_level_2_32x64);
 DECLARE_KERNEL_RUN_FN(run_blackwell_f64_sw_fused_presum_32x64);
@@ -219,6 +222,9 @@ static const KernelEntry kKernels[] = {
     {"blackwell_f64_cutlass_32x64", "blackwell", "f64", 0, run_blackwell_f64_cutlass_32x64},
     {"blackwell_f32_cutlass_128x128", "blackwell", "f32", 0, run_blackwell_f32_cutlass_128x128},
     {"blackwell_f32_cutlass_256x128", "blackwell", "f32", 0, run_blackwell_f32_cutlass_256x128},
+    {"blackwell_f32_sw_interleaved_presum_128x256", "blackwell", "f32", 1, run_blackwell_f32_sw_interleaved_presum_128x256},
+    {"blackwell_f32_sw_interleaved_presum_64x128", "blackwell", "f32", 1, run_blackwell_f32_sw_interleaved_presum_64x128},
+    {"blackwell_f32_sw_interleaved_presum_128x256_then_64x128", "blackwell", "f32", 1, run_blackwell_f32_sw_interleaved_presum_128x256_then_64x128},
     {"blackwell_f64_sw_interleaved_presum_32x64", "blackwell", "f64", 1, run_blackwell_f64_sw_interleaved_presum_32x64},
     {"blackwell_f64_sw_interleaved_presum_level_2_32x64", "blackwell", "f64", 2, run_blackwell_f64_sw_interleaved_presum_level_2_32x64},
     {"blackwell_f64_sw_fused_presum_32x64", "blackwell", "f64", 1, run_blackwell_f64_sw_fused_presum_32x64},

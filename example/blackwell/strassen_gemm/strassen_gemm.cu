@@ -138,6 +138,9 @@ using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
 #elif defined(TILE_SIZE_128)
 using TileShape = cute::Shape<cute::_64, cute::_128, cute::_16>;
 using ThreadBlockShapeM2M6 = TileShape;
+// using ThreadBlockShapeM0M1 = cute::Shape<cute::_64, cute::_128, cute::_16>;
+// using PresumTileShapeA = cute::Shape<cute::_4, cute::_128>;
+// using PresumTileShapeB = cute::Shape<cute::_4, cute::_128>;
 using ThreadBlockShapeM0M1 = cute::Shape<cute::_128, cute::_256, cute::_16>;
 using PresumTileShapeA = cute::Shape<cute::_4, cute::_256>;
 using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
