@@ -97,12 +97,14 @@ using namespace cute;
 // A matrix configuration
 using         ElementA    = cutlass::half_t;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
+// using         SubMatLayoutA = cutlass::layout::StrassenLayout;
 using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = cutlass::half_t;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
+// using         SubMatLayoutB = cutlass::layout::StrassenLayout;
 using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
@@ -638,6 +640,24 @@ void initialize(const Options &options) {
   // initialize_block(block_C, seed + 2021);
 }
 
+template <class Element>
+__global__ void unpack_strassen_layout(
+  Element const* packed, Element* original, int rows, int columns) {
+  int row = blockIdx.x;
+  int half_rows = rows / 2;
+  int half_columns = columns / 2;
+  int row_in_quadrant = row % half_rows;
+  int row_quadrant = row / half_rows;
+
+  for (int column = threadIdx.x; column < columns; column += blockDim.x) {
+    int column_in_quadrant = column % half_columns;
+    int quadrant = row_quadrant * 2 + column / half_columns;
+    int packed_idx = quadrant * half_rows * half_columns +
+                     row_in_quadrant * half_columns + column_in_quadrant;
+    original[row * columns + column] = packed[packed_idx];
+  }
+}
+
 /// Populates a Gemm::Arguments structure from the given commandline options
 typename Gemm::Arguments args_from_options(const Options &options)
 {
@@ -662,8 +682,26 @@ typename Gemm::Arguments args_from_options(const Options &options)
 }
 
 bool verify(const Options &options) {
-  cutlass::TensorRef ref_A(block_A.get(), Gemm::LayoutA::packed({options.m, options.k}));
-  cutlass::TensorRef ref_B(block_B.get(), Gemm::LayoutB::packed({options.k, options.n}));
+  cutlass::DeviceAllocation<ElementA> block_reference_A;
+  cutlass::DeviceAllocation<ElementB> block_reference_B;
+  ElementA* reference_A = block_A.get();
+  ElementB* reference_B = block_B.get();
+
+  if constexpr (std::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout>) {
+    block_reference_A.reset(options.m * options.k);
+    unpack_strassen_layout<<<options.m, 256>>>(
+      block_A.get(), block_reference_A.get(), options.m, options.k);
+    reference_A = block_reference_A.get();
+  }
+  if constexpr (std::is_same_v<SubMatLayoutB, cutlass::layout::StrassenLayout>) {
+    block_reference_B.reset(options.k * options.n);
+    unpack_strassen_layout<<<options.k, 256>>>(
+      block_B.get(), block_reference_B.get(), options.k, options.n);
+    reference_B = block_reference_B.get();
+  }
+
+  cutlass::TensorRef ref_A(reference_A, Gemm::LayoutA::packed({options.m, options.k}));
+  cutlass::TensorRef ref_B(reference_B, Gemm::LayoutB::packed({options.k, options.n}));
   cutlass::TensorRef ref_C(block_C.get(), Gemm::LayoutC::packed({options.m, options.n}));
   cutlass::TensorRef ref_D(block_ref_D.get(), Gemm::LayoutD::packed({options.m, options.n}));
 

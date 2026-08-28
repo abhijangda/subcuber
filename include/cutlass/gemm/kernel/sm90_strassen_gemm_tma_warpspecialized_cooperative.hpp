@@ -808,13 +808,13 @@ public:
               auto load_l_coord = idx2crd(load_work_tile_info.L_idx, shape<4>(gB_nkl));
               auto load_blk_coord = make_coord(load_m_coord, load_n_coord, _, load_l_coord);
               auto load_k_tile_iter = cute::make_coord_iterator(shape<3>(gA_mkl));
-              load_k_tile_iter.coord += (is_fused && load_sub_m_idx == 1) ? k_tile_count : 0;
+              load_k_tile_iter.coord += (is_fused && !CollectiveMainloop::IsStrassenLayout && load_sub_m_idx == 1) ? k_tile_count : 0;
 
               collective_mainloop.load(
                 params.mainloop, half_problem_shape_MNKL,
                 mainloop_pipeline,
                 mainloop_pipe_producer_state,
-                (is_fused || load_sub_m_idx == 0) ? load_inputs :
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || (load_sub_m_idx == 0)) ? load_inputs :
                   ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
                 load_blk_coord, load_sub_m_idx,
                 load_k_tile_iter, k_tile_count,
