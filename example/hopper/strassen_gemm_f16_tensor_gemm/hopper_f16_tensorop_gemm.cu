@@ -97,15 +97,15 @@ using namespace cute;
 // A matrix configuration
 using         ElementA    = cutlass::half_t;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-// using         SubMatLayoutA = cutlass::layout::StrassenLayout;
-using         SubMatLayoutA = cutlass::layout::OriginalLayout;
+using         SubMatLayoutA = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = cutlass::half_t;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
-// using         SubMatLayoutB = cutlass::layout::StrassenLayout;
-using         SubMatLayoutB = cutlass::layout::OriginalLayout;
+using         SubMatLayoutB = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration

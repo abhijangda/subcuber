@@ -986,7 +986,7 @@ public:
               auto load_work_k_tile_count = TileScheduler::get_work_k_tile_count(
                 load_work_tile_info, load_problem_shape_MNKL, blk_shape) / 2;
               auto load_k_tile_iter = cute::make_coord_iterator(shape<3>(gA_mkl));
-              load_k_tile_iter.coord += (is_fused && load_sub_m_idx == 1) ? load_work_k_tile_count : 0;
+              load_k_tile_iter.coord += (is_fused && !CollectiveMainloop::IsStrassenLayout && load_sub_m_idx == 1) ? load_work_k_tile_count : 0;
 
               if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                 MY_PRINTF("943 %d : %d : %d %d : %d %d %d\n", load_work_k_tile_count, load_sub_m_idx, load_m_coord, load_n_coord, mainloop_pipe_producer_state.index_, mainloop_pipe_producer_state.phase_, mainloop_pipe_producer_state.count_);
@@ -996,7 +996,7 @@ public:
                 load_problem_shape_MNKL,
                 mainloop_pipeline,
                 mainloop_pipe_producer_state,
-                (is_fused || load_sub_m_idx == 0) ? load_inputs :
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? load_inputs :
                   ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
                 input_tensormaps,
                 load_blk_coord, load_sub_m_idx,

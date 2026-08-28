@@ -102,16 +102,21 @@ using namespace cute;
 // A matrix configuration
 using         ElementA    = cutlass::half_t;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
+using         SubMatLayoutA = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = cutlass::half_t;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
+using         SubMatLayoutB = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
 using         ElementC    = cutlass::half_t;                                // Element type for C and D matrix operands
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
+using         SubMatLayoutC = cutlass::layout::OriginalLayout;
 constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
 
 // Core kernel configurations
@@ -143,7 +148,7 @@ using EpilogueScheduleM2To6 = EpilogueScheduleM0;
 #elif defined(COOPERATIVE)
 using TileShapeM0           = Shape<_128,_256,_64>;                           // Threadblock-level tile size
 using TileShapeM2To6        = Shape<_128,_256,_64>;
-using ClusterShape        = Shape<_1,_1,_1>;                                // Shape of the threadblocks in a cluster
+using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = 4 ;
 using PresumTileShapeA    = Shape<_2, _256>;
@@ -166,15 +171,15 @@ using KernelScheduleM0 = cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperat
 using EpilogueScheduleM0 = cutlass::epilogue::PtrArrayTmaWarpSpecializedCooperative;
 #endif
 
-using PresumOpts = cutlass::gemm::device::PresumOpt<>;//<0,0,0,0>;
+using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
 //StageCount = 6 is a little slower than this with swizzle = 8.
 //TODO: Stages 5 produces wrong results for C2
 
 using AllPresumsKernel = AllPresums<>;
-using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
-                                    PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
-// using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                  // PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
+// using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
+                                    // PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
+using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
+                                  PresumCompute, PresumCompute, PresumCompute, PresumCompute>;//PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
@@ -222,12 +227,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, Al
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0,    EpilogueScheduleM0,    false, FusedMiGroup<7, 0>>,
-                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>, //TODO: Change this to true
-                                                                                                                           FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
+                                                                                                                          //  FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                      //  ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
@@ -393,9 +398,9 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
 
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups, ScheduleStrassenGroups1,
                                                                        ProblemShape,
-                                                                       ElementA, LayoutA *, cutlass::layout::OriginalLayout,
-                                                                       ElementB, LayoutB *, cutlass::layout::OriginalLayout,
-                                                                       ElementC, LayoutC *, cutlass::layout::OriginalLayout,
+                                                                       ElementA, LayoutA *, SubMatLayoutA,
+                                                                       ElementB, LayoutB *, SubMatLayoutB,
+                                                                       ElementC, LayoutC *, SubMatLayoutC,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
@@ -635,14 +640,20 @@ struct Options {
     std::stringstream str_swizzles_stream(str_swizzles);
 
     std::string str_swizzle;
-    int idx = 0;
-    while(std::getline(str_swizzles_stream, str_swizzle, ','))
-    {
-      if (idx < 7)
-        swizzles[idx] = stoi(str_swizzle);
-      idx++; 
+    if (cute::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout> &&  
+        cute::is_same_v<SubMatLayoutB, cutlass::layout::StrassenLayout>) {
+      std::getline(str_swizzles_stream, str_swizzle, ',');
+      for (int ii = 0; ii < 7; ii++) swizzles[ii] = stoi(str_swizzle);
+    } else {
+      int idx = 0;
+      while(std::getline(str_swizzles_stream, str_swizzle, ','))
+      {
+        if (idx < 7)
+          swizzles[idx] = stoi(str_swizzle);
+        idx++; 
+      }
+      for (int ii = idx; ii < 7; ii++) swizzles[ii] = 1;
     }
-    for (int ii = idx; ii < 7; ii++) swizzles[ii] = 1;
 
   }
 
@@ -995,6 +1006,24 @@ typename Gemm::Arguments args_from_options(const Options &options)
   return arguments;
 }
 
+template <class Element>
+__global__ void unpack_strassen_layout(
+  Element const* packed, Element* original, int rows, int columns) {
+  int row = blockIdx.x;
+  int half_rows = rows / 2;
+  int half_columns = columns / 2;
+  int row_in_quadrant = row % half_rows;
+  int row_quadrant = row / half_rows;
+
+  for (int column = threadIdx.x; column < columns; column += blockDim.x) {
+    int column_in_quadrant = column % half_columns;
+    int quadrant = row_quadrant * 2 + column / half_columns;
+    int packed_idx = quadrant * half_rows * half_columns +
+                     row_in_quadrant * half_columns + column_in_quadrant;
+    original[row * columns + column] = packed[packed_idx];
+  }
+}
+
 bool verify(const Options &options) {
   bool passed = true;
   for (int32_t i = 0; i < options.groups; ++i) {
@@ -1003,8 +1032,24 @@ bool verify(const Options &options) {
     auto M = get<0>(problem);
     auto N = get<1>(problem);
     auto K = get<2>(problem);
-    cutlass::TensorRef ref_A(block_A.get() + offset_A.at(i), Gemm::LayoutA::packed({M, K}));
-    cutlass::TensorRef ref_B(block_B.get() + offset_B.at(i), Gemm::LayoutB::packed({K, N}));
+    cutlass::DeviceAllocation<ElementA> block_reference_A;
+    cutlass::DeviceAllocation<ElementB> block_reference_B;
+    ElementA* reference_A = block_A.get() + offset_A.at(i);
+    ElementB* reference_B = block_B.get() + offset_B.at(i);
+
+    if constexpr (std::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout>) {
+      block_reference_A.reset(uint64_t(M) * uint64_t(K));
+      unpack_strassen_layout<<<M, 256>>>(reference_A, block_reference_A.get(), M, K);
+      reference_A = block_reference_A.get();
+    }
+    if constexpr (std::is_same_v<SubMatLayoutB, cutlass::layout::StrassenLayout>) {
+      block_reference_B.reset(uint64_t(K) * uint64_t(N));
+      unpack_strassen_layout<<<K, 256>>>(reference_B, block_reference_B.get(), K, N);
+      reference_B = block_reference_B.get();
+    }
+
+    cutlass::TensorRef ref_A(reference_A, Gemm::LayoutA::packed({M, K}));
+    cutlass::TensorRef ref_B(reference_B, Gemm::LayoutB::packed({K, N}));
     cutlass::TensorRef ref_C(block_C.get() + offset_C.at(i), Gemm::LayoutC::packed({M, N}));
     cutlass::TensorRef ref_D(block_ref_D.get() + offset_D.at(i), Gemm::LayoutD::packed({M, N}));
 
