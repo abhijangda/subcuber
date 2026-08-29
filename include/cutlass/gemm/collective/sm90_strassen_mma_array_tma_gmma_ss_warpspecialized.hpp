@@ -1053,8 +1053,10 @@ struct CollectiveStrassenMma<
       uint64_t presum_offset_B = 0;
       if constexpr (IsMoEGemmKernel) {
         if (l_coord != 0) {
-          raw_batch_A = int(mainloop_params.ptr_A_batch_indices[l_coord] / size<0>(TileShape{}));
-          raw_batch_B = int(mainloop_params.ptr_B_batch_indices[l_coord] / size<2>(TileShape{}));
+          //If StrassenLayout multiply by 2 because strideA and strideB are half
+          const int fac = (IsStrassenLayout ? 2 : 1);
+          raw_batch_A = int(mainloop_params.ptr_A_batch_indices[l_coord] / size<0>(TileShape{}) * fac);
+          raw_batch_B = int(mainloop_params.ptr_B_batch_indices[l_coord] / size<2>(TileShape{}) * fac);
           presum_offset_A = mainloop_params.presum_a_batch_indices[l_coord];
           presum_offset_B = mainloop_params.presum_b_batch_indices[l_coord];
           presum_batch_A = int(presum_offset_A / size<0>(TileShape{}));

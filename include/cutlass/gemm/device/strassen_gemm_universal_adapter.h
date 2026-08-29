@@ -139,10 +139,11 @@ static __global__ void presumcheck(uint R, uint C, Elem* presum) {
   //         &presum[4096*4096+row*4096+threadIdx.x]);
   
   R = R/2; C=C/2;
+  if (row >= R) return;
   for (int c = 0; c < C/1024; c++) {
     col = c*blockDim.x + threadIdx.x;
     //For B, set c == 0 && row < R. For A, set row == 0 && c < C
-    if (col == 0 && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
+    if (row == 0 && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
       printf("63: %d %d: %f; %p\n", row, col,
             float(presum[2*R*C+row*C+col]),
             &presum[2*R*C+row*C+col]);
@@ -1489,8 +1490,8 @@ public:
       }
       #endif
       // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k(0)/2,1024>>>(paramsM0_.get_problem_shape_k(0), paramsM0_.get_problem_shape_n(0), paramsM0_.presum_m_b_workspace);
-      // presumcheck<ElementA><<<8192/2,1024>>>(8192, 8192, paramsM0_.presum_m_b_workspace);
-      postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
+      presumcheck<ElementA><<<8192/2,1024>>>(256, 8192, paramsM0_.presum_m_a_workspace);
+      // postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
       cudaDeviceSynchronize();
       exit(EXIT_SUCCESS);
     }
