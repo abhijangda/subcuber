@@ -721,6 +721,10 @@ struct CollectiveStrassenMma<
         auto [M,N,K,L] = problem_shape_MNKL;
         implementable = implementable && cutlass::detail::check_alignment<min_tma_aligned_elements_A>(cute::make_shape(M,K,L), InternalStrideA{});
         implementable = implementable && cutlass::detail::check_alignment<min_tma_aligned_elements_B>(cute::make_shape(N,K,L), InternalStrideB{});
+        bool cluster_shape_divisible = ((M/2)/size<0>(TileShape{})) % size<0>(ClusterShape{}) == 0;
+        cluster_shape_divisible = cluster_shape_divisible && (((N/2)/size<1>(TileShape{})) % size<1>(ClusterShape{}) == 0);
+        implementable = implementable && cluster_shape_divisible;
+        if (!cluster_shape_divisible) printf("Cluster shape is not divisible with number of tiles");
       }
     }
 

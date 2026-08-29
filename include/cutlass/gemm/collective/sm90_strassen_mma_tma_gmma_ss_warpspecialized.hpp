@@ -601,6 +601,11 @@ struct CollectiveStrassenMma<
     constexpr int min_tma_aligned_elements_B = tma_alignment_bits / cutlass::sizeof_bits<ElementB>::value;
     implementable = implementable && cutlass::detail::check_alignment<min_tma_aligned_elements_B>(cute::make_shape(N,K,L), StrideB{});
 
+    bool cluster_shape_divisible = ((M/2)/size<0>(TileShape{})) % size<0>(ClusterShape{}) == 0;
+    cluster_shape_divisible = cluster_shape_divisible && (((N/2)/size<1>(TileShape{})) % size<1>(ClusterShape{}) == 0);
+    implementable = implementable && cluster_shape_divisible;
+    if (!cluster_shape_divisible) printf("Cluster shape is not divisible with number of tiles");
+
     if (!implementable) {
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Problem Size doesn't meet the minimum alignment requirements for TMA.\n");
     }
