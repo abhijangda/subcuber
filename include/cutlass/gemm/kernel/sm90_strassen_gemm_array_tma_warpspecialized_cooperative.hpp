@@ -836,6 +836,9 @@ public:
     auto load_inputs = collective_mainloop.get_inputs(all_inputs);
     auto load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
     auto load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+    auto strassen_layout_inputs = collective_mainloop.get_strassen_layout_inputs(0);
+    auto strassen_layout_inputs2 = collective_mainloop.get_strassen_layout_inputs(1);
+    auto strassen_layout_inputs3 = collective_mainloop.get_strassen_layout_inputs(2);
 
     static_assert(cute::tuple_size_v<decltype(load_inputs)> >= 2, "Output of load_init must have at least two elements (A, B)");
 
@@ -925,6 +928,9 @@ public:
             load_inputs = collective_mainloop.get_inputs(all_inputs);
             load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
             load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+            auto strassen_layout_inputs = collective_mainloop.get_strassen_layout_inputs(0);
+            auto strassen_layout_inputs2 = collective_mainloop.get_strassen_layout_inputs(1);
+            auto strassen_layout_inputs3 = collective_mainloop.get_strassen_layout_inputs(2);
             gA_mkl = get<0>(load_inputs);
             gB_nkl = get<1>(load_inputs);
             collective_mainloop.tensormaps_fence_acquire(shared_storage.tensormaps.mainloop, input_tensormaps);
@@ -955,6 +961,8 @@ public:
                 mainloop_pipe_producer_state,
                 ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? load_inputs :
                   ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? strassen_layout_inputs :
+                  ((load_sub_m_idx == 1) ? strassen_layout_inputs2 : strassen_layout_inputs3),
                 input_tensormaps,
                 load_blk_coord, load_sub_m_idx,
                 load_k_tile_iter, work_k_tile_count,
@@ -981,6 +989,7 @@ public:
               mainloop_pipeline,
               mainloop_pipe_producer_state,
               load_inputs,
+              strassen_layout_inputs,
               input_tensormaps,
               blk_coord, 0,
               k_tile_iter, work_k_tile_count,

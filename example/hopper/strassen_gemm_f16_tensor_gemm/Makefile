@@ -42,6 +42,15 @@ strassen_winograd_presum4_hopper_moe_gemm_cooperative: hopper_grouped_gemm.cu
 strassen_winograd_presum4_hopper_moe_gemm_cooperative_pingpong: hopper_grouped_gemm.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE_PINGPONG -DMOE
 
+strassen_winograd_presum4_hopper_moe_gemm_pingpong_strassen: hopper_grouped_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DPINGPONG -DMOE -DSTRASSEN_LAYOUT
+
+strassen_winograd_presum4_hopper_moe_gemm_cooperative_strassen: hopper_grouped_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE -DMOE -DSTRASSEN_LAYOUT
+
+strassen_winograd_presum4_hopper_moe_gemm_cooperative_pingpong_strassen: hopper_grouped_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE_PINGPONG -DMOE -DSTRASSEN_LAYOUT
+
 cublas_fp16_gemm_bench: cublas_fp16_gemm_bench.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< -o $@ -lcublas -lcublasLt -lcudart
 
