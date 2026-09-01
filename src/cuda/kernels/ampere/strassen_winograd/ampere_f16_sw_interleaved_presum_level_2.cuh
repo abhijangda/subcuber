@@ -136,7 +136,7 @@ using AmpereF16SWInterleavedPresumLevel2Kernel = cutlass::gemm::device::Strassen
                                                             InterimEpilogueOp,
                                                             SwizzleThreadBlock,
                                                             NumStages, 8, 8,
-                                                            false, false>;
+                                                            false, true>;
 
 class AmpereF16SWInterleavedPresumLevel2 {
 public:
