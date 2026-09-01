@@ -104,6 +104,7 @@ public:
   using StrassenShape = StrassenShape_;
   using IteratorA = IteratorA_;     ///< Iterates over tiles of A operand in global memory
   using IteratorB = IteratorB_;     ///< Iterates over tiles of B operand in global memory
+  static bool const IsStrassenLayout = false;
   using ElementC = ElementC_;       ///< Data type of accumulator matrix
   using LayoutC = LayoutC_;         ///< Layout of accumulator matrix
   using Policy = Policy_;           ///< Policy describing tuning details

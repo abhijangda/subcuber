@@ -130,10 +130,12 @@ KERNEL_PRESUM_FLAGS := -DCUTLASS_API_v2 -Dkernel_PRESUM -DTILE_SIZE_256 -DSPLIT_
 CUBIC_FLAGS := -DCUTLASS_API_v2 -DSPLIT_K=1
 V3_FLAGS := -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED
 
-.PHONY: all clean run kernel_runner_volta kernel_runner_ampere kernel_runner_hopper \
+.PHONY: all clean run kernel_runner kernel_runner_volta kernel_runner_ampere kernel_runner_hopper \
 	disable_cuda_declarations no_cuda_declarations no-cuda-declarations
 
 all: $(TARGET)
+
+kernel_runner: $(TARGET)
 
 kernel_runner_volta:
 	$(MAKE) TARGET=$(BUILD_ROOT)/kernel_runner_volta \
