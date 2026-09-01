@@ -643,6 +643,40 @@ struct CollectiveStrassenMma<
     }
   }
 
+  template <class ProblemShape_MNKL>
+  CUTLASS_DEVICE auto
+  get_base_tensors(ProblemShape_MNKL const& problem_shape_MNKL, Params const& mainloop_params) const {
+    using X = Underscore;
+    // Separate out problem shape for convenience
+    auto [M,N,K,L] = problem_shape_MNKL;
+    auto halfM = M/2; auto halfN = N/2; auto halfK = K/2;
+
+    const int32_t init_L = 1;
+
+    // TMA requires special handling of strides to deal with coord codomain mapping
+    // Represent the full tensors -- get these from TMA
+    Tensor mA_mkl = mainloop_params.tma_load_a.get_tma_tensor(IsStrassenLayout ? make_shape(4*halfM,halfK,init_L) : make_shape(M,K,init_L));                            // (m,k,l)
+    Tensor mB_nkl = mainloop_params.tma_load_b.get_tma_tensor(IsStrassenLayout ? make_shape(halfN,4*halfK,init_L) : make_shape(N,K,init_L));                            // (n,k,l)
+    auto A00_data = mA_mkl.data() + make_coord(0,0,_);
+    auto B00_data = mB_nkl.data() + make_coord(0,0,_);
+
+    // Make tiled views, defer the slice
+    Tensor gA_mkl = local_tile(make_tensor(A00_data, mA_mkl.layout()), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});  // (BLK_M,BLK_K,m,k,l)
+    Tensor gB_nkl = local_tile(make_tensor(B00_data, mB_nkl.layout()), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});  // (BLK_N,BLK_K,n,k,l)
+
+    Tensor presum_mA_mkl = mainloop_params.tma_load_presum_a.get_tma_tensor(make_shape(4*halfM,halfK,init_L));                            // (m,k,l)
+    Tensor presum_mB_nkl = mainloop_params.tma_load_presum_b.get_tma_tensor(make_shape(halfN,4*halfK,init_L));                            // (n,k,l)
+    auto presum_mA_data = presum_mA_mkl.data() + make_coord(0,0,_);
+    auto presum_mB_data = presum_mB_nkl.data() + make_coord(0,0,_);
+
+    // Make tiled views, defer the slice
+    Tensor gPresumA02 = local_tile(make_tensor(presum_mA_data, presum_mA_mkl.layout()), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
+
+    Tensor gPresumB31 = local_tile(make_tensor(presum_mB_data, presum_mB_nkl.layout()), TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+
+    return cute::make_tuple(gA_mkl, gPresumA02, gB_nkl, gPresumB31);
+  }
+  
   /// Set up the data needed by this collective for load and mma.
   /// Returns a tuple of tensors. The collective and the kernel layer have the contract
   /// Returned tuple must contain at least two elements, with the first two elements being:
@@ -729,6 +763,37 @@ struct CollectiveStrassenMma<
                             gPresumA02, gPresumS1, gPresumS2, gPresumA1S2,
                             gB00_nkl, gB01_nkl, gB10_nkl, gB11_nkl,
                             gPresumB31, gPresumB10, gPresumS3, gPresumS3B2);
+  }
+
+  CUTLASS_DEVICE auto
+  get_strassen_layout_inputs(int sub_m_idx) {
+    if ((StrassenMiGroup::hasM0() && !is_fused) || (is_fused && sub_m_idx == 0)) {
+      return make_tuple(int(MmaStrassen::APresums::A0), int(MmaStrassen::BPresums::B0));
+    }
+    if ((StrassenMiGroup::hasM1() && !is_fused) || (is_fused && sub_m_idx == 1)) {
+      return make_tuple(int(MmaStrassen::APresums::A1), int(MmaStrassen::BPresums::B2));
+    }
+
+    bool IsFusedM2M3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
+
+    if ((StrassenMiGroup::hasM2() && !IsFusedM2M3) || (IsFusedM2M3 && sub_m_idx == 0)) {
+      return make_tuple(int(MmaStrassen::APresums::S2 - MmaStrassen::APresums::APresumStart), int(MmaStrassen::BPresums::S3 - MmaStrassen::BPresums::BPresumStart));
+    }
+
+    if ((StrassenMiGroup::hasM3() && !IsFusedM2M3) || (IsFusedM2M3 && sub_m_idx == 1)) {
+      return make_tuple(int(StrassenMiGroup::APresums::A02 - MmaStrassen::APresums::APresumStart), int(StrassenMiGroup::BPresums::B31 - MmaStrassen::BPresums::BPresumStart));
+    }
+    if ((StrassenMiGroup::hasM4() && !IsFusedM4M5) || (IsFusedM4M5 && sub_m_idx == 0)) {
+      return make_tuple(int(StrassenMiGroup::APresums::S1 - MmaStrassen::APresums::APresumStart), int(StrassenMiGroup::BPresums::B10 - MmaStrassen::BPresums::BPresumStart));
+    }
+    if ((StrassenMiGroup::hasM5() && !IsFusedM4M5) || (IsFusedM4M5 && sub_m_idx == 1)) {
+      return make_tuple(int(StrassenMiGroup::APresums::A1S2 - MmaStrassen::APresums::APresumStart), int(StrassenMiGroup::BPresums::B3));
+    }
+    if ((StrassenMiGroup::hasM6() && !IsFusedM2M3M6) || (IsFusedM2M3M6 && sub_m_idx == 2)) {
+      return make_tuple(int(StrassenMiGroup::APresums::A3), int(StrassenMiGroup::BPresums::S3B2 - MmaStrassen::BPresums::BPresumStart));
+    }
+
+    return make_tuple(0, 0);
   }
 
   template<typename Tuple>
@@ -886,10 +951,11 @@ struct CollectiveStrassenMma<
   CUTLASS_DEVICE void
   load(
       Params const& mainloop_params,
-      ProblemShape_MNKL const& half_problem_shape,
+      ProblemShape_MNKL const& problem_shape_mnkl,
       MainloopPipeline pipeline,
       PipelineState smem_pipe_write,
       cute::tuple<TensorA, TensorB> const& load_inputs,
+      cute::tuple<int, int> const& strassen_layout_load_idxs,
       BlockCoord const& blk_coord, int sub_m_idx,
       KTileIterator k_tile_iter, int k_tile_count,
       int thread_idx,
@@ -906,7 +972,8 @@ struct CollectiveStrassenMma<
     if (lane_predicate) {
       auto [m_coord, n_coord, k_coord, l_coord] = blk_coord;
       uint block_idx = 0;
-      auto [halfM, halfN, halfK, halfL] = half_problem_shape;
+      auto [M, N, K, L] = problem_shape_mnkl;
+      auto halfM = M/2; auto halfN = N/2; auto halfK = K/2; auto halfL = L;
       const int n_coord_div = (n_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) % (1 << mainloop_params.get_presum_tile_log_divider_a());
       const int new_n_coord = (n_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) >> mainloop_params.get_presum_tile_log_divider_a();
 
@@ -944,8 +1011,26 @@ struct CollectiveStrassenMma<
       constexpr uint32_t cluster_shape_x = get<0>(typename DispatchPolicy::ClusterShape());
       uint2 cluster_local_block_id = {block_rank_in_cluster % cluster_shape_x, block_rank_in_cluster / cluster_shape_x};
 
-      Tensor gA_mkl = get<0>(load_inputs);
-      Tensor gB_nkl = get<1>(load_inputs);
+      bool const use_presum_a = IsFusedM4M5 ||
+                                (is_fused_m2_m3 ? sub_m_idx != 2 :
+                                  StrassenMiGroup::APresumLoads().get_first_access_idx() >= MmaStrassen::APresums::APresumStart);
+      bool const use_presum_b = IsFusedM4M5 ? sub_m_idx == 0 :
+                                (is_fused_m2_m3 ||
+                                  StrassenMiGroup::BPresumLoads().get_first_access_idx() >= MmaStrassen::BPresums::BPresumStart);
+
+      auto base_tensors = get_base_tensors(problem_shape_mnkl, mainloop_params);
+      auto strassen_layout_inputs = make_tuple(use_presum_a ? get<1>(base_tensors) : get<0>(base_tensors),
+                                               use_presum_b ? get<3>(base_tensors) : get<2>(base_tensors));
+
+      auto selected_load_inputs = [&]() {
+        if constexpr (IsStrassenLayout) {
+          return strassen_layout_inputs;
+        } else {
+          return load_inputs;
+        }
+      }();
+      Tensor gA_mkl = get<0>(selected_load_inputs);
+      Tensor gB_nkl = get<1>(selected_load_inputs);
 
       auto& tma_load_a = (IsFusedM4M5) ? mainloop_params.tma_load_presum_a :
                           (is_fused_m2_m3 ?
@@ -967,7 +1052,10 @@ struct CollectiveStrassenMma<
       auto block_tma_presum_ld_a = mainloop_params.tma_load_presumld_a.get_slice(0);
       auto block_tma_presum_ld_b = mainloop_params.tma_load_presumld_b.get_slice(0);
 
-      Tensor gA = gA_mkl(_,_,m_coord,_,l_coord);                                                     // (BLK_M,BLK_K,k)
+      int const raw_sub_m_offset_a = IsStrassenLayout ? (get<0>(strassen_layout_load_idxs)*halfM / size<0>(TileShape{})) : 0;
+      int const raw_sub_m_offset_b = IsStrassenLayout ? (get<1>(strassen_layout_load_idxs)*halfK / size<2>(TileShape{})) : 0;
+
+      Tensor gA = gA_mkl(_,_,m_coord + raw_sub_m_offset_a,_,l_coord);                                // (BLK_M,BLK_K,k)
       Tensor gB = gB_nkl(_,_,n_coord,_,l_coord);                                                     // (BLK_N,BLK_K,k)
 
       // Applies the mapping from block_tma_a
@@ -1119,7 +1207,7 @@ struct CollectiveStrassenMma<
           int write_stage = smem_pipe_write.index();
 
           copy(tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
-          copy(tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
+          copy(tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter + raw_sub_m_offset_b), tBsB(_,_,_,write_stage));
           issue_presum_loads(presum_k_iter, write_stage, tma_barrier);
 
           ++k_tile_iter;
@@ -1193,7 +1281,7 @@ struct CollectiveStrassenMma<
 
         //Using this is the problem
         copy(tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
-        copy(tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter), tBsB(_,_,_,write_stage));
+        copy(tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter + raw_sub_m_offset_b), tBsB(_,_,_,write_stage));
 
         if (ComputesPresum && store_order_barrier != nullptr && presum_k_iter == PresumStages - 2) {
           store_order_barrier->wait();

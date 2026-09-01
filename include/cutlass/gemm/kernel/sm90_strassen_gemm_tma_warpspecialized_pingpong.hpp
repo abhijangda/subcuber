@@ -796,6 +796,10 @@ public:
     auto load_inputs = collective_mainloop.get_inputs(all_inputs);
     auto load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
     auto load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+    auto strassen_layout_inputs = collective_mainloop.get_strassen_layout_inputs(0);
+    auto strassen_layout_inputs2 = collective_mainloop.get_strassen_layout_inputs(1);
+    auto strassen_layout_inputs3 = collective_mainloop.get_strassen_layout_inputs(2);
+
     static_assert(cute::tuple_size_v<decltype(load_inputs)> >= 2, "Output of load_init must have at least two elements (A, B)");
 
     // Extract out partitioned A and B.
@@ -935,11 +939,13 @@ public:
               load_k_tile_iter.coord += (is_fused && !CollectiveMainloop::IsStrassenLayout && load_sub_m_idx == 1) ? k_tile_count : 0;
 
               collective_mainloop.load(
-                params.mainloop, half_problem_shape_MNKL,
+                params.mainloop, problem_shape_MNKL,
                 mainloop_pipeline,
                 mainloop_pipe_producer_state,
                 ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? load_inputs :
                   ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? strassen_layout_inputs :
+                  ((load_sub_m_idx == 1) ? strassen_layout_inputs2 : strassen_layout_inputs3),
                 load_blk_coord, load_sub_m_idx,
                 load_k_tile_iter,
                 k_tile_count,
@@ -973,10 +979,11 @@ public:
             }
           } else {
             collective_mainloop.load(
-              params.mainloop, half_problem_shape_MNKL,
+              params.mainloop, problem_shape_MNKL,
               mainloop_pipeline,
               mainloop_pipe_producer_state,
               load_inputs,
+              strassen_layout_inputs,
               blk_coord, sub_m_idx,
               k_tile_iter,
               k_tile_count,
