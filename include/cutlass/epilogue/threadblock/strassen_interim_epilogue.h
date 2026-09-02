@@ -234,14 +234,14 @@ public:
       for (int i = 0; i < 4; i++) {
         if (sources[i].valid()) {
           if (sources[i].is_mem_global() && 
-              sources[i].is_layout_interim()) {
+              sources[i].is_layout_interim_linear()) {
             typename OutputTileIterator::Fragment source_fragment;
             source_iterator.load(source_fragment, sources[i].get_op());
             compute_frag = compute_frag + source_converter(source_fragment);
           }
 
           if (sources[i].is_mem_shared() && 
-              sources[i].is_layout_interim()) {
+              sources[i].is_layout_interim_linear()) {
             typename SharedTileIterator::Fragment shared_fragment;
             shared_tile_iterator.load(shared_fragment);
             compute_frag = compute_frag + source_converter(shared_fragment);
@@ -252,14 +252,14 @@ public:
       ++source_iterator;
 
       auto frag_store = compute_frag_converter(compute_frag);
-      if (shared_dest.valid() && shared_dest.is_layout_interim()) {
+      if (shared_dest.valid() && shared_dest.is_layout_interim_linear()) {
         shared_tile_iterator.store(frag_store);
       }
 
       ++shared_tile_iterator;
 
       if (global_dest.valid() &&
-          global_dest.is_layout_interim()) {
+          global_dest.is_layout_interim_linear()) {
         destination_iterator.store(frag_store);
         ++destination_iterator;
       }
@@ -326,7 +326,7 @@ public:
 
       #pragma unroll 4
       for (int i = 0; i < 4; i++) {
-        if (sources[i].valid() && sources[i].is_layout_interim()) {
+        if (sources[i].valid() && sources[i].is_layout_interim_linear()) {
           source_fragment.clear();
           if (sources[i].is_mem_global()) {
             source_iterator.load(source_fragment, sources[i].get_op());

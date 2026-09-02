@@ -70,7 +70,7 @@ using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, 
                                                                AllPresumsKernel>,
                                                 StrassenLevel1MiGroup<2, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>//C1 = M0
+                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>//C1 = M0
                                                                             //  CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>
                                                                              >,//C0 = M1
                                                                     AllPresumsM0, 0, 0>>;
@@ -79,7 +79,7 @@ using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, 
                                                              AllPresumsKernel>,
                                               StrassenLevel1MiGroup<kStrassenLevel, level_1_idx, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                     AllPresumsM0, 1, 0, 1>,
                                               StrassenLevel1M2Group<kStrassenLevel, level_1_idx, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
@@ -136,7 +136,7 @@ using AmpereF16SWInterleavedPresumLevel2Kernel = cutlass::gemm::device::Strassen
                                                             InterimEpilogueOp,
                                                             SwizzleThreadBlock,
                                                             NumStages, 8, 8,
-                                                            false, false>;
+                                                            false, true>;
 
 class AmpereF16SWInterleavedPresumLevel2 {
 public:

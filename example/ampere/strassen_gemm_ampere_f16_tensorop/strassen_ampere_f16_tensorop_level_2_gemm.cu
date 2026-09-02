@@ -253,7 +253,7 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
                                                                AllPresumsKernel>,
                                                 StrassenLevel1MiGroup<2, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>//C1 = M0
+                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>//C1 = M0
                                                                             //  CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>
                                                                              >,//C0 = M1
                                                                     AllPresumsM0, 0, 0>>;
@@ -262,7 +262,7 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
                                                              AllPresumsKernel>,
                                               StrassenLevel1MiGroup<kStrassenLevel, level_1_idx, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                     AllPresumsM0, 1, 0, 1>,
                                               StrassenLevel1M2Group<kStrassenLevel, level_1_idx, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
@@ -303,7 +303,7 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
                                                                     AllPresumsM0>,
                                               StrassenLevel1M1Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<1, MemShared, LayoutInterim1D>> >>,//C0 = M1
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M2Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
@@ -340,7 +340,7 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
   //For 4k, 4k, 4k acheives 0.55 ms 
   using StrassenGroups = StrassenLevel1Groups<StrassenLevel1MiGroup<kStrassenLevel, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                     AllPresumsM0, 1, 0, 1>,
                                               StrassenLevel1M2Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp, 3,

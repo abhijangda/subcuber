@@ -63,6 +63,7 @@
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "cutlass/gemm/device/strassen_decls.h"
 #include "cutlass/strassen_presum_global_kernel.h"
+#include "cutlass/layout/strassen_layout.hpp"
 
 #include "cutlass/epilogue/collective/collective_strassen_builder.hpp"
 #include "cutlass/gemm/collective/collective_strassen_gemm_builder.hpp"
@@ -91,7 +92,7 @@ namespace cutlass::gemm::device {
   on the two kernel API types, and thus, StrassenGemmUniversalAdapter's behaviour might
   differ between the two specializations.
 */
-template <typename ScheduleStrassenGroups, class GemmKernel_, class Enable = void>
+template <class GemmKernel_, class Enable = void>
 class StrassenGemmUniversalAdapter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -127,7 +128,7 @@ constexpr int stages_member(DispatchPolicy) {
 
 
 template<typename Elem>
-static __global__ void presumcheck(uint R, uint C, Elem* A, Elem* presum) {
+static __global__ void presumcheck(uint R, uint C, Elem* presum) {
   int row = blockIdx.x;
   int col = threadIdx.x;
   // if (threadIdx.x == 0)
@@ -138,10 +139,11 @@ static __global__ void presumcheck(uint R, uint C, Elem* A, Elem* presum) {
   //         &presum[4096*4096+row*4096+threadIdx.x]);
   
   R = R/2; C=C/2;
+  if (row >= R) return;
   for (int c = 0; c < C/1024; c++) {
     col = c*blockDim.x + threadIdx.x;
     //For B, set c == 0 && row < R. For A, set row == 0 && c < C
-    if (col == 0 && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
+    if (row == 0 && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
       printf("63: %d %d: %f; %p\n", row, col,
             float(presum[2*R*C+row*C+col]),
             &presum[2*R*C+row*C+col]);
@@ -155,8 +157,8 @@ static __global__ void postsumcheck(Elem* postsum) {
   
   for (int c = 0; c < 4; c++) {
     uint col = c*blockDim.x + threadIdx.x;
-    if (row < 8*1024/2 && col < 8*1024/2 && row == 0 && c == 0)// && float(postsum[0*R*C + row*C + col]) != 0.0f)
-      printf("63: %d %d: M4 %f M2 %f\n", row, col,
+    if (row < 8*1024/2 && col < 8*1024/2 && float(postsum[1*R*C + row*C + col]) != 4096.0f)
+      printf("63: %d %d: M0 %f M2 %f\n", row, col,
              float(postsum[0*R*C + row*C + col]), float(postsum[1*R*C + row*C + col]));
             // &presum[row*512+threadIdx.x]);
   }
@@ -174,10 +176,13 @@ struct PresumOpt {
   static constexpr uint FixedPresumTileDividerLogB = FixedPresumTileDividerLogB_;
 };
 
-template<typename StrassenGroups_,
-         typename ElementA, typename LayoutA, typename ElementB, typename LayoutB,
-         typename ElementC, typename LayoutC, typename ElementAccum, typename TileShape,
-         typename ClusterShape, typename KernelSchedule, typename EpilogueSchedule,
+template<typename StrassenGroups_, typename ScheduleStrassenGroups_,
+         typename ProblemShape,
+         typename ElementA, typename LayoutA, typename SubMatLayoutA,
+         typename ElementB, typename LayoutB, typename SubMatLayoutB,
+         typename ElementC, typename LayoutC, typename SubMatLayoutC,
+         typename ElementAccum,
+         typename ClusterShape,
          typename StageCount,
          typename PresumTileShapeA = void, typename PresumTileShapeB = void,
          typename PresumOpt_ = void>
@@ -187,9 +192,13 @@ public:
   static const int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
   static const int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
   using StrassenGroups = StrassenGroups_;
+  using ScheduleStrassenGroups = ScheduleStrassenGroups_;
   using PresumOpt = typename std::conditional<std::is_same<PresumOpt_, void>::value, cutlass::gemm::device::PresumOpt<>, PresumOpt_>::type;
+  using DefaultKernelSchedule = typename ScheduleStrassenGroups::ParallelGroups0::KernelSchedule;
+  using DefaultEpilogueSchedule = typename ScheduleStrassenGroups::ParallelGroups0::EpilogueSchedule;
+  using DefaultTileShape = typename StrassenGroups::Group0::ThreadBlockShape;
 
-  template<typename StrassenMiGroup, typename DefaultTileShape>
+  template<typename ParallelGroup, typename StrassenMiGroup>
   using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveStrassenBuilder<
     StrassenMiGroup,
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
@@ -199,16 +208,20 @@ public:
     ElementAccum, ElementAccum,
     ElementC, LayoutC, AlignmentC,
     ElementC, LayoutC, AlignmentC,
-    EpilogueSchedule,
+    cute::conditional_t<!cute::is_same_v<typename ParallelGroup::EpilogueSchedule, void>,
+              typename ParallelGroup::EpilogueSchedule, DefaultEpilogueSchedule>,
     cutlass::epilogue::fusion::LinearCombination<
       cutlass::half_t,
       float,
       cutlass::half_t,
       float
-    >
+    >,
+    void,
+    ProblemShape,
+    SubMatLayoutC
   >;
 
-  template<typename StrassenMiGroup, typename DefaultTileShape>
+  template<typename ParallelGroup, typename StrassenMiGroup>
   using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveStrassenBuilder<
     StrassenMiGroup,
     cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
@@ -218,37 +231,49 @@ public:
     typename std::conditional<StrassenMiGroup::hasAnyM(), typename StrassenMiGroup::ThreadBlockShape, DefaultTileShape>::type,
     ClusterShape,
     typename StrassenMiGroup::StageCountType,
-    KernelSchedule,
+    cute::conditional_t<!cute::is_same_v<typename ParallelGroup::KernelSchedule, void>,
+              typename ParallelGroup::KernelSchedule, DefaultKernelSchedule>,
     PresumTileShapeA,
     PresumTileShapeB,
-    PresumOpt
+    PresumOpt,
+    ProblemShape,
+    void,
+    SubMatLayoutA,
+    SubMatLayoutB
   >;
 
-  template<typename StrassenMiGroup, typename DefaultTileShape>
+  template<typename ParallelGroup, typename StrassenMiGroup>
   using GemmKernel = cutlass::gemm::kernel::StrassenGemmUniversal<
     StrassenMiGroup,
-    Shape<int,int,int>, // Indicates ProblemShape
-    typename CollectiveMainloop<StrassenMiGroup, DefaultTileShape>::CollectiveOp,
-    typename CollectiveEpilogue<StrassenMiGroup, DefaultTileShape>::CollectiveOp
+    ProblemShape, // Indicates ProblemShape
+    typename CollectiveMainloop<ParallelGroup, StrassenMiGroup>::CollectiveOp,
+    typename CollectiveEpilogue<ParallelGroup, StrassenMiGroup>::CollectiveOp
   >;
 
-  using GemmKernelM0 = GemmKernel<typename StrassenGroups::Group0, TileShape>;
-  using GemmKernelM1 = GemmKernel<typename StrassenGroups::Group1, TileShape>;
-  using GemmKernelM2 = GemmKernel<typename StrassenGroups::Group2, TileShape>;
-  using GemmKernelM3 = GemmKernel<typename StrassenGroups::Group3, TileShape>;
-  using GemmKernelM4 = GemmKernel<typename StrassenGroups::Group4, TileShape>;
-  using GemmKernelM5 = GemmKernel<typename StrassenGroups::Group5, TileShape>;
-  using GemmKernelM6 = GemmKernel<typename StrassenGroups::Group6, TileShape>;
+  using GemmKernelM0 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<0>,
+                                  typename StrassenGroups::Group0>;
+  using GemmKernelM1 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<1>,
+                                  typename StrassenGroups::Group1>;
+  using GemmKernelM2 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<2>,
+                                  typename StrassenGroups::Group2>;
+  using GemmKernelM3 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<3>,
+                                  typename StrassenGroups::Group3>;
+  using GemmKernelM4 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<4>,
+                                  typename StrassenGroups::Group4>;
+  using GemmKernelM5 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<5>,
+                                  typename StrassenGroups::Group5>;
+  using GemmKernelM6 = GemmKernel<typename ScheduleStrassenGroups::template ParallelGroupForMi<6>,
+                                  typename StrassenGroups::Group6>;
 };
 
-template <typename ScheduleStrassenGroups, typename StrassenGemmKernels>
+template <typename StrassenGemmKernels>
 class StrassenGemmUniversalAdapter<
-  ScheduleStrassenGroups,
   StrassenGemmKernels,
   cute::enable_if_t<true>>
   // cute::enable_if_t<gemm::detail::IsCutlass3GemmKernel<GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM0>>::value>>
 {
 public:
+  using ScheduleStrassenGroups = typename StrassenGemmKernels::ScheduleStrassenGroups;
   using GemmKernelM0 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM0>;
   using GemmKernelM1 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM1>;
   using GemmKernelM2 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM2>;
@@ -365,6 +390,22 @@ public:
   // Params const& params() const {
   //   return params_;
   // }
+  
+  template<typename ArgsOrParams>
+  static auto get_vector_of_problems(ArgsOrParams const &args) {
+    using ProblemShape = std::remove_cvref_t<decltype(args.problem_shape)>;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      std::vector<typename ProblemShape::UnderlyingProblemShape> problems;
+      for (int i = 0; i < args.problem_shape.groups(); i++) {
+        problems.push_back(args.problem_shape.get_host_problem_shape(i));
+      }
+      return problems;
+    } else {
+      std::vector<ProblemShape> problems;
+      problems.push_back(args.problem_shape);
+      return problems;
+    }
+  }
 
   /// Determines whether the GEMM can execute the given problem.
   static Status
@@ -379,17 +420,23 @@ public:
         bool has_A_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyAPresum(MmaStrassen::PresumCompute);
         bool has_B_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyBPresum(MmaStrassen::PresumCompute);
         using PresumOpt = typename GemmKernelM0::Mma::PresumOpt;
-        const int presum_a_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogA != UINT32_MAX ?
-                                                    PresumOpt::FixedPresumTileMultilplierLogA :
-                                                    GemmKernelM0::Mma::get_presum_log_multiplier(args.get_problem_shape_k(), args.get_problem_shape_n());
-        const int presum_b_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogB != UINT32_MAX ?
-                                                    PresumOpt::FixedPresumTileMultilplierLogB :
-                                                    GemmKernelM0::Mma::get_presum_log_multiplier(args.get_problem_shape_k(), args.get_problem_shape_m());
-        const int total_presum_iterations = std::max(GemmKernelM0::Mma::kPresumComputeIterationsA*has_A_presums*(1<<presum_a_log_tile_multiplier),
-                                                     GemmKernelM0::Mma::kPresumComputeIterationsB*has_B_presums*(1<<presum_b_log_tile_multiplier));
-        int required_k = total_presum_iterations * size<2>(typename GemmKernelM0::Mma::TileShape{});
-        if (args.get_problem_shape_k()/2 < required_k)
-          return Status::kErrorInvalidProblem;
+        auto problems = get_vector_of_problems(args);
+        for (int i = 0; i < problems.size(); i++) {
+          const int k = cute::get<2>(problems[i]);
+          const int m = cute::get<0>(problems[i]);
+          const int n = cute::get<1>(problems[i]);
+          const int presum_a_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogA != UINT32_MAX ?
+                                                      PresumOpt::FixedPresumTileMultilplierLogA :
+                                                      GemmKernelM0::Mma::get_presum_log_multiplier(k, n);
+          const int presum_b_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogB != UINT32_MAX ?
+                                                      PresumOpt::FixedPresumTileMultilplierLogB :
+                                                      GemmKernelM0::Mma::get_presum_log_multiplier(k, m);
+          const int total_presum_iterations = std::max(GemmKernelM0::Mma::kPresumComputeIterationsA*has_A_presums*(1<<presum_a_log_tile_multiplier),
+                                                       GemmKernelM0::Mma::kPresumComputeIterationsB*has_B_presums*(1<<presum_b_log_tile_multiplier));
+          int required_k = total_presum_iterations * size<2>(typename GemmKernelM0::Mma::TileShape{});
+          if (k/2 < required_k)
+            return Status::kErrorInvalidProblem;
+        }
       }
       return Status::kSuccess;
     }
@@ -398,18 +445,153 @@ public:
     }
   }
 
+  static size_t get_grouped_gemm_index_size(Arguments const &args) {
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      return (args.problem_shape.num_groups * sizeof(uint64_t)+(256-1))/256 * 256;
+    }
+    else {
+      return 0;
+    }
+  }
+
+  static size_t get_grouped_gemm_index_copy_size(Arguments const &args) {
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      return args.problem_shape.groups() * sizeof(uint64_t);
+    }
+    return 0;
+  }
+
   static size_t get_presum_a_workspace_size(Arguments const &args) {
-    return (StrassenGroups::Group0::AllPresums::numAPresumYes()) *
-            sizeof(ElementA) * args.get_problem_shape_m()/2 * args.get_problem_shape_k()/2;
+    auto workspace_size = [](auto const &problem_shape) {
+      return StrassenGroups::Group0::AllPresums::numAPresumYes() * sizeof(ElementA) *
+             size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<2>(problem_shape) / 2);
+    };
+
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return total_workspace_size;
+    }
+    else {
+      return workspace_size(args.problem_shape);
+    }
+  }
+
+  static std::vector<size_t> get_presum_a_batch_indices(Arguments const &args) {
+    auto workspace_size = [](auto const &problem_shape) {
+      return StrassenGroups::Group0::AllPresums::numAPresumYes() * sizeof(ElementA) *
+             size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<2>(problem_shape) / 2);
+    };
+
+    std::vector<size_t> vec;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      if (args.mode == GemmUniversalMode::kMoE) {
+        size_t total_workspace_rows = 0;
+        for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+          vec.push_back(total_workspace_rows);
+          total_workspace_rows += StrassenGroups::Group0::AllPresums::numAPresumYes() *
+                                  size_t(cute::get<0>(args.problem_shape.get_host_problem_shape(group_idx)) / 2);
+        }
+        return vec;
+      }
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        vec.push_back(total_workspace_size/sizeof(ElementA));
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return vec;
+    }
+    else {
+      return vec;
+    }
   }
 
   static size_t get_presum_b_workspace_size(Arguments const &args) {
-    return (StrassenGroups::Group0::AllPresums::numBPresumYes()) *
-            sizeof(ElementB) * args.get_problem_shape_n()/2 * args.get_problem_shape_k()/2;
+    auto workspace_size = [](auto const &problem_shape) {
+      return StrassenGroups::Group0::AllPresums::numBPresumYes() * sizeof(ElementB) *
+             size_t(cute::get<1>(problem_shape) / 2) * size_t(cute::get<2>(problem_shape) / 2);
+    };
+
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return total_workspace_size;
+    }
+    else {
+      return workspace_size(args.problem_shape);
+    }
+  }
+
+  static std::vector<size_t> get_presum_b_batch_indices(Arguments const &args) {
+    auto workspace_size = [](auto const &problem_shape) {
+      return StrassenGroups::Group0::AllPresums::numBPresumYes() * sizeof(ElementB) *
+             size_t(cute::get<1>(problem_shape) / 2) * size_t(cute::get<2>(problem_shape) / 2);
+    };
+
+    std::vector<size_t> vec;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      if (args.mode == GemmUniversalMode::kMoE) {
+        size_t total_workspace_k = 0;
+        for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+          vec.push_back(total_workspace_k);
+          total_workspace_k += StrassenGroups::Group0::AllPresums::numBPresumYes() *
+                               size_t(cute::get<2>(args.problem_shape.get_host_problem_shape(group_idx)) / 2);
+        }
+        return vec;
+      }
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        vec.push_back(total_workspace_size/sizeof(ElementB));
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return vec;
+    }
+    else {
+      return vec;
+    }
   }
 
   static size_t get_postsum_m_workspace_size(Arguments const &args) {
-    return 7*(args.get_problem_shape_m()/2 * args.get_problem_shape_n()/2) * sizeof(ElementB);
+    auto workspace_size = [](auto const &problem_shape) {
+      return 7 * size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<1>(problem_shape) / 2) *
+             sizeof(ElementC);
+    };
+
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return total_workspace_size;
+    }
+    else {
+      return workspace_size(args.problem_shape);
+    }
+  }
+
+
+  static std::vector<size_t> get_postsum_m_batch_indices(Arguments const &args) {
+    auto workspace_size = [](auto const &problem_shape) {
+      return 7 * size_t(cute::get<0>(problem_shape) / 2) * size_t(cute::get<1>(problem_shape) / 2) *
+             sizeof(ElementC);
+    };
+
+    std::vector<size_t> vec;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      size_t total_workspace_size = 0;
+      for (int32_t group_idx = 0; group_idx < args.problem_shape.groups(); ++group_idx) {
+        vec.push_back(total_workspace_size/sizeof(ElementD));
+        total_workspace_size += workspace_size(args.problem_shape.get_host_problem_shape(group_idx));
+      }
+      return vec;
+    }
+    else {
+      return vec;
+    }
   }
 
   /// Gets the workspace size
@@ -420,8 +602,13 @@ public:
       workspace_bytes += sizeof(int) * size_t(cute::size<0>(TileShape{})) * size_t(cute::size<1>(TileShape{}));
     }
 
-    workspace_bytes += get_presum_a_workspace_size(args) + get_presum_b_workspace_size(args) +
-                       get_postsum_m_workspace_size(args) + GemmKernel::get_workspace_size(args);
+    workspace_bytes += get_presum_a_workspace_size(args) + get_grouped_gemm_index_size(args) +
+                       get_presum_b_workspace_size(args) + get_grouped_gemm_index_size(args) +
+                       get_postsum_m_workspace_size(args) + get_grouped_gemm_index_size(args) +
+                       GemmKernelM0::get_workspace_size(args) + GemmKernelM1::get_workspace_size(args) + 
+                       GemmKernelM2::get_workspace_size(args) + GemmKernelM3::get_workspace_size(args) +
+                       GemmKernelM4::get_workspace_size(args) + GemmKernelM5::get_workspace_size(args) +
+                       GemmKernelM6::get_workspace_size(args);
 
     CUTLASS_TRACE_HOST("  workspace_bytes: " << workspace_bytes);
 
@@ -567,10 +754,38 @@ public:
                                               GemmKernelM0, GemmKernelM1, GemmKernelM2, GemmKernelM3,
                                               GemmKernelM4, GemmKernelM5, GemmKernelM6>;
 
+    uint64_t workspace_offset = 0;
     ElementA* presum_a_workspace = (ElementA*)workspace;
-    ElementA* presum_b_workspace = (ElementA*)presum_a_workspace + get_presum_a_workspace_size(args)/sizeof(ElementA);
-    ElementC* postsum_m_workspace = (ElementC*)presum_b_workspace + get_presum_b_workspace_size(args)/sizeof(ElementB);
-    int* sem_workspace = (int*)(postsum_m_workspace + get_postsum_m_workspace_size(args)/sizeof(ElementC));
+    workspace_offset += get_presum_a_workspace_size(args);
+    ElementA* presum_b_workspace = (ElementA*)((char*)workspace + workspace_offset);
+    workspace_offset += get_presum_b_workspace_size(args);
+    ElementC* postsum_m_workspace = (ElementC*)((char*)workspace + workspace_offset);
+    workspace_offset += get_postsum_m_workspace_size(args);
+
+    uint64_t* presum_a_batch_indices = (uint64_t*)((char*)workspace + workspace_offset);
+    workspace_offset += get_grouped_gemm_index_size(args);
+    uint64_t* presum_b_batch_indices = (uint64_t*)((char*)workspace + workspace_offset);
+    workspace_offset += get_grouped_gemm_index_size(args);
+    uint64_t* postsum_m_batch_indices = (uint64_t*)((char*)workspace + workspace_offset);
+    workspace_offset += get_grouped_gemm_index_size(args);
+
+    int* sem_workspace = (int*)(((char*)workspace) + workspace_offset);
+
+    if (presum_a_batch_indices != nullptr) {
+      cudaMemcpy(presum_a_batch_indices, get_presum_a_batch_indices(args).data(),
+                 get_grouped_gemm_index_copy_size(args), cudaMemcpyHostToDevice);
+    }
+
+    if (presum_b_batch_indices != nullptr) {
+      cudaMemcpy(presum_b_batch_indices, get_presum_b_batch_indices(args).data(),
+                 get_grouped_gemm_index_copy_size(args), cudaMemcpyHostToDevice);
+    }
+
+    if (postsum_m_batch_indices != nullptr) {
+      cudaMemcpy(postsum_m_batch_indices, get_postsum_m_batch_indices(args).data(),
+                 get_grouped_gemm_index_copy_size(args), cudaMemcpyHostToDevice);
+    }
+
     int swizzle_idx = 0;
     auto args0 = args, args1 = args, args2 = args, args3 = args, args4 = args, args5 = args, args6 = args;
     args0.scheduler.max_swizzle_size = swizzles[swizzle_idx++];
@@ -596,8 +811,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -610,8 +827,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -624,8 +843,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -638,8 +859,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -652,8 +875,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -666,8 +891,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -680,8 +907,10 @@ public:
                                         typename GemmKernelM0::Arguments(args4), paramsM4_,
                                         typename GemmKernelM0::Arguments(args5), paramsM5_,
                                         typename GemmKernelM0::Arguments(args6), paramsM6_,
-                                        presum_a_workspace, presum_b_workspace,
-                                        postsum_m_workspace, sem_workspace, stream, cuda_adapter);
+                                        presum_a_workspace, presum_a_batch_indices,
+                                        presum_b_workspace, presum_b_batch_indices,
+                                        postsum_m_workspace, postsum_m_batch_indices,
+                                        sem_workspace, stream, cuda_adapter);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -705,7 +934,9 @@ public:
     typename GemmKernelM5::Params& params5,
     typename GemmKernelM6::Arguments const args6,
     typename GemmKernelM6::Params& params6,
-    ElementA* presum_m_a, ElementB* presum_m_b, ElementC* postsum_m,
+    ElementA* presum_m_a, uint64_t* presum_a_batch_indices,
+    ElementB* presum_m_b, uint64_t* presum_b_batch_indices,
+    ElementC* postsum_m, uint64_t* postsum_m_batch_indices,
     void* sem_workspace,
     cudaStream_t stream = nullptr,
     CudaHostAdapter* cuda_adapter = nullptr) {
@@ -718,39 +949,69 @@ public:
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM1::initialize_workspace(args1, sem_workspace, stream, cuda_adapter);
+    uint64_t sem_offset = GemmKernelM0::get_workspace_size(args0);
+    status = GemmKernelM1::initialize_workspace(args1, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM2::initialize_workspace(args2, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM1::get_workspace_size(args1);
+    status = GemmKernelM2::initialize_workspace(args2, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM3::initialize_workspace(args3, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM2::get_workspace_size(args2);
+    status = GemmKernelM3::initialize_workspace(args3, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM4::initialize_workspace(args4, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM3::get_workspace_size(args3);
+    status = GemmKernelM4::initialize_workspace(args4, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM5::initialize_workspace(args5, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM4::get_workspace_size(args4);
+    status = GemmKernelM5::initialize_workspace(args5, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
-    status = GemmKernelM6::initialize_workspace(args6, sem_workspace, stream, cuda_adapter);
+    sem_offset += GemmKernelM5::get_workspace_size(args5);
+    status = GemmKernelM6::initialize_workspace(args6, (char*)sem_workspace + sem_offset, stream, cuda_adapter);
     if (status != Status::kSuccess) {
       return status;
     }
 
     // Initialize the Params structure
-    params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_m_b, postsum_m, sem_workspace);
-    params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_m_b, postsum_m, sem_workspace);
+    if constexpr (requires { args0.problem_shape.num_groups; }) {
+      params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+      params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_a_batch_indices,
+        presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    } else {
+      params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+      params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace);
+    }
 
     // Don't set the function attributes - require the CudaHostAdapter to set it.
     if constexpr (kEnableCudaHostAdapter) {
@@ -1129,13 +1390,17 @@ public:
     if (paramsM0_.run <= 1 && (StrassenGroups::PresumGroup::AllPresums::APresumComputeLoads(PresumGlobalKernel).numAccess() > 0 ||
         StrassenGroups::PresumGroup::AllPresums::BPresumComputeLoads(PresumGlobalKernel).numAccess() > 0)) {
       //TODO: Add a swizzle?
-      dim3 grid = {uint((paramsM0_.get_problem_shape_n()/2)/GemmKernelM0::Mma::PresumShape::kN),
-                   uint((paramsM0_.get_problem_shape_m()/2)/GemmKernelM0::Mma::PresumShape::kM),
-                   1};
-      KernelPresumGlobalCompute<typename StrassenGroups::PresumGroup, GemmKernelM0, 128><<<grid, 128, 0, streams[0]>>>(paramsM0_);
-      auto result = cudaDeviceSynchronize();
-      if (result != cudaSuccess)
-      {printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(result)); return Status::kErrorInternal;}
+      auto problems = get_vector_of_problems(paramsM0_);
+      for (int problem_idx = 0; problem_idx < problems.size(); problem_idx++) {
+        auto const& problem = problems[problem_idx];
+        dim3 grid = {uint((cute::get<1>(problem)/2)/GemmKernelM0::Mma::PresumShape::kN),
+                     uint((cute::get<0>(problem)/2)/GemmKernelM0::Mma::PresumShape::kM),
+                     1};
+        KernelPresumGlobalCompute<typename StrassenGroups::PresumGroup, GemmKernelM0, 128><<<grid, 128, 0, streams[0]>>>(paramsM0_, problem_idx);
+        auto result = cudaDeviceSynchronize();
+        if (result != cudaSuccess)
+        {printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(result)); return Status::kErrorInternal;}
+      }
       paramsM0_.run += 1;
     }
 
@@ -1162,44 +1427,6 @@ public:
       // cudaStreamSynchronize(streams[(stream_idx-1)%num_streams]);
     }
 
-    if (false) {
-      cudaDeviceSynchronize();
-      #if 1
-      uint R = 8*1024/2, C = 8*1024/2;
-      ElementB* h_presum_b = new ElementB[R*C];
-      ElementB* b = new ElementB[2*R*2*C];
-      cudaMemcpy(h_presum_b, &paramsM0_.presum_m_b_workspace[2*R*C], R*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
-      cudaMemcpy(b, paramsM0_.get_ptr_B(), 2*R*2*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
-
-      for (int c = 0; c < C; c++) {
-        bool to_break = false;
-        float accum = 0;
-        for (int r = 0; r < R; r++) {
-          auto b0 = b[r*2*C+c];
-          auto b1 = b[r*2*C+C+c];
-          auto b2 = b[(R+r)*2*C+c];
-          auto b3 = b[(R+r)*2*C+C+c];
-
-          auto b31 = b3-b1;
-          auto b10 = b1-b0;
-          auto s3 = b31+b0;
-          accum += float(h_presum_b[r*C+c]);
-          if (s3 != h_presum_b[r*C+c]) {
-            printf("910 %d, %d : %f %f : = %f %f %f %f\n", r,c, float(s3), float(h_presum_b[r*C+c]), float(b0), float(b1), float(b2), float(b3));
-            to_break = true;
-            break;
-          }
-        }
-        printf("916 %f\n", accum);
-        break;
-        if (to_break) break;
-      }
-      #endif
-      // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k()/2,1024>>>(paramsM0_.get_problem_shape_k(), paramsM0_.get_problem_shape_n(), paramsM0_.ptr_A, paramsM0_.presum_m_b_workspace);
-      cudaDeviceSynchronize();
-      exit(EXIT_SUCCESS);
-    }
-// postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
     if ((!only_m or valid_ms[1] == 1) && ParallelGroup1::HasAKernel()) {
       result = run_parallel<ParallelGroup1>(paramsM0_, paramsM1_, paramsM2_, paramsM3_, paramsM4_, paramsM5_, paramsM6_,
                                             streams[(stream_idx++)%num_streams], cuda_adapter, launch_with_pdl);
@@ -1226,6 +1453,49 @@ public:
       }
       // cudaStreamSynchronize(streams[(stream_idx-1)%num_streams]);
     }
+
+    if (false) {
+      cudaDeviceSynchronize();
+      #if 0
+      uint R = 8*1024/2, C = 8*1024/2;
+      ElementB* h_presum_b = new ElementB[R*C];
+      ElementB* b = new ElementB[2*R*2*C];
+      auto errr = cudaMemcpy(h_presum_b, &paramsM0_.presum_m_b_workspace[2*R*C], R*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
+      if (errr != cudaSuccess) printf("1248 %s\n", cudaGetErrorString(errr));
+      // errr = cudaMemcpy(b, paramsM0_.get_ptr_B(0), 2*R*2*C*sizeof(ElementB), cudaMemcpyDeviceToHost);
+      // if (errr != cudaSuccess) printf("1250 %s\n", cudaGetErrorString(errr));
+
+      for (int c = 0; c < C; c++) {
+        bool to_break = false;
+        float accum = 0;
+        for (int r = 0; r < R; r++) {
+          // auto b0 = b[r*2*C+c];
+          // auto b1 = b[r*2*C+C+c];
+          // auto b2 = b[(R+r)*2*C+c];
+          // auto b3 = b[(R+r)*2*C+C+c];
+
+          // auto b31 = b3-b1;
+          // auto b10 = b1-b0;
+          // auto s3 = b31+b0;
+          accum += float(h_presum_b[r*C+c]);
+          // if (s3 != h_presum_b[r*C+c]) {
+          //   printf("910 %d, %d : %f %f : = %f %f %f %f\n", r,c, float(s3), float(h_presum_b[r*C+c]), float(b0), float(b1), float(b2), float(b3));
+          //   to_break = true;
+          //   break;
+          // }
+        }
+        printf("916 %f\n", accum);
+        break;
+        if (to_break) break;
+      }
+      #endif
+      // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k(0)/2,1024>>>(paramsM0_.get_problem_shape_k(0), paramsM0_.get_problem_shape_n(0), paramsM0_.presum_m_b_workspace);
+      presumcheck<ElementA><<<8192/2,1024>>>(256, 8192, paramsM0_.presum_m_a_workspace);
+      // postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
+      cudaDeviceSynchronize();
+      exit(EXIT_SUCCESS);
+    }
+
     if ((!only_m or valid_ms[4] == 1) && ParallelGroup4::HasAKernel()) {
       result = run_parallel<ParallelGroup4>(paramsM0_, paramsM1_, paramsM2_, paramsM3_, paramsM4_, paramsM5_, paramsM6_,
                                             streams[(stream_idx++)%num_streams], cuda_adapter, launch_with_pdl);
@@ -1317,9 +1587,8 @@ public:
 ////////////////////////////// CUTLASS 2.x API /////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
-template <typename ScheduleStrassenGroups, class StrassenGemmKernels>
+template <class StrassenGemmKernels>
 class StrassenGemmUniversalAdapter<
-  ScheduleStrassenGroups,
   StrassenGemmKernels,
   cute::enable_if_t<not gemm::detail::IsCutlass3GemmKernel<GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernel0>>::value>>
 {

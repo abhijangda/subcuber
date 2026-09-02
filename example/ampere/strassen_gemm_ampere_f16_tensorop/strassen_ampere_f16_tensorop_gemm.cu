@@ -255,7 +255,7 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
                                                              AllPresumsKernel>,
                                               StrassenLevel1MiGroup<kStrassenLevel, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                     AllPresumsM0, 1, 0, 1>,
                                               StrassenLevel1M2Group<kStrassenLevel, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
@@ -298,7 +298,7 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
                                                                     AllPresumsM0>,
                                               StrassenLevel1M1Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<1, MemShared, LayoutInterim1D>> >>,//C0 = M1
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M2Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
@@ -337,7 +337,7 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
                                                              AllPresumsKernel>,
                                               StrassenLevel1MiGroup<kStrassenLevel, 0, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
                                                                     RWMTypes<>,
-                                                                    RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                    RWCTypes<//CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                              CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                     AllPresumsM0, 1, 0, 1>,
                                               StrassenLevel1M2Group<kStrassenLevel, ShapeMMAThreadBlock, ShapeMMAWarp, 3,
@@ -364,11 +364,11 @@ using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvail
                                                                     AllPresumsM1To6>
                                               >;
   using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<true, FusedMiGroup<7, 0>>,
-                                                         ParallelMiGroups<true, FusedMiGroup<7, 1, 2, 5>,
-                                                                                FusedMiGroup<7, 3>,
-                                                                                FusedMiGroup<7, 4>>
-                                                        //  ParallelMiGroups<FusedMiGroup<7, 2>>,
-                                                        //  ParallelMiGroups<FusedMiGroup<7, 4>>,
+                                                         ParallelMiGroups<true, FusedMiGroup<7, 1, 2, 5>>,
+                                                                                // FusedMiGroup<7, 3>,
+                                                                                // FusedMiGroup<7, 4>>
+                                                         ParallelMiGroups<FusedMiGroup<7, 3>>,
+                                                         ParallelMiGroups<FusedMiGroup<7, 4>>
                                                         //  ParallelMiGroups<FusedMiGroup<7, 5>>
                                                          >;
 #endif
@@ -566,10 +566,12 @@ int run(Options &options) {
         float abs_err = std::fabs(computed - reference);
         float relative_error = std::fabs(computed - reference) /
           std::fmax(std::fabs(reference), 1e-6f);
-        
+        int row = i/problem_size.n();
+        int col = i%problem_size.n();
+
         //Reference gemm and this gemm might have different accumulator types
         if (!(computed == reference or abs_err <= 6 or relative_error <= 1e-2)) {
-          printf("389: %d, %d %f, %f (rel err=%f)\n", i/problem_size.n(),i%problem_size.n(), computed, reference, relative_error);
+          printf("389: %d, %d %f, %f (rel err=%f)\n", row, col, computed, reference, relative_error);
           passed = false;
           break;
         }

@@ -24,6 +24,13 @@
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cuda/kernel_runner_support.cuh"
 
+#if !defined(STRASSEN_ENABLE_VOLTA) && !defined(STRASSEN_ENABLE_AMPERE) && \
+  !defined(STRASSEN_ENABLE_HOPPER)
+#define STRASSEN_ENABLE_VOLTA
+#define STRASSEN_ENABLE_AMPERE
+#define STRASSEN_ENABLE_HOPPER
+#endif
+
 using KernelRunFn = int (*)(KernelRunnerBuffers, int, int, int, int, int,
                             cudaStream_t *, int, int, float *);
 
@@ -34,11 +41,17 @@ using KernelRunFn = int (*)(KernelRunnerBuffers, int, int, int, int, int,
 DECLARE_KERNEL_RUN_FN(run_cublas_f32);
 DECLARE_KERNEL_RUN_FN(run_cublas_f16);
 DECLARE_KERNEL_RUN_FN(run_cublas_f64);
+DECLARE_KERNEL_RUN_FN(run_cublas_grouped_moe_f16);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f32);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f16);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f64);
 
+#if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
+extern "C" int fill_hopper_f16_runner_operand(void *ptr, size_t capacity, uint64_t seed);
+#endif
+
 #ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+#ifdef STRASSEN_ENABLE_AMPERE
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_tile);
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_tile_128x128);
 DECLARE_KERNEL_RUN_FN(run_ampere_f32_sw_interleaved_presum);
@@ -61,6 +74,8 @@ DECLARE_KERNEL_RUN_FN(run_ampere_f16_sw_interleaved_presum_max_fusion);
 DECLARE_KERNEL_RUN_FN(run_ampere_f16_sw_interleaved_presum_low_fusion);
 DECLARE_KERNEL_RUN_FN(run_ampere_f16_sw_interleaved_presum_level_2);
 DECLARE_KERNEL_RUN_FN(run_ampere_f16_sw_kernel_presum);
+#endif
+#ifdef STRASSEN_ENABLE_HOPPER
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_tile);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_interleaved_presum);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_interleaved_presum_level_2);
@@ -73,6 +88,16 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_kernel_presum);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_sw_fused_presum);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_cutlass_128x128_pingpong);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_cutlass_128x256_cooperative);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_grouped_cutlass_128x128_pingpong);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_grouped_cutlass_128x256_cooperative);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_2x256);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_2x128);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_4x128);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128);
 DECLARE_KERNEL_RUN_FN(run_hopper_f64_cutlass_128x64);
 DECLARE_KERNEL_RUN_FN(run_hopper_f64_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_hopper_f32_cutlass_128x128);
@@ -89,6 +114,14 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_max_fusio
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_0000);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_0000);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256_2x256_opt_no);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256_2x256_opt_0000);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_4x256_4x256_opt_no);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_0000);
+DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no);
+#endif
+#ifdef STRASSEN_ENABLE_VOLTA
 DECLARE_KERNEL_RUN_FN(run_volta_f32_cutlass_128x128);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_cutlass_256x128);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_tile);
@@ -96,6 +129,7 @@ DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_interleaved_presum);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_interleaved_presum_level_2);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_kernel_presum);
 DECLARE_KERNEL_RUN_FN(run_volta_f32_sw_fused_presum);
+#endif
 #endif
 
 #undef DECLARE_KERNEL_RUN_FN
@@ -106,39 +140,64 @@ struct KernelEntry {
   const char *dtype;
   int strassen_level;
   KernelRunFn run;
+  bool grouped_moe = false;
 };
 
 static const KernelEntry kKernels[] = {
+#ifdef STRASSEN_ENABLE_VOLTA
     {"cublas_f32", "volta", "f32", 0, run_cublas_f32},
     {"cublas_f16", "volta", "f16", 0, run_cublas_f16},
     {"cublas_f64", "volta", "f64", 0, run_cublas_f64},
+    {"cublas_grouped_moe_f16", "volta", "f16", 0, run_cublas_grouped_moe_f16, true},
   {"cublaslt_f32", "volta", "f32", 0, run_cublaslt_f32},
   {"cublaslt_f16", "volta", "f16", 0, run_cublaslt_f16},
   {"cublaslt_f64", "volta", "f64", 0, run_cublaslt_f64},
+#endif
+#ifdef STRASSEN_ENABLE_AMPERE
     {"cublas_f32", "ampere", "f32", 0, run_cublas_f32},
     {"cublas_f16", "ampere", "f16", 0, run_cublas_f16},
     {"cublas_f64", "ampere", "f64", 0, run_cublas_f64},
+    {"cublas_grouped_moe_f16", "ampere", "f16", 0, run_cublas_grouped_moe_f16, true},
   {"cublaslt_f32", "ampere", "f32", 0, run_cublaslt_f32},
   {"cublaslt_f16", "ampere", "f16", 0, run_cublaslt_f16},
   {"cublaslt_f64", "ampere", "f64", 0, run_cublaslt_f64},
+#endif
+#ifdef STRASSEN_ENABLE_HOPPER
   {"cublas_f32", "hopper", "f32", 0, run_cublas_f32},
   {"cublas_f16", "hopper", "f16", 0, run_cublas_f16},
   {"cublas_f64", "hopper", "f64", 0, run_cublas_f64},
+  {"cublas_grouped_moe_f16", "hopper", "f16", 0, run_cublas_grouped_moe_f16, true},
   {"cublaslt_f32", "hopper", "f32", 0, run_cublaslt_f32},
   {"cublaslt_f16", "hopper", "f16", 0, run_cublaslt_f16},
   {"cublaslt_f64", "hopper", "f64", 0, run_cublaslt_f64},
+#endif
 #ifndef STRASSEN_DISABLE_CUDA_DECLARATIONS
+#ifdef STRASSEN_ENABLE_AMPERE
     {"ampere_f16_cutlass_128x256", "ampere", "f16", 0, run_ampere_f16_cutlass_128x256},
   {"ampere_f64_cutlass_64x64", "ampere", "f64", 0, run_ampere_f64_cutlass_64x64},
   {"ampere_f64_cutlass_128x128", "ampere", "f64", 0, run_ampere_f64_cutlass_128x128},
     {"ampere_f32_cutlass_128x128", "ampere", "f32", 0, run_ampere_f32_cutlass_128x128},
     {"ampere_f32_cutlass_256x128", "ampere", "f32", 0, run_ampere_f32_cutlass_256x128},
+  #endif
+  #ifdef STRASSEN_ENABLE_HOPPER
     {"hopper_f16_cutlass_128x128_pingpong", "hopper", "f16", 0, run_hopper_f16_cutlass_128x128_pingpong},
     {"hopper_f16_cutlass_128x256_cooperative", "hopper", "f16", 0, run_hopper_f16_cutlass_128x256_cooperative},
+    {"hopper_f16_grouped_cutlass_128x128_pingpong", "hopper", "f16", 0, run_hopper_f16_grouped_cutlass_128x128_pingpong, true},
+    {"hopper_f16_grouped_cutlass_128x256_cooperative", "hopper", "f16", 0, run_hopper_f16_grouped_cutlass_128x256_cooperative, true},
+    {"hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256, true},
+    {"hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256, true},
+    {"hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_2x256", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_2x256, true},
+    {"hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256, true},
+    {"hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_2x128", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_2x128, true},
+    {"hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_4x128", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_4x128, true},
+    {"hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128, true},
+    {"hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128", "hopper", "f16", 1, run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128, true},
     {"hopper_f64_cutlass_128x64", "hopper", "f64", 0, run_hopper_f64_cutlass_128x64},
     {"hopper_f64_cutlass_128x128", "hopper", "f64", 0, run_hopper_f64_cutlass_128x128},
     {"hopper_f32_cutlass_128x128", "hopper", "f32", 0, run_hopper_f32_cutlass_128x128},
     {"hopper_f32_cutlass_256x128", "hopper", "f32", 0, run_hopper_f32_cutlass_256x128},
+  #endif
+  #ifdef STRASSEN_ENABLE_AMPERE
     {"ampere_f32_tile_64x128", "ampere", "f32", 1, run_ampere_f32_sw_tile},
     {"ampere_f32_tile_128x128", "ampere", "f32", 1, run_ampere_f32_sw_tile_128x128},
     {"ampere_f32_sw_interleaved_presum_256x128", "ampere", "f32", 1, run_ampere_f32_sw_interleaved_presum},
@@ -156,6 +215,8 @@ static const KernelEntry kKernels[] = {
     {"ampere_f16_sw_interleaved_presum_low_fusion", "ampere", "f16", 1, run_ampere_f16_sw_interleaved_presum_low_fusion},
     {"ampere_f16_sw_interleaved_presum_level_2", "ampere", "f16", 2, run_ampere_f16_sw_interleaved_presum_level_2},
     {"ampere_f16_sw_kernel_presum", "ampere", "f16", 1, run_ampere_f16_sw_kernel_presum},
+  #endif
+  #ifdef STRASSEN_ENABLE_HOPPER
     {"hopper_f32_sw_interleaved_presum", "hopper", "f32", 1, run_hopper_f32_sw_interleaved_presum},
     {"hopper_f32_sw_interleaved_presum_level_2", "hopper", "f32", 2, run_hopper_f32_sw_interleaved_presum_level_2},
     {"hopper_f64_sw_interleaved_presum_128x64", "hopper", "f64", 1, run_hopper_f64_sw_interleaved_presum_128x64},
@@ -170,14 +231,22 @@ static const KernelEntry kKernels[] = {
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_2x128_2x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_2x128_2x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_4x128_4x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_4x128_4x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_8x128_8x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_8x128_8x128_opt_no},
-    {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_0000},
+    {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_2x128_2x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128_4x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_4x128_4x128_opt_no},
     {"hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_8x128_8x128_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_8x128_8x128_opt_no},
-    {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_no},
     {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_0000},
-    {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no},
+    {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_2x256_2x256_opt_no},
     {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_0000},
+    {"hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_2x256_2x256_opt_no},
+    {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256_2x256_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256_2x256_opt_0000},
+    {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_2x256_2x256_opt_no},
+    {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_4x256_4x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_4x256_4x256_opt_no},
+    {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_0000", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_0000},
+    {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no},
+    {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no},
+  #endif
+  #ifdef STRASSEN_ENABLE_VOLTA
     {"volta_f32_cutlass_128x128", "volta", "f32", 0, run_volta_f32_cutlass_128x128},
     {"volta_f32_cutlass_256x128", "volta", "f32", 0, run_volta_f32_cutlass_256x128},
     {"volta_f32_sw_tile", "volta", "f32", 1, run_volta_f32_sw_tile},
@@ -185,7 +254,8 @@ static const KernelEntry kKernels[] = {
     // {"volta_f32_sw_interleaved_presum_level_2", "volta", "f32", 2, run_volta_f32_sw_interleaved_presum_level_2},
     {"volta_f32_sw_kernel_presum", "volta", "f32", 1, run_volta_f32_sw_kernel_presum},
     {"volta_f32_sw_fused_presum", "volta", "f32", 1, run_volta_f32_sw_fused_presum},
-  #endif
+#endif
+#endif
 };
 
 static std::string lower(std::string value) {
@@ -246,7 +316,7 @@ static bool get_required_string_arg(int argc, char **argv, const char *name, std
 }
 
 static void usage(char const *program) {
-  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--kernel_regex=REGEX]\n";
+  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX]\n";
 }
 
 static bool tunes_split_k(KernelEntry const &kernel) {
@@ -266,24 +336,57 @@ template <typename Element>
 int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int k,
                   std::string const &dtype, std::string const &arch,
                   std::string const &strassen_level_label,
-                  int iterations, int warmup, int num_streams) {
+                  int iterations, int warmup, int num_streams, int expert_count) {
+  bool has_grouped_moe = std::any_of(
+      candidates.begin(), candidates.end(),
+      [](KernelEntry const &kernel) { return kernel.grouped_moe; });
+  if (has_grouped_moe && m > std::numeric_limits<int>::max() / expert_count) {
+    return 1;
+  }
+
+  int input_rows = has_grouped_moe ? m * expert_count : m;
   cutlass::gemm::GemmCoord problem_size(m, n, k);
-  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_a(problem_size.mk());
+  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_a({input_rows, k});
   cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_b(problem_size.kn());
-  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_c(problem_size.mn());
-  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_d(problem_size.mn());
+  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_c({input_rows, n});
+  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_d({input_rows, n});
 
   int range_end = std::is_same<Element, cutlass::half_t>::value ? 4 : 16;
   int range_start = std::is_same<Element, cutlass::half_t>::value ? -4 : -16;
-  cutlass::reference::host::TensorFillRandomUniform(
+    if constexpr (std::is_same<Element, cutlass::half_t>::value) {
+#if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
+      if (arch == "hopper") {
+        int fill_status = fill_hopper_f16_runner_operand(
+            tensor_a.device_data(), tensor_a.capacity(), 2023);
+        if (fill_status == 0) {
+          fill_status = fill_hopper_f16_runner_operand(
+              tensor_b.device_data(), tensor_b.capacity(), 2022);
+        }
+        if (fill_status != 0) {
+          return fill_status;
+        }
+      } else {
+  #endif
+        cutlass::reference::host::TensorFillRandomUniform(
+            tensor_a.host_view(), 1, Element(range_end), Element(range_start), 2);
+        cutlass::reference::host::TensorFillRandomUniform(
+            tensor_b.host_view(), 1, Element(range_end), Element(range_start), 2);
+        tensor_a.sync_device();
+        tensor_b.sync_device();
+  #if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
+      }
+  #endif
+    } else {
+    cutlass::reference::host::TensorFillRandomUniform(
       tensor_a.host_view(), 1, Element(range_end), Element(range_start), 2);
-  cutlass::reference::host::TensorFillRandomUniform(
+    cutlass::reference::host::TensorFillRandomUniform(
       tensor_b.host_view(), 1, Element(range_end), Element(range_start), 2);
+    tensor_a.sync_device();
+    tensor_b.sync_device();
+    }
   cutlass::reference::host::TensorFill(tensor_c.host_view());
   cutlass::reference::host::TensorFill(tensor_d.host_view());
 
-  tensor_a.sync_device();
-  tensor_b.sync_device();
   tensor_c.sync_device();
   tensor_d.sync_device();
 
@@ -301,13 +404,14 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
   float best_ms = std::numeric_limits<float>::infinity();
   double best_gflops = 0.0;
   int runnable = 0;
+  bool best_is_grouped_moe = false;
 
   std::cout << "Running " << candidates.size() << " candidate kernels for m=" << m
             << " n=" << n << " k=" << k << " dtype=" << dtype
             << " gpu_arch=" << arch << " strassen_level=" << strassen_level_label
-            << " streams=" << num_streams << "\n";
+            << " streams=" << num_streams << " experts=" << expert_count << "\n";
   std::cout << std::left << std::setw(52) << "kernel" << std::right
-            << std::setw(10) << "split_k" << std::setw(14) << "avg_ms"
+            << std::setw(10) << "split/group" << std::setw(14) << "avg_ms"
             << std::setw(16) << "gflops" << "\n";
 
   for (KernelEntry const &kernel : candidates) {
@@ -325,23 +429,29 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
 
       float avg_ms = 0.0f;
       int rc = kernel.run(buffers, m, n, k, warmup, iterations, runner_streams,
-              num_streams, split_k, &avg_ms);
+              num_streams, kernel.grouped_moe ? expert_count : split_k, &avg_ms);
       last_rc = rc;
-      std::this_thread::sleep_for(std::chrono::seconds((dtype != "f32") ? 10 : 5));
+      bool has_more_benchmarks = split_k < last_split_k || &kernel != &candidates.back();
+      if (has_more_benchmarks) {
+        std::this_thread::sleep_for(std::chrono::seconds((dtype != "f32") ? 10 : 5));
+      }
       if (rc != 0 || !std::isfinite(avg_ms)) {
         if (!tune_split_k) {
           std::cout << std::left << std::setw(52) << kernel.name << std::right
-                    << std::setw(10) << split_k << std::setw(14) << "skipped"
+                    << std::setw(10) << (kernel.grouped_moe ? expert_count : split_k)
+                    << std::setw(14) << "skipped"
                     << std::setw(16) << rc << "\n";
         }
         continue;
       }
 
-      double gflops = (2.0 * double(m) * double(n) * double(k)) / (double(avg_ms) * 1.0e6);
+      double operation_count = kernel.grouped_moe ? double(expert_count) : 1.0;
+      double gflops = (operation_count * 2.0 * double(m) * double(n) * double(k)) /
+              (double(avg_ms) * 1.0e6);
       if (!tune_split_k) {
         ++runnable;
         std::cout << std::left << std::setw(52) << kernel.name << std::right
-                  << std::setw(10) << split_k
+                  << std::setw(10) << (kernel.grouped_moe ? expert_count : split_k)
                   << std::setw(14) << std::fixed << std::setprecision(4) << avg_ms
                   << std::setw(16) << std::fixed << std::setprecision(2) << gflops << "\n";
       }
@@ -373,6 +483,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
       best_split_k = kernel_best_split_k;
       best_gflops = kernel_best_gflops;
       best_name = kernel.name;
+      best_is_grouped_moe = kernel.grouped_moe;
     }
   }
 
@@ -382,7 +493,9 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
     return 2;
   }
 
-  std::cout << "Best kernel: " << best_name << " split_k=" << best_split_k
+  std::cout << "Best kernel: " << best_name
+            << (best_is_grouped_moe ? " experts=" : " split_k=")
+            << (best_is_grouped_moe ? expert_count : best_split_k)
             << " avg_ms=" << std::fixed << std::setprecision(4)
             << best_ms << " gflops=" << std::fixed << std::setprecision(2) << best_gflops << "\n";
   kernel_runner_destroy_streams(runner_streams, num_streams);
@@ -403,6 +516,7 @@ int main(int argc, char **argv) {
   int iterations = 0;
   int warmup = 0;
   int streams = 0;
+  int expert_count = 1;
   std::string dtype_arg;
   std::string arch_arg;
   std::string strassen_level_arg;
@@ -421,6 +535,18 @@ int main(int argc, char **argv) {
   valid_args = get_required_string_arg(argc, argv, "dtype", dtype_arg) && valid_args;
   valid_args = get_required_string_arg(argc, argv, "gpu_arch", arch_arg) && valid_args;
   bool has_kernel_regex = parse_arg(argc, argv, "kernel_regex", kernel_regex_arg);
+  std::string expert_count_arg;
+  bool has_expert_count = parse_arg(argc, argv, "experts", expert_count_arg) ||
+                          parse_arg(argc, argv, "groups", expert_count_arg);
+  if (has_expert_count) {
+    try {
+      size_t parsed_chars = 0;
+      expert_count = std::stoi(expert_count_arg, &parsed_chars);
+      valid_args = parsed_chars == expert_count_arg.size() && valid_args;
+    } catch (std::exception const &) {
+      valid_args = false;
+    }
+  }
 
   std::string dtype = normalize_dtype(dtype_arg);
   std::string arch = normalize_arch(arch_arg);
@@ -448,7 +574,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (!valid_args || m <= 0 || n <= 0 || k <= 0 || iterations <= 0 || warmup < 0 ||
+  if (!valid_args || m <= 0 || n <= 0 || k <= 0 || expert_count <= 0 ||
+      iterations <= 0 || warmup < 0 ||
       streams <= 0 || streams > max_streams || (dtype != "f32" && dtype != "f16" && dtype != "f64") ||
       (arch != "volta" && arch != "ampere" && arch != "hopper") ||
       (!all_strassen_levels && strassen_level != 0 && strassen_level != 1 && strassen_level != 2)) {
@@ -460,6 +587,8 @@ int main(int argc, char **argv) {
   for (KernelEntry const &kernel : kKernels) {
     if (kernel.dtype == dtype && kernel.arch == arch &&
         (all_strassen_levels || kernel.strassen_level == strassen_level) &&
+        (!kernel.grouped_moe || has_expert_count) &&
+        (!has_expert_count || expert_count == 1 || kernel.grouped_moe) &&
         (!has_kernel_regex || std::regex_search(kernel.name, kernel_regex))) {
       candidates.push_back(kernel);
     }
@@ -477,12 +606,12 @@ int main(int argc, char **argv) {
 
   if (dtype == "f32") {
     return run_benchmark<float>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                iterations, warmup, streams);
+                                iterations, warmup, streams, expert_count);
   }
   if (dtype == "f64") {
     return run_benchmark<double>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                 iterations, warmup, streams);
+                                 iterations, warmup, streams, expert_count);
   }
   return run_benchmark<cutlass::half_t>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                        iterations, warmup, streams);
+                                        iterations, warmup, streams, expert_count);
 }

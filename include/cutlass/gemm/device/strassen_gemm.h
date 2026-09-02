@@ -662,12 +662,22 @@ public:
           return Status::kErrorWorkspaceNull;
         }
 
-        size_t bytes = get_workspace_size(args) - get_presum_a_workspace_size(args) - get_presum_b_workspace_size(args) -
-                       get_postsum_m_workspace_size(args);
-        cudaError_t result = cudaMemsetAsync(postsum_semaphore, 0, bytes, stream);
+        cudaError_t result = cudaMemsetAsync(
+          postsum_semaphore, 0xff, get_postsum_semaphore_size(args), stream);
 
         if (result != cudaSuccess) {
           return Status::kErrorInternal;
+        }
+
+        if (kSplitKSerial && args.split_k_slices > 1) {
+          size_t bytes = get_workspace_size(args) - get_presum_a_workspace_size(args) -
+                         get_presum_b_workspace_size(args) - get_postsum_m_workspace_size(args) -
+                         get_postsum_semaphore_size(args);
+          result = cudaMemsetAsync(sem_workspace, 0, bytes, stream);
+
+          if (result != cudaSuccess) {
+            return Status::kErrorInternal;
+          }
         }
       }
     }
@@ -1058,7 +1068,7 @@ public:
                      (uint)paramsM0_.grid_tiled_shape.m(),
                      1};
         KernelPresumGlobalCompute<typename StrassenMiGroup::PresumGroup, GemmKernelM0, GemmKernelM0::kThreadCount>
-          <<<grid, GemmKernelM0::kThreadCount, 0, streams2[0]>>>(paramsM0_);
+          <<<grid, GemmKernelM0::kThreadCount, 0, streams2[0]>>>(paramsM0_, 0);
         result = cudaStreamSynchronize(streams2[0]);
         if (result != cudaSuccess)
         {printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(result)); return Status::kErrorInternal;}

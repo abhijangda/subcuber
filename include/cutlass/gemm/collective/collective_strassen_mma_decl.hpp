@@ -63,7 +63,10 @@ template <
   class PresumGmemTiledCopyB,
   class PresumSmemLayoutAtomB,
   class PresumSmemCopyAtomB,
-  class PresumOpt
+  class PresumOpt,
+  class ProblemShape = void,
+  class SubMatLayoutA = void,
+  class SubMatLayoutB = void
 >
 struct CollectiveStrassenMma {
   static_assert(cutlass::detail::dependent_false<ElementA>, "Could not find a mainloop specialization.");

@@ -18,7 +18,7 @@ COMPILER = /usr/local/cuda/bin/nvcc
 CXXFLAGS = $(NVCC_FLAGS)
 
 # Targets
-all: hopper_f16_tensorop_gemm_pingpong hopper_f16_tensorop_gemm_cooperative
+all: hopper_f16_tensorop_gemm_pingpong hopper_f16_tensorop_gemm_cooperative hopper_grouped_gemm_pingpong hopper_grouped_gemm_cooperative
 
 hopper_f16_tensorop_gemm_pingpong: hopper_f16_tensorop_gemm.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DPINGPONG
@@ -26,6 +26,13 @@ hopper_f16_tensorop_gemm_pingpong: hopper_f16_tensorop_gemm.cu
 hopper_f16_tensorop_gemm_cooperative: hopper_f16_tensorop_gemm.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DCOOPERATIVE
 
+
+hopper_grouped_gemm_pingpong: hopper_grouped_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DPINGPONG
+
+hopper_grouped_gemm_cooperative: hopper_grouped_gemm.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DCOOPERATIVE
+
 # Clean up generated files
 clean: 
-	rm -f hopper_f16_tensorop_gemm
+	rm -f hopper_f16_tensorop_gemm_pingpong hopper_f16_tensorop_gemm_cooperative hopper_grouped_gemm_pingpong hopper_grouped_gemm_cooperative

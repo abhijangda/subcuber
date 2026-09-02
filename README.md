@@ -37,10 +37,10 @@ Build `kernel_runner`
 From the repository root, run:
 
 ```bash
-make
+make -j
 ```
 
-This builds all registered runner objects and writes outputs under root-level `build/`:
+This builds all registered kernels into the default runner and writes outputs under root-level `build/`:
 
 ```text
 build/
@@ -48,14 +48,21 @@ build/
 `-- obj/kernel_runner/
 ```
 
+Architecture-specific runners are built only when their target is explicitly requested. They use separate object directories under `build/obj/kernel_runner_<architecture>/`.
+
 Useful build variants:
 
 ```bash
 # Build the default kernel runner
-make all
+make -j all
+
+# Build only the kernels registered for one architecture
+make -j kernel_runner_volta
+make -j kernel_runner_ampere
+make -j kernel_runner_hopper
 
 # Build the runner without CUDA declarations enabled in the runner objects
-make no_cuda_declarations
+make -j no_cuda_declarations
 
 # Remove root-level kernel_runner build artifacts
 make clean
@@ -103,6 +110,25 @@ Optional filtering:
 	--iterations=10 --warmup=2 --streams=7 \
 	--kernel_regex='presum'
 ```
+
+The fp16 MoE grouped GEMM treats `m` as the number of routed token rows per
+expert, `k` as the input hidden size, and `n` as the output hidden size. Each
+expert uses a separate `k` by `n` weight matrix, so the total number of token
+rows is `m * experts`. Because all experts have the same shape, the runner uses
+one fp16 `cublasGemmStridedBatchedEx` call. Run it at Strassen level 0:
+
+```bash
+./build/kernel_runner \
+	--m=4096 --n=4096 --k=4096 \
+	--dtype=f16 --gpu_arch=hopper --strassen_level=0 \
+	--iterations=10 --warmup=2 --streams=1 \
+	--experts=8 --kernel_regex='cublas_grouped_moe'
+```
+
+`--groups=N` is accepted as an alias for `--experts=N`.
+When an explicit expert count is greater than one, the runner benchmarks only
+grouped or batched MoE kernels. With one expert, it also benchmarks regular GEMM
+kernels for comparison.
 
 For the full usage line:
 

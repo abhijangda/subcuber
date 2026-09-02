@@ -1,5 +1,13 @@
 #include "cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion.cuh"
 #include "cuda/kernel_runner_support.cuh"
+#include "cutlass/util/reference/device/tensor_fill.h"
+
+extern "C" int fill_hopper_f16_runner_operand(void *ptr, size_t capacity, uint64_t seed) {
+  cutlass::reference::device::BlockFillRandomUniform(
+      static_cast<cutlass::half_t *>(ptr), capacity, seed,
+      cutlass::half_t(4), cutlass::half_t(-4), 0);
+  return static_cast<int>(cudaGetLastError());
+}
 
 cutlass::Status HopperF16InterleavedPresumPingpongMaxFusion_2x128_2x128_OptNo::can_implement(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
   return StrassenGemmKernel::can_implement(args);

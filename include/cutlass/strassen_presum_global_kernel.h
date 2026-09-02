@@ -18,7 +18,7 @@ void print_kernel(typename GemmKernel0::Params params) {
 template <typename PresumGroup, typename GemmKernel0, uint kThreadCount>
 CUTLASS_GLOBAL
 __launch_bounds__(kThreadCount, 1)
-void KernelPresumGlobalCompute(typename GemmKernel0::Params params) {
+void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_idx) {
   using ElementA = typename GemmKernel0::ElementA;
   using ElementB = typename GemmKernel0::ElementB;
 
@@ -27,6 +27,7 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params) {
   using PresumComputeType = typename GemmKernel0::Mma::PresumComputeType;
   using PresumComputeToIOType = NumericArrayConverter<ElementA, PresumComputeType, PresumVecType::kElements>;
   using PresumIOToComputeType = NumericArrayConverter<PresumComputeType, ElementA, PresumVecType::kElements>;
+  const bool IsStrassenLayout = GemmKernel0::Mma::IsStrassenLayout;
 
   using PresumShapeA = typename GemmKernel0::Mma::PresumShapeA;
   using PresumShapeB = typename GemmKernel0::Mma::PresumShapeB;
@@ -36,38 +37,50 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params) {
 
   cutlass::gemm::GemmCoord threadblock_tile_offset = {(int)blockIdx.y, (int)blockIdx.x, 0};
 
-  const int halfM = params.get_problem_shape_m()/2;
-  const int halfN = params.get_problem_shape_n()/2;
-  const int halfK = params.get_problem_shape_k()/2;
+  const int M = params.get_problem_shape_m(problem_idx);
+  const int N = params.get_problem_shape_n(problem_idx);
+  const int K = params.get_problem_shape_k(problem_idx);
+
+  const int halfM = M/2;
+  const int halfN = N/2;
+  const int halfK = K/2;
   
   int block_idx = threadblock_tile_offset.m() + threadblock_tile_offset.n() * gridDim.x;
   uint thread_idx = threadIdx.x;
   const int presum_multiplier_a = 1 << params.get_presum_log_tile_multiplier_a();
   const int presum_multiplier_b = 1 << params.get_presum_log_tile_multiplier_b();
 
+  auto a1_coord = IsStrassenLayout ? MatrixCoord(1*halfM, 0) : MatrixCoord(0, halfK);
+  auto a2_coord = IsStrassenLayout ? MatrixCoord(2*halfM, 0) : MatrixCoord(halfM, 0);
+  auto a3_coord = IsStrassenLayout ? MatrixCoord(3*halfM, 0) : MatrixCoord(halfM, halfK);
+
   PresumGlobalIteratorA iter_PresumA(
-    params.get_ptr_A(), params.get_stride_A(),
-    {params.get_problem_shape_m(), params.get_problem_shape_k()},
+    params.get_ptr_A(problem_idx), params.get_stride_A(problem_idx) / (IsStrassenLayout ? 2 : 1),
+    {M, K},
     {threadblock_tile_offset.m() * PresumShapeA::kM, threadblock_tile_offset.n() * PresumShapeA::kN * presum_multiplier_a},
-    block_idx, {0, 0}, thread_idx, {0, halfK}, {halfM, 0}, {halfM, halfK}
+    block_idx, {0, 0}, thread_idx, a1_coord, a2_coord, a3_coord
   );
 
+  auto b1_coord = IsStrassenLayout ? MatrixCoord(1*halfK, 0) : MatrixCoord(0, halfN);
+  auto b2_coord = IsStrassenLayout ? MatrixCoord(2*halfK, 0) : MatrixCoord(halfK, 0);
+  auto b3_coord = IsStrassenLayout ? MatrixCoord(3*halfK, 0) : MatrixCoord(halfK, halfN);
+
   PresumGlobalIteratorB iter_PresumB(
-    params.get_ptr_B(), params.get_stride_B(),
-    {params.get_problem_shape_k(), params.get_problem_shape_n()},
+    params.get_ptr_B(problem_idx), params.get_stride_B(problem_idx) / (IsStrassenLayout ? 2 : 1),
+    {K, N},
     {threadblock_tile_offset.m() * PresumShapeB::kM * presum_multiplier_b, threadblock_tile_offset.n() * PresumShapeB::kN},
-    block_idx, {0, 0}, thread_idx, {0, halfN}, {halfK, 0}, {halfK, halfN}
+    block_idx, {0, 0}, thread_idx, b1_coord, b2_coord, b3_coord
   );
 
   PresumGlobalIteratorA iter_PresumA_M(
-    params.presum_m_a_workspace, params.get_stride_MA(),
+    params.get_ptr_presum_A(problem_idx), params.get_stride_MA(problem_idx),
     {halfM, halfK},
     {threadblock_tile_offset.m() * PresumShapeA::kM, threadblock_tile_offset.n() * PresumShapeA::kN * presum_multiplier_a},
     block_idx, {0, 0}, thread_idx, {1*halfM, 0}, {2*halfM, 0}, {3*halfM, 0}
   );
 
   PresumGlobalIteratorB iter_PresumB_M(
-    params.presum_m_b_workspace, params.get_stride_MB(),
+    params.get_ptr_presum_B(problem_idx), params.get_stride_MB(problem_idx),
     {halfK, halfN},
     {threadblock_tile_offset.m() * PresumShapeB::kM * presum_multiplier_b, threadblock_tile_offset.n() * PresumShapeB::kN},
     block_idx, {0, 0}, thread_idx, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}

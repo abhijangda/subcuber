@@ -1,3 +1,93 @@
+diff --git a/include/cute/arch/copy_sm90_tma.hpp b/include/cute/arch/copy_sm90_tma.hpp
+index ec156449..b421959b 100644
+--- a/include/cute/arch/copy_sm90_tma.hpp
++++ b/include/cute/arch/copy_sm90_tma.hpp
+@@ -1248,7 +1248,7 @@ CUTE_HOST_DEVICE static void
+ tma_store_wait() {
+ #if defined(CUTE_ARCH_TMA_SM90_ENABLED)
+     asm volatile(
+-      "cp.async.bulk.wait_group.read %0;"
++      "cp.async.bulk.wait_group %0;"
+       :
+       : "n"(Count)
+       : "memory");
+diff --git a/include/cute/atom/copy_traits_sm90_tma.hpp b/include/cute/atom/copy_traits_sm90_tma.hpp
+index 3be30af7..4f60d73a 100644
+--- a/include/cute/atom/copy_traits_sm90_tma.hpp
++++ b/include/cute/atom/copy_traits_sm90_tma.hpp
+@@ -464,6 +464,8 @@ struct Copy_Traits<SM90_TMA_STORE_PTR, NumBitsPerTMA>
+ ///////////////////////////// TMA_REDUCE_ADD //////////////////////////////////////
+ //////////////////////////////////////////////////////////////////////////////
+ 
++struct SM90_TMA_REDUCE_ADD_PTR : SM90_TMA_REDUCE_ADD {};
++
+ // The executable SM90_TMA_REDUCE_ADD with tma_desc
+ template <class NumBitsPerTMA, class AuxParams_>
+ struct Copy_Traits<SM90_TMA_REDUCE_ADD, NumBitsPerTMA, AuxParams_>
+@@ -499,6 +501,12 @@ struct Copy_Traits<SM90_TMA_REDUCE_ADD, NumBitsPerTMA, AuxParams_>
+     return make_coord_tensor(make_layout(g_shape, aux_params_.g_stride_));
+   }
+ 
++  CUTE_HOST_DEVICE constexpr
++  Copy_Traits<SM90_TMA_REDUCE_ADD_PTR, NumBitsPerTMA>
++  with(TmaDescriptor const* new_tma_desc) const {
++    return {new_tma_desc};
++  }
++
+   template <class Coord, int... Is>
+   CUTE_HOST_DEVICE constexpr
+   void
+@@ -535,6 +543,38 @@ struct Copy_Traits<SM90_TMA_REDUCE_ADD, NumBitsPerTMA, AuxParams_>
+   }
+ };
+ 
++template <class NumBitsPerTMA>
++struct Copy_Traits<SM90_TMA_REDUCE_ADD_PTR, NumBitsPerTMA>
++{
++  using ThrID     = Layout<_1>;
++  using SrcLayout = Layout<Shape<_1,NumBitsPerTMA>>;
++  using DstLayout = Layout<Shape<_1,NumBitsPerTMA>>;
++  using RefLayout = SrcLayout;
++
++  TmaDescriptor const* tma_desc_;
++
++  template <class Coord, int... Is>
++  CUTE_HOST_DEVICE constexpr
++  void
++  copy_unpack_(void const* const src_ptr,
++               Coord const& dst_coord, seq<Is...>) const
++  {
++    SM90_TMA_REDUCE_ADD::copy(tma_desc_, src_ptr, get<Is>(dst_coord)...);
++  }
++
++  template <class TS, class SLayout,
++            class TD, class DLayout>
++  CUTE_HOST_DEVICE friend constexpr
++  void
++  copy_unpack(Copy_Traits        const& traits,
++              Tensor<TS,SLayout> const& src,
++              Tensor<TD,DLayout>      & dst)
++  {
++    static_assert(is_smem<TS>::value, "Expected smem src for SM90_TMA_REDUCE_ADD_PTR");
++    traits.copy_unpack_(cute::raw_pointer_cast(src.data()), dst.data().coord_, tuple_seq<decltype(dst.data().coord_)>{});
++  }
++};
++
+ //////////////////////////////////////////////////////////////////////////////
+ ///////////////////////////// BULK COPY //////////////////////////////////////
+ //////////////////////////////////////////////////////////////////////////////
+diff --git a/include/cutlass/gemm/gemm_enumerated_types.h b/include/cutlass/gemm/gemm_enumerated_types.h
+index 8961735b..f03e333d 100644
+--- a/include/cutlass/gemm/gemm_enumerated_types.h
++++ b/include/cutlass/gemm/gemm_enumerated_types.h
+@@ -60,6 +60,7 @@ enum class GemmUniversalMode {
+   kBatched,
+   kArray,
+   kGrouped,
++  kMoE,
+   kInvalid
+ };
+ 
 diff --git a/include/cutlass/layout/tensor.h b/include/cutlass/layout/tensor.h
 index 9e8a354e..6d32dc9a 100644
 --- a/include/cutlass/layout/tensor.h

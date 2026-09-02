@@ -302,24 +302,24 @@ public:
     {}
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_m() const {
+    int get_problem_shape_m(int idx = 0) const {
       return get<0>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_n() const {
+    int get_problem_shape_n(int idx = 0) const {
       return get<1>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_k() const {
+    int get_problem_shape_k(int idx = 0) const {
       return get<2>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    ProblemShape get_half_problem_shape() const {
-      return ProblemShape{get_problem_shape_m()/2, get_problem_shape_n()/2,
-                          get_problem_shape_k()/2};
+    ProblemShape get_half_problem_shape(int idx = 0) const {
+      return ProblemShape{get_problem_shape_m(idx)/2, get_problem_shape_n(idx)/2,
+                          get_problem_shape_k(idx)/2};
     }
 
     template<typename Other>
@@ -347,38 +347,38 @@ public:
     int run = 0;
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_m() const {
+    int get_problem_shape_m(int idx = 0) const {
       return get<0>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_n() const {
+    int get_problem_shape_n(int idx = 0) const {
       return get<1>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_k() const {
+    int get_problem_shape_k(int idx = 0) const {
       return get<2>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_A() const {
-      return get_problem_shape_k();
+    int get_stride_A(int idx = 0) const {
+      return get_problem_shape_k(idx);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_B() const {
-      return get_problem_shape_n();
+    int get_stride_B(int idx = 0) const {
+      return get_problem_shape_n(idx);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_MA() const {
-      return get_problem_shape_k()/2;
+    int get_stride_MA(int idx = 0) const {
+      return get_problem_shape_k(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_MB() const {
-      return get_problem_shape_n()/2;
+    int get_stride_MB(int idx = 0) const {
+      return get_problem_shape_n(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
@@ -392,24 +392,39 @@ public:
     }
 
     CUTLASS_HOST_DEVICE
-    ProblemShape get_half_problem_shape() const {
-      return ProblemShape{get_problem_shape_m()/2, get_problem_shape_n()/2,
-                          get_problem_shape_k()/2};
+    ProblemShape get_half_problem_shape(int idx = 0) const {
+      return ProblemShape{get_problem_shape_m(idx)/2, get_problem_shape_n(idx)/2,
+                          get_problem_shape_k(idx)/2};
     }
 
     CUTLASS_HOST_DEVICE
-    ElementA* get_ptr_A() const {
+    ElementA* get_ptr_A(int idx = 0) const {
       return ptr_A;
     }
 
     CUTLASS_HOST_DEVICE
-    ElementB* get_ptr_B() const {
+    ElementB* get_ptr_B(int idx = 0) const {
       return ptr_B;
     }
 
     CUTLASS_HOST_DEVICE
-    ElementD* get_ptr_D() const {
+    ElementD* get_ptr_D(int idx = 0) const {
       return ptr_D;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementA* get_ptr_presum_A(int problem_idx) const {
+      return presum_m_a_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementB* get_ptr_presum_B(int problem_idx) const {
+      return presum_m_b_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementD* get_postsum_ptr(int problem_idx) const {
+      return postsum_m_workspace;
     }
   };
 
@@ -781,6 +796,10 @@ public:
     auto load_inputs = collective_mainloop.get_inputs(all_inputs);
     auto load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
     auto load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+    auto strassen_layout_inputs = collective_mainloop.get_strassen_layout_inputs(0);
+    auto strassen_layout_inputs2 = collective_mainloop.get_strassen_layout_inputs(1);
+    auto strassen_layout_inputs3 = collective_mainloop.get_strassen_layout_inputs(2);
+
     static_assert(cute::tuple_size_v<decltype(load_inputs)> >= 2, "Output of load_init must have at least two elements (A, B)");
 
     // Extract out partitioned A and B.
@@ -917,14 +936,16 @@ public:
               auto load_l_coord = idx2crd(load_work_tile_info.L_idx, shape<4>(gB_nkl));
               auto load_blk_coord = make_coord(load_m_coord, load_n_coord, _, load_l_coord);
               auto load_k_tile_iter  = cute::make_coord_iterator(shape<3>(gA_mkl));
-              load_k_tile_iter.coord += (is_fused && load_sub_m_idx == 1) ? k_tile_count : 0;
+              load_k_tile_iter.coord += (is_fused && !CollectiveMainloop::IsStrassenLayout && load_sub_m_idx == 1) ? k_tile_count : 0;
 
               collective_mainloop.load(
-                params.mainloop, half_problem_shape_MNKL,
+                params.mainloop, problem_shape_MNKL,
                 mainloop_pipeline,
                 mainloop_pipe_producer_state,
-                (is_fused || load_sub_m_idx == 0) ? load_inputs :
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? load_inputs :
                   ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? strassen_layout_inputs :
+                  ((load_sub_m_idx == 1) ? strassen_layout_inputs2 : strassen_layout_inputs3),
                 load_blk_coord, load_sub_m_idx,
                 load_k_tile_iter,
                 k_tile_count,
@@ -958,10 +979,11 @@ public:
             }
           } else {
             collective_mainloop.load(
-              params.mainloop, half_problem_shape_MNKL,
+              params.mainloop, problem_shape_MNKL,
               mainloop_pipeline,
               mainloop_pipe_producer_state,
               load_inputs,
+              strassen_layout_inputs,
               blk_coord, sub_m_idx,
               k_tile_iter,
               k_tile_count,
@@ -1095,7 +1117,7 @@ public:
               #pragma unroll 4
               for (read_c = 0; read_c < 4; read_c++) {
                 auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+                if (postsum_src.valid() && postsum_src.is_mem_global()) {
                   postsum_srcs[postsum_src_len++] = postsum_src;
                 }
               }
@@ -1118,20 +1140,21 @@ public:
                 load_order_barrier.advance();
                 if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                   MY_PRINTF("1119 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
-                if (false) {
+                if (postsum_srcs[0].is_layout_interim_matrix()) {
                   epi_load_pipe_producer_state =
                   collective_epilogue.load(//TODO: Give postsum as argument
                     epi_load_pipeline,
                     epi_load_pipe_producer_state,
                     problem_shape_MNKL,
                     blk_shape,
-                    blk_coord,
+                    blk_coord, fused_mi,
                     tiled_mma,
                     lane_idx,
                     shared_storage.tensors.extra_storage.epilogue,
-                    shared_storage.tensors.extra_storage.epilogue2
+                    shared_storage.tensors.extra_storage.epilogue2,
+                    postsum_srcs
                   );
-                } else {
+                } else if (postsum_srcs[0].is_layout_interim_linear()) {
                   epi_load_pipe_producer_state =
                   collective_epilogue.load_m0(//TODO: Give postsum as argument
                     epi_load_pipeline,
@@ -1361,12 +1384,12 @@ public:
             #pragma unroll 4
             for (read_c = 0; read_c < 4; read_c++) {
               postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-              if (postsum_src.valid() && postsum_src.is_mem_shared() && postsum_src.is_layout_interim()) {
+              if (postsum_src.valid() && postsum_src.is_mem_shared() && postsum_src.is_layout_interim_linear()) {
                 break;
               }
             }
 
-            if (postsum_src.valid() && postsum_src.is_layout_interim()) {
+            if (postsum_src.valid() && postsum_src.is_layout_interim_linear()) {
               NumericArrayConverter<float, ElementD, 8> converter;
               //Read from this shared memory
               cutlass::Array<float, 8>* arrs = (cutlass::Array<float, 8>*)&accumulators;
@@ -1390,7 +1413,7 @@ public:
         bool has_global_src = false;
         uint fused_mi = sub_m_idx;
 
-        bool any_global_dst_final = false;
+        bool any_global_dst_matrix = false;
         bool any_global_dst_valid = false;
 
         #pragma unroll 4
@@ -1404,7 +1427,8 @@ public:
 
           if (misign == 0 || (!postsum_global_dest.valid())) continue;
           
-          any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
+          any_global_dst_matrix = any_global_dst_matrix || postsum_global_dest.is_layout_final() ||
+                                                          postsum_global_dest.is_layout_interim_matrix();
           any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
 
           #pragma unroll 4
@@ -1424,7 +1448,7 @@ public:
         }
 
         if (any_global_dst_valid) {
-        if (!any_global_dst_final) {
+        if (!any_global_dst_matrix) {
           auto ret = collective_epilogue.store_m2(
             epi_load_pipeline,
             epi_load_pipe_consumer_state,

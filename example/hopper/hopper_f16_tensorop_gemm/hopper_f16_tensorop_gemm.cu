@@ -54,6 +54,7 @@
       $ ./examples/48_hopper_warp_specialized_gemm/48_hopper_warp_specialized_gemm --m=2048 --n=2048 --k=2048 --rasterization=N --swizzle=2
 */
 
+#include <array>
 #include <iostream>
 
 #include "cutlass/cutlass.h"
@@ -177,6 +178,8 @@ using StrideD = typename Gemm::GemmKernel::StrideD;
 // Data members
 //
 
+constexpr int MatrixCount = 4;
+
 /// Initialization
 StrideA stride_A;
 StrideB stride_B;
@@ -184,10 +187,10 @@ StrideC stride_C;
 StrideD stride_D;
 uint64_t seed;
 
-cutlass::DeviceAllocation<typename Gemm::ElementA> block_A;
-cutlass::DeviceAllocation<typename Gemm::ElementB> block_B;
-cutlass::DeviceAllocation<typename Gemm::ElementC> block_C;
-cutlass::DeviceAllocation<typename Gemm::EpilogueOutputOp::ElementOutput> block_D;
+std::array<cutlass::DeviceAllocation<typename Gemm::ElementA>, MatrixCount> block_A;
+std::array<cutlass::DeviceAllocation<typename Gemm::ElementB>, MatrixCount> block_B;
+std::array<cutlass::DeviceAllocation<typename Gemm::ElementC>, MatrixCount> block_C;
+std::array<cutlass::DeviceAllocation<typename Gemm::EpilogueOutputOp::ElementOutput>, MatrixCount> block_D;
 cutlass::DeviceAllocation<typename Gemm::EpilogueOutputOp::ElementOutput> block_ref_D;
 
 #endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
@@ -346,19 +349,22 @@ void initialize(const Options &options) {
   stride_C = cutlass::make_cute_packed_stride(StrideC{}, {options.m, options.n, 1});
   stride_D = cutlass::make_cute_packed_stride(StrideD{}, {options.m, options.n, 1});
 
-  block_A.reset(options.m * options.k);
-  block_B.reset(options.k * options.n);
-  block_C.reset(options.m * options.n);
-  block_D.reset(options.m * options.n);
   block_ref_D.reset(options.m * options.n);
 
-  initialize_block(block_A, seed + 2023);
-  initialize_block(block_B, seed + 2022);
-  initialize_block(block_C, seed + 2021);
+  for (int matrix_idx = 0; matrix_idx < MatrixCount; ++matrix_idx) {
+    block_A[matrix_idx].reset(options.m * options.k);
+    block_B[matrix_idx].reset(options.k * options.n);
+    block_C[matrix_idx].reset(options.m * options.n);
+    block_D[matrix_idx].reset(options.m * options.n);
+
+    initialize_block(block_A[matrix_idx], seed + 2023 + matrix_idx * 3);
+    initialize_block(block_B[matrix_idx], seed + 2022 + matrix_idx * 3);
+    initialize_block(block_C[matrix_idx], seed + 2021 + matrix_idx * 3);
+  }
 }
 
 /// Populates a Gemm::Arguments structure from the given commandline options
-typename Gemm::Arguments args_from_options(const Options &options)
+typename Gemm::Arguments args_from_options(const Options &options, int matrix_idx)
 {
   // Change device_id to another value if you are running on a machine with multiple GPUs and wish
   // to use a GPU other than that with device ID 0.
@@ -368,8 +374,8 @@ typename Gemm::Arguments args_from_options(const Options &options)
   typename Gemm::Arguments arguments{
     cutlass::gemm::GemmUniversalMode::kGemm,
     {options.m, options.n, options.k},
-    {block_A.get(), stride_A, block_B.get(), stride_B},
-    {{options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D},
+    {block_A[matrix_idx].get(), stride_A, block_B[matrix_idx].get(), stride_B},
+    {{options.alpha, options.beta}, block_C[matrix_idx].get(), stride_C, block_D[matrix_idx].get(), stride_D},
     kernel_hw_info
   };
 
@@ -381,9 +387,9 @@ typename Gemm::Arguments args_from_options(const Options &options)
 }
 
 bool verify(const Options &options) {
-  cutlass::TensorRef ref_A(block_A.get(), Gemm::LayoutA::packed({options.m, options.k}));
-  cutlass::TensorRef ref_B(block_B.get(), Gemm::LayoutB::packed({options.k, options.n}));
-  cutlass::TensorRef ref_C(block_C.get(), Gemm::LayoutC::packed({options.m, options.n}));
+  cutlass::TensorRef ref_A(block_A[0].get(), Gemm::LayoutA::packed({options.m, options.k}));
+  cutlass::TensorRef ref_B(block_B[0].get(), Gemm::LayoutB::packed({options.k, options.n}));
+  cutlass::TensorRef ref_C(block_C[0].get(), Gemm::LayoutC::packed({options.m, options.n}));
   cutlass::TensorRef ref_D(block_ref_D.get(), Gemm::LayoutD::packed({options.m, options.n}));
 
   //
@@ -407,7 +413,8 @@ bool verify(const Options &options) {
   CUDA_CHECK(cudaDeviceSynchronize());
 
   // Check if output from CUTLASS kernel and reference kernel are equal or not
-  bool passed = cutlass::reference::device::BlockCompareEqual(block_ref_D.get(), block_D.get(), block_D.size());
+  bool passed = cutlass::reference::device::BlockCompareEqual(
+    block_ref_D.get(), block_D[0].get(), block_D[0].size());
 
   return passed;
 }
@@ -418,26 +425,20 @@ int run(Options &options)
 {
   initialize(options);
 
-  // Instantiate CUTLASS kernel depending on templates
-  Gemm gemm;
+  std::array<Gemm, MatrixCount> gemms;
+  std::array<cutlass::DeviceAllocation<uint8_t>, MatrixCount> workspaces;
 
-  // Create a structure of gemm kernel arguments suitable for invoking an instance of Gemm
-  auto arguments = args_from_options(options);
+  for (int matrix_idx = 0; matrix_idx < MatrixCount; ++matrix_idx) {
+    auto arguments = args_from_options(options, matrix_idx);
+    size_t workspace_size = Gemm::get_workspace_size(arguments);
+    workspaces[matrix_idx].reset(workspace_size);
 
-  // Using the arguments, query for extra workspace required for matrix multiplication computation
-  size_t workspace_size = Gemm::get_workspace_size(arguments);
-
-  // Allocate workspace memory
-  cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
-
-  // Check if the problem size is supported or not
-  CUTLASS_CHECK(gemm.can_implement(arguments));
-
-  // Initialize CUTLASS kernel with arguments and workspace pointer
-  CUTLASS_CHECK(gemm.initialize(arguments, workspace.get()));
+    CUTLASS_CHECK(gemms[matrix_idx].can_implement(arguments));
+    CUTLASS_CHECK(gemms[matrix_idx].initialize(arguments, workspaces[matrix_idx].get()));
+  }
 
   // Correctness / Warmup iteration
-  CUTLASS_CHECK(gemm.run());
+  CUTLASS_CHECK(gemms[0].run());
 
   // Check if output from CUTLASS kernel and reference kernel are equal or not
   Result result;
@@ -456,12 +457,11 @@ int run(Options &options)
   {
     // Warmup iteration
     for (int w = 0; w < options.iterations/10; w++)
-      CUTLASS_CHECK(gemm.run());
+      CUTLASS_CHECK(gemms[w % MatrixCount].run());
     GpuTimer timer;
     timer.start();
     for (int iter = 0; iter < options.iterations; ++iter) {
-      // CUTLASS_CHECK(gemm.initialize(arguments, workspace.get()));
-      CUTLASS_CHECK(gemm.run());
+      CUTLASS_CHECK(gemms[iter % MatrixCount].run());
     }
     timer.stop();
 

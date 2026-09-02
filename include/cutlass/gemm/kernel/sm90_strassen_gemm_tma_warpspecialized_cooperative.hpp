@@ -147,7 +147,7 @@ public:
   // 1 stage ordered sequence between mainloop and epilogue producer load threads
   using LoadWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
   using StoreWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
-  static constexpr bool UseM0M1StoreOrderBarrier = false && CollectiveMainloop::PresumStages == 4 &&
+  static constexpr bool UseM0M1StoreOrderBarrier = CollectiveMainloop::PresumStages == 4 &&
                                                    ((StrassenMiGroup::hasM0() && size<0>(typename CollectiveMainloop::PresumTileShapeA{}) > 2) ||
                                                     (StrassenMiGroup::hasM1() && size<0>(typename CollectiveMainloop::PresumTileShapeB{}) > 2));
 
@@ -223,24 +223,24 @@ public:
     {}
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_m() const {
+    int get_problem_shape_m(int idx = 0) const {
       return get<0>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_n() const {
+    int get_problem_shape_n(int idx = 0) const {
       return get<1>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_k() const {
+    int get_problem_shape_k(int idx = 0) const {
       return get<2>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    ProblemShape get_half_problem_shape() const {
-      return ProblemShape{get_problem_shape_m()/2, get_problem_shape_n()/2,
-                          get_problem_shape_k()/2};
+    ProblemShape get_half_problem_shape(int idx = 0) const {
+      return ProblemShape{get_problem_shape_m(idx)/2, get_problem_shape_n(idx)/2,
+                          get_problem_shape_k(idx)/2};
     }
 
     template<typename Other>
@@ -270,38 +270,38 @@ public:
     int run = 0;
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_m() const {
+    int get_problem_shape_m(int idx = 0) const {
       return get<0>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_n() const {
+    int get_problem_shape_n(int idx = 0) const {
       return get<1>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_problem_shape_k() const {
+    int get_problem_shape_k(int idx = 0) const {
       return get<2>(problem_shape);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_A() const {
-      return get_problem_shape_k();
+    int get_stride_A(int idx = 0) const {
+      return get_problem_shape_k(idx);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_B() const {
-      return get_problem_shape_n();
+    int get_stride_B(int idx = 0) const {
+      return get_problem_shape_n(idx);
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_MA() const {
-      return get_problem_shape_k()/2;
+    int get_stride_MA(int idx = 0) const {
+      return get_problem_shape_k(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
-    int get_stride_MB() const {
-      return get_problem_shape_n()/2;
+    int get_stride_MB(int idx = 0) const {
+      return get_problem_shape_n(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
@@ -315,24 +315,39 @@ public:
     }
 
     CUTLASS_HOST_DEVICE
-    ProblemShape get_half_problem_shape() const {
-      return ProblemShape{get_problem_shape_m()/2, get_problem_shape_n()/2,
-                          get_problem_shape_k()/2};
+    ProblemShape get_half_problem_shape(int idx = 0) const {
+      return ProblemShape{get_problem_shape_m(idx)/2, get_problem_shape_n(idx)/2,
+                          get_problem_shape_k(idx)/2};
     }
 
     CUTLASS_HOST_DEVICE
-    ElementA* get_ptr_A() const {
+    ElementA* get_ptr_A(int idx = 0) const {
       return ptr_A;
     }
 
     CUTLASS_HOST_DEVICE
-    ElementB* get_ptr_B() const {
+    ElementB* get_ptr_B(int idx = 0) const {
       return ptr_B;
     }
 
     CUTLASS_HOST_DEVICE
-    ElementD* get_ptr_D() const {
+    ElementD* get_ptr_D(int idx = 0) const {
       return ptr_D;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementA* get_ptr_presum_A(int problem_idx) const {
+      return presum_m_a_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementB* get_ptr_presum_B(int problem_idx) const {
+      return presum_m_b_workspace;
+    }
+
+    CUTLASS_HOST_DEVICE
+    ElementD* get_postsum_ptr(int problem_idx) const {
+      return postsum_m_workspace;
     }
   };
 
@@ -700,6 +715,9 @@ public:
     auto load_inputs = collective_mainloop.get_inputs(all_inputs);
     auto load_inputs2 = collective_mainloop.get_inputs(all_inputs, 1);
     auto load_inputs3 = collective_mainloop.get_inputs(all_inputs, 2);
+    auto strassen_layout_inputs = collective_mainloop.get_strassen_layout_inputs(0);
+    auto strassen_layout_inputs2 = collective_mainloop.get_strassen_layout_inputs(1);
+    auto strassen_layout_inputs3 = collective_mainloop.get_strassen_layout_inputs(2);
 
     static_assert(cute::tuple_size_v<decltype(load_inputs)> >= 2, "Output of load_init must have at least two elements (A, B)");
 
@@ -793,14 +811,16 @@ public:
               auto load_l_coord = idx2crd(load_work_tile_info.L_idx, shape<4>(gB_nkl));
               auto load_blk_coord = make_coord(load_m_coord, load_n_coord, _, load_l_coord);
               auto load_k_tile_iter = cute::make_coord_iterator(shape<3>(gA_mkl));
-              load_k_tile_iter.coord += (is_fused && load_sub_m_idx == 1) ? k_tile_count : 0;
+              load_k_tile_iter.coord += (is_fused && !CollectiveMainloop::IsStrassenLayout && load_sub_m_idx == 1) ? k_tile_count : 0;
 
               collective_mainloop.load(
-                params.mainloop, half_problem_shape_MNKL,
+                params.mainloop, problem_shape_MNKL,
                 mainloop_pipeline,
                 mainloop_pipe_producer_state,
-                (is_fused || load_sub_m_idx == 0) ? load_inputs :
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || (load_sub_m_idx == 0)) ? load_inputs :
                   ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? strassen_layout_inputs :
+                  ((load_sub_m_idx == 1) ? strassen_layout_inputs2 : strassen_layout_inputs3),
                 load_blk_coord, load_sub_m_idx,
                 load_k_tile_iter, k_tile_count,
                 lane_idx,
@@ -820,10 +840,11 @@ public:
             }
           } else {
             collective_mainloop.load(
-              params.mainloop, half_problem_shape_MNKL,
+              params.mainloop, problem_shape_MNKL,
               mainloop_pipeline,
               mainloop_pipe_producer_state,
               load_inputs,
+              strassen_layout_inputs,
               blk_coord, sub_m_idx,
               k_tile_iter, k_tile_count,
               lane_idx,
@@ -934,7 +955,7 @@ public:
               #pragma unroll 4
               for (int read_c = 0; read_c < 4; read_c++) {
                 auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+                if (postsum_src.valid() && postsum_src.is_mem_global()) {
                   postsum_srcs[postsum_src_len++] = postsum_src;
                 }
               }
@@ -946,19 +967,35 @@ public:
                 load_order_barrier.advance();
                 if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                   MY_PRINTF("948 %d : %d %d\n", fused_mi, m_coord, n_coord);
-                epi_load_pipe_producer_state =
-                collective_epilogue.load_m0(
-                  epi_load_pipeline,
-                  epi_load_pipe_producer_state,
-                  problem_shape_MNKL,
-                  blk_shape,
-                  blk_coord, fused_mi,
-                  tiled_mma,
-                  lane_idx,
-                  shared_storage.tensors.epilogue,
-                  shared_storage.tensors.epilogue,
-                  postsum_srcs
-                );
+                if (postsum_srcs[0].is_layout_interim_matrix()) {
+                  epi_load_pipe_producer_state =
+                  collective_epilogue.load(
+                    epi_load_pipeline,
+                    epi_load_pipe_producer_state,
+                    problem_shape_MNKL,
+                    blk_shape,
+                    blk_coord, fused_mi,
+                    tiled_mma,
+                    lane_idx,
+                    shared_storage.tensors.epilogue,
+                    shared_storage.tensors.epilogue,
+                    postsum_srcs
+                  );                  
+                } else if (postsum_srcs[0].is_layout_interim_linear()) {
+                  epi_load_pipe_producer_state =
+                  collective_epilogue.load_m0(
+                    epi_load_pipeline,
+                    epi_load_pipe_producer_state,
+                    problem_shape_MNKL,
+                    blk_shape,
+                    blk_coord, fused_mi,
+                    tiled_mma,
+                    lane_idx,
+                    shared_storage.tensors.epilogue,
+                    shared_storage.tensors.epilogue,
+                    postsum_srcs
+                  );
+                }
                 if (lane_idx == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                   MY_PRINTF("963 %d : %d %d\n", fused_mi, m_coord, n_coord);
               }
@@ -1013,7 +1050,7 @@ public:
 
         bool is_neg = false;
         bool has_global_src = false;
-        bool any_global_dst_final = false;
+        bool any_global_dst_matrix = false;
         bool any_global_dst_valid = false;
 
         for (int c = 0; c < 4; c++) {
@@ -1026,7 +1063,8 @@ public:
 
           is_neg = misign == -1;
 
-          any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
+          any_global_dst_matrix = any_global_dst_matrix || postsum_global_dest.is_layout_final() ||
+                                                          postsum_global_dest.is_layout_interim_matrix();
           any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
 
           #pragma unroll 4
@@ -1101,7 +1139,7 @@ public:
 
         if (TileScheduler::compute_epilogue(work_tile_info, params.scheduler) && any_global_dst_valid) {
           // Epilogue and write to gD
-          if (!any_global_dst_final) {
+          if (!any_global_dst_matrix) {
             auto ret = collective_epilogue.store_m2(
               epi_load_pipeline,
               epi_load_pipe_consumer_state,

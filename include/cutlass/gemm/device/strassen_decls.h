@@ -500,8 +500,13 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  constexpr bool is_layout_interim() const {
-    return mem_layout == LayoutInterim1D || mem_layout == LayoutInterim;
+  constexpr bool is_layout_interim_linear() const {
+    return mem_layout == LayoutInterim1D;
+  }
+
+  CUTLASS_HOST_DEVICE
+  constexpr bool is_layout_interim_matrix() const {
+    return mem_layout == LayoutInterim;
   }
 
   CUTLASS_HOST_DEVICE
@@ -1345,7 +1350,7 @@ public:
         #pragma unroll 4
         for (read_c = 0; read_c < 4; read_c++) {
           auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-          if (postsum_src.valid() && postsum_src.is_mem_global() && postsum_src.is_layout_interim()) {
+          if (postsum_src.valid() && postsum_src.is_mem_global() && (postsum_src.is_layout_interim_linear() || postsum_src.is_layout_interim_matrix())) {
             postsum_srcs[postsum_src_len++] = postsum_src;
           }
         }
@@ -1576,9 +1581,18 @@ public:
   }
 };
 
-template<bool kCommonParams = false, typename... kFusedMiGroups>
+
+template<
+#ifdef CUTLASS_API_v3
+         typename KernelSchedule_ = void, typename EpilogueSchedule_ = void,
+#endif
+         bool kCommonParams = false, typename... kFusedMiGroups>
 class ParallelMiGroups {
 public:
+#ifdef CUTLASS_API_v3
+  using KernelSchedule = KernelSchedule_;
+  using EpilogueSchedule = EpilogueSchedule_;
+#endif
   static const bool CommonParams = kCommonParams;
 
   CUTLASS_HOST_DEVICE
@@ -1953,6 +1967,16 @@ public:
   using ParallelGroups4 = kParallelGroups4;
   using ParallelGroups5 = kParallelGroups5;
   using ParallelGroups6 = kParallelGroups6;
+
+  template<int Mi>
+  using ParallelGroupForMi = std::conditional_t<kParallelGroups0::HasGroup(Mi), kParallelGroups0,
+                             std::conditional_t<kParallelGroups1::HasGroup(Mi), kParallelGroups1,
+                             std::conditional_t<kParallelGroups2::HasGroup(Mi), kParallelGroups2,
+                             std::conditional_t<kParallelGroups3::HasGroup(Mi), kParallelGroups3,
+                             std::conditional_t<kParallelGroups4::HasGroup(Mi), kParallelGroups4,
+                             std::conditional_t<kParallelGroups5::HasGroup(Mi), kParallelGroups5,
+                             std::conditional_t<kParallelGroups6::HasGroup(Mi), kParallelGroups6,
+                                                kParallelGroups0>>>>>>>;
 
   CUTLASS_HOST_DEVICE
   ScheduleStrassenGroups() {}
