@@ -108,7 +108,9 @@ template <
   class PresumTileShapeA_,
   class PresumTileShapeB_,
   class PresumOpt_,
-  class ProblemShape_>
+  class ProblemShape_,
+  class SubMatLayoutA_,
+  class SubMatLayoutB_>
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
     arch::Sm100,
@@ -133,8 +135,9 @@ struct CollectiveStrassenBuilder<
        cute::is_same_v<BuilderScheduleTag, KernelPtrArrayMultistage> ||
        cute::is_same_v<BuilderScheduleTag, KernelScheduleAuto>) &&
       ((sizeof(float) * AlignmentA) % detail::cp_async_min_alignment_bytes == 0) &&
-      ((sizeof(float) * AlignmentB) % detail::cp_async_min_alignment_bytes == 0) >
-    > {
+      ((sizeof(float) * AlignmentB) % detail::cp_async_min_alignment_bytes == 0) >,
+    SubMatLayoutA_,
+    SubMatLayoutB_> {
   static_assert(cute::size<2>(CtaShape_MNK{}) == 16, "SM100 SIMT SGEMM Kernels only support TileShape_K = 16.");
 
   // This kernel is specialized for F32 data type.

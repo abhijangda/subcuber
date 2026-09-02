@@ -124,6 +124,9 @@ using InterimEpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
 const auto StrassenKind = StrassenType::StrassenWinograd;
 
 using Layout = cutlass::layout::RowMajor;
+using SubMatLayoutA = cutlass::layout::OriginalLayout;
+using SubMatLayoutB = cutlass::layout::OriginalLayout;
+using SubMatLayoutC = cutlass::layout::OriginalLayout;
 using ClusterShape = cute::Shape<cute::_2, cute::_1, cute::_1>;
 using KernelSchedule = cutlass::gemm::KernelMultistage;
 using EpilogueSchedule = cutlass::epilogue::EpilogueSimtVectorized;
@@ -327,8 +330,9 @@ using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenG
                                                                        ProblemShape,
                                                                        cutlass::arch::Sm100,
                                                                        cutlass::arch::OpClassSimt,
-                                                                       float, Layout, float, Layout,
-                                                                       float, Layout,
+                                                                       float, Layout, SubMatLayoutA,
+                                                                       float, Layout, SubMatLayoutB,
+                                                                       float, Layout, SubMatLayoutC,
                                                                        float, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,

@@ -60,7 +60,8 @@ template <
   int AlignmentD,
   class ProblemShape,
   class EpilogueScheduleType,
-  class FusionOp
+  class FusionOp,
+  class SubMatLayoutC
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -83,7 +84,9 @@ struct CollectiveStrassenBuilder<
     cute::enable_if_t<
       cute::is_same_v<EpilogueScheduleType, EpilogueSimtVectorized> ||
       cute::is_same_v<EpilogueScheduleType, EpiloguePtrArraySimtVectorized> ||
-      cute::is_same_v<EpilogueScheduleType, EpilogueScheduleAuto>>> {
+      cute::is_same_v<EpilogueScheduleType, EpilogueScheduleAuto>>,
+    ProblemShape,
+    SubMatLayoutC> {
   using CtaTileShape_MNK = MmaTileShape_MNK;
 
   using ElementC = cute::conditional_t<cute::is_void_v<ElementC_>,

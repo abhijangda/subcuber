@@ -22,6 +22,7 @@ using BlackwellF32InterimEpilogueOp = cutlass::epilogue::thread::StrassenLinearC
   float, 4, float, float>;
 
 using BlackwellF32Layout = cutlass::layout::RowMajor;
+using BlackwellF32SubMatLayout = cutlass::layout::OriginalLayout;
 using BlackwellF32ClusterShape = cute::Shape<cute::_2, cute::_1, cute::_1>;
 using BlackwellF32KernelSchedule = cutlass::gemm::KernelMultistage;
 using BlackwellF32EpilogueSchedule = cutlass::epilogue::EpilogueSimtVectorized;
@@ -96,8 +97,9 @@ struct BlackwellF32SWInterleavedPresumConfig {
   using Kernels = cutlass::gemm::device::StrassenGemmKernels<
     StrassenGroups, ScheduleStrassenGroups, BlackwellF32ProblemShape,
     cutlass::arch::Sm100, cutlass::arch::OpClassSimt,
-    float, BlackwellF32Layout, float, BlackwellF32Layout,
-    float, BlackwellF32Layout,
+    float, BlackwellF32Layout, BlackwellF32SubMatLayout,
+    float, BlackwellF32Layout, BlackwellF32SubMatLayout,
+    float, BlackwellF32Layout, BlackwellF32SubMatLayout,
     float, BlackwellF32ClusterShape, cute::Int<Stages>,
     PresumTileShapeA, PresumTileShapeB,
     BlackwellF32PresumOpts, 1, 4, 4>;

@@ -178,6 +178,7 @@ struct PresumOpt {
 
 template<typename StrassenGroups_, typename ScheduleStrassenGroups_,
          typename ProblemShape,
+         typename SM, typename OpClass,
          typename ElementA, typename LayoutA, typename SubMatLayoutA,
          typename ElementB, typename LayoutB, typename SubMatLayoutB,
          typename ElementC, typename LayoutC, typename SubMatLayoutC,

@@ -134,6 +134,7 @@ struct CollectiveStrassenMma<
   using TransformA = TransformA_;
   using TransformB = TransformB_;
   using ArchTag = typename DispatchPolicy::ArchTag;
+  static constexpr bool IsStrassenLayout = false;
   using PresumShape = GemmShape<size<0>(TileShape{}), size<1>(TileShape{}), 1>;
   using PresumShapeA = PresumShape;
   using PresumShapeB = PresumShape;
@@ -502,6 +503,7 @@ struct CollectiveStrassenMma<
   using TransformA = TransformA_;
   using TransformB = TransformB_;
   using ArchTag = typename DispatchPolicy::ArchTag;
+  static constexpr bool IsStrassenLayout = false;
   using PresumShape = GemmShape<size<0>(TileShape{}), size<1>(TileShape{}), 1>;
   using PresumShapeA = PresumShape;
   using PresumShapeB = PresumShape;
