@@ -69,6 +69,8 @@
 #include "cutlass/gemm/collective/collective_strassen_gemm_builder.hpp"
 #include "cutlass/gemm/kernel/strassen_gemm_universal.hpp"
 
+#include "cutlass/util/packed_stride.hpp"
+
 const static bool launch_parallel_kernels = true;
 
 using namespace MmaStrassen;
@@ -143,7 +145,7 @@ static __global__ void presumcheck(uint R, uint C, Elem* presum) {
   for (int c = 0; c < C/1024; c++) {
     col = c*blockDim.x + threadIdx.x;
     //For B, set c == 0 && row < R. For A, set row == 0 && c < C
-    if (row == 64 && col == 0 && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
+    if (row == 0 && col == 0)// && presum[2*R*C+row*C+col] != Elem(1.0f)) //Elem(col%512 + col%512))
       printf("63: %d %d: %f; %p %p\n", row, col,
             float(presum[2*R*C+row*C+col]),
             &presum[2*R*C+row*C+col], presum);
@@ -295,6 +297,11 @@ public:
   using DispatchPolicy = typename GemmKernel::DispatchPolicy;
   using CollectiveMainloop = typename GemmKernel::CollectiveMainloop;
   using CollectiveEpilogue = typename GemmKernel::CollectiveEpilogue;
+
+  using StrideA = typename GemmKernel::StrideA;
+  using StrideB = typename GemmKernel::StrideB;
+  using StrideC = typename GemmKernel::StrideC;
+  using StrideD = typename GemmKernel::StrideD;
 
   // Map back to 2.x type as best as possible
   using LayoutA = gemm::detail::StrideToLayoutTagA_t<typename GemmKernel::StrideA>;
@@ -720,6 +727,18 @@ public:
       }
     }
     return Status::kSuccess;
+  }
+
+  static ElementA* get_presum_a_ptr(Arguments const& args, void* workspace) {
+    return (ElementA*)workspace;
+  }
+
+  static ElementB* get_presum_b_ptr(Arguments const& args, void* workspace) {
+    return (ElementB*)(((char*)workspace) + get_presum_a_workspace_size(args));
+  }
+
+  static ElementC* get_postsum_m_ptr(Arguments const& args, void* workspace) {
+    return (ElementC*)((char*)get_presum_b_ptr(args, workspace) + get_presum_b_workspace_size(args));
   }
 
   /// Initializes GEMM state from arguments.
@@ -1417,7 +1436,6 @@ public:
                                               GemmKernelM4, GemmKernelM5, GemmKernelM6>;
 
     Status result = Status::kSuccess;
-
     if (paramsM0_.run <= 1 && (StrassenGroups::PresumGroup::AllPresums::APresumComputeLoads(PresumGlobalKernel).numAccess() > 0 ||
         StrassenGroups::PresumGroup::AllPresums::BPresumComputeLoads(PresumGlobalKernel).numAccess() > 0)) {
       //TODO: Add a swizzle?
@@ -1485,7 +1503,7 @@ public:
       // cudaStreamSynchronize(streams[(stream_idx-1)%num_streams]);
     }
 
-    if (false) {
+    if (false && GemmKernelM0::StrassenMiGroup::Level1Idx == 1) {
       cudaDeviceSynchronize();
       printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(cudaGetLastError()));
       #if 0
@@ -1522,7 +1540,8 @@ public:
       }
       #endif
       // presumcheck<ElementA><<<paramsM0_.get_problem_shape_k(0)/2,1024>>>(paramsM0_.get_problem_shape_k(0), paramsM0_.get_problem_shape_n(0), paramsM0_.presum_m_b_workspace);
-      presumcheck<ElementA><<<8192/2,1024>>>(256, 8192, paramsM0_.presum_m_a_workspace);
+      printf("1544 %d: %p %p\n", GemmKernelM0::StrassenMiGroup::Level, paramsM0_.presum_m_a_workspace, paramsM0_.presum_m_b_workspace);
+      presumcheck<ElementA><<<2048/2,1024>>>(4096, 4096, paramsM0_.presum_m_b_workspace);
       // postsumcheck<<<4096,1024,0,streams[4]>>>(paramsM0_.postsum_m_workspace);
       cudaDeviceSynchronize();
       printf("Error at %d: %s\n", __LINE__, cudaGetErrorString(cudaGetLastError()));
@@ -1784,6 +1803,467 @@ public:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
+/******************************** Level 2 *************************************/
+////////////////////////////////////////////////////////////////////////////////
+
+template <typename StrassenGemmKernelsM0,
+          typename StrassenGemmKernelsM1,
+          typename StrassenGemmKernelsM2,
+          typename StrassenGemmKernelsM3,
+          typename StrassenGemmKernelsM4,
+          typename StrassenGemmKernelsM5,
+          typename StrassenGemmKernelsM6
+          >
+class StrassenGemmLevel2UniversalAdapter
+{
+public:
+  using ChildStrassenGemmM0 = StrassenGemmUniversalAdapter<StrassenGemmKernelsM0>;
+  using ChildStrassenGemmM1 = StrassenGemmUniversalAdapter<StrassenGemmKernelsM1>;
+  using ChildStrassenGemmM2 = StrassenGemmUniversalAdapter<StrassenGemmKernelsM2>;
+  using ChildStrassenGemmM3 = StrassenGemmUniversalAdapter<StrassenGemmKernelsM3>;
+  using ChildStrassenGemmM4 = StrassenGemmUniversalAdapter<StrassenGemmKernelsM4>;
+  using ChildStrassenGemmM5 = StrassenGemmUniversalAdapter<StrassenGemmKernelsM5>;
+  using ChildStrassenGemmM6 = StrassenGemmUniversalAdapter<StrassenGemmKernelsM6>;
+
+  /// Argument structure: User API
+  using Arguments = typename ChildStrassenGemmM0::Arguments;
+  /// Argument structure: Kernel API
+  using Params = typename ChildStrassenGemmM0::Params;
+  using ElementA = typename ChildStrassenGemmM0::ElementA;
+  using ElementB = typename ChildStrassenGemmM0::ElementB;
+  using ElementC = typename ChildStrassenGemmM0::ElementC;
+  using ElementD = ElementC;
+  using StrideA = typename ChildStrassenGemmM0::StrideA;
+  using StrideB = typename ChildStrassenGemmM0::StrideB;
+  using StrideC = typename ChildStrassenGemmM0::StrideC;
+  using StrideD = typename ChildStrassenGemmM0::StrideD;
+
+  ChildStrassenGemmM0 child_strassen_gemm_m0;
+  ChildStrassenGemmM1 child_strassen_gemm_m1;
+  ChildStrassenGemmM2 child_strassen_gemm_m2;
+  ChildStrassenGemmM3 child_strassen_gemm_m3;
+  ChildStrassenGemmM4 child_strassen_gemm_m4;
+  ChildStrassenGemmM5 child_strassen_gemm_m5;
+  ChildStrassenGemmM6 child_strassen_gemm_m6;
+
+public:
+  static constexpr size_t kChildWorkspaceAlignment = 32;
+
+  static size_t align_child_workspace_size(size_t bytes) {
+    return ((bytes + kChildWorkspaceAlignment - 1) / kChildWorkspaceAlignment) * kChildWorkspaceAlignment;
+  }
+
+  // /// Access the Params structure
+  // Params const& params() const {
+  //   return params_;
+  // }
+  
+  template<typename ArgsOrParams>
+  static auto get_vector_of_problems(ArgsOrParams const &args) {
+    using ProblemShape = std::remove_cvref_t<decltype(args.problem_shape)>;
+    if constexpr (requires { args.problem_shape.num_groups; }) {
+      std::vector<typename ProblemShape::UnderlyingProblemShape> problems;
+      for (int i = 0; i < args.problem_shape.groups(); i++) {
+        problems.push_back(args.problem_shape.get_host_problem_shape(i));
+      }
+      return problems;
+    } else {
+      std::vector<ProblemShape> problems;
+      problems.push_back(args.problem_shape);
+      return problems;
+    }
+  }
+
+  template <typename ChildGemm>
+  static typename ChildGemm::Arguments to_child_arguments(Arguments const& args,
+                                                          StrideA stride_A, ElementA const* ptr_A,
+                                                          StrideB stride_B, ElementB const* ptr_B,
+                                                          StrideC stride_C, ElementC const* ptr_C,
+                                                          StrideC stride_C2,  ElementC const* ptr_C2,
+                                                          StrideD stride_D,   ElementD* ptr_D,
+                                                          StrideD stride_D2,  ElementD* ptr_D2,
+                                                          int level_1_idx, bool halve_problem_size) { 
+    typename ChildGemm::Arguments args_child(
+      args.mode,
+      (halve_problem_size) ? args.get_half_problem_shape() : args.problem_shape,
+      {ptr_A, stride_A, ptr_B, stride_B},
+      {{args.epilogue.thread.alpha, 0.0f}, ptr_C, stride_C, ptr_D, stride_D},
+      args.hw_info
+    );
+    args_child.scheduler.raster_order = args.scheduler.raster_order;
+    args_child.scheduler.max_swizzle_size = args.scheduler.max_swizzle_size;
+    args_child.epilogue.ptr_C2 = ptr_C2;
+    args_child.epilogue.dC2 = stride_C2;
+    args_child.epilogue.ptr_D2 = ptr_D2;
+    args_child.epilogue.dD2 = stride_D2;
+
+    return args_child;
+  }
+
+  /// Determines whether the GEMM can execute the given problem.
+  static Status
+  can_implement(Arguments const& args) {
+    // auto args_m0 = to_child_arguments<ChildStrassenGemmM0>(args, args.mainloop.dA, args.ref_B, args.ref_C, args.ref_D, args.ref_C, args.ref_D, layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1), 0, false);
+    // auto args_m1 = to_child_arguments<ChildStrassenGemmM1>(args, args.ref_A, args.ref_B, args.ref_C, args.ref_D, args.ref_C, args.ref_D, layoutforM(args.ref_A, 2), layoutforM(args.ref_B, 2), 1);
+    // auto args_m2 = to_child_arguments<ChildStrassenGemmM2>(args, args.ref_A, args.ref_B, args.ref_C, args.ref_D, args.ref_C, args.ref_D, layoutforM(args.ref_A, 2), layoutforM(args.ref_B, 2), 1);
+    // auto args_m3 = to_child_arguments<ChildStrassenGemmM3>(args, args.ref_A, args.ref_B, args.ref_C, args.ref_D, args.ref_C, args.ref_D, layoutforM(args.ref_A, 2), layoutforM(args.ref_B, 2), 1);
+    // auto args_m4 = to_child_arguments<ChildStrassenGemmM4>(args, args.ref_A, args.ref_B, args.ref_C, args.ref_D, args.ref_C, args.ref_D, layoutforM(args.ref_A, 2), layoutforM(args.ref_B, 2), 1);
+    // auto args_m5 = to_child_arguments<ChildStrassenGemmM5>(args, args.ref_A, args.ref_B, args.ref_C, args.ref_D, args.ref_C, args.ref_D, layoutforM(args.ref_A, 2), layoutforM(args.ref_B, 2), 1);
+    // auto args_m6 = to_child_arguments<ChildStrassenGemmM6>(args, args.ref_A, args.ref_B, args.ref_C, args.ref_D, args.ref_C, args.ref_D, layoutforM(args.ref_A, 2), layoutforM(args.ref_B, 2), 1);
+
+    // if (!ChildStrassenGemmM0::can_implement(args_m0)) return Status::kInvalid;
+    // if (!ChildStrassenGemmM1::can_implement(args_m1)) return Status::kInvalid;
+    // if (!ChildStrassenGemmM2::can_implement(args_m2)) return Status::kInvalid;
+    // if (!ChildStrassenGemmM3::can_implement(args_m3)) return Status::kInvalid;
+    // if (!ChildStrassenGemmM4::can_implement(args_m4)) return Status::kInvalid;
+    // if (!ChildStrassenGemmM5::can_implement(args_m5)) return Status::kInvalid;
+    // if (!ChildStrassenGemmM6::can_implement(args_m6)) return Status::kInvalid;
+
+    return Status::kSuccess;
+  }
+
+  /// Gets the workspace size
+  static size_t
+  get_workspace_size(Arguments const& args) {
+    auto args_m0 = to_child_arguments<ChildStrassenGemmM0>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 0, false);
+    auto args_m1 = to_child_arguments<ChildStrassenGemmM1>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 1, true);
+    auto args_m2 = to_child_arguments<ChildStrassenGemmM2>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 2, true);
+    auto args_m3 = to_child_arguments<ChildStrassenGemmM3>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 3, true);
+    auto args_m4 = to_child_arguments<ChildStrassenGemmM4>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 4, true);
+    auto args_m5 = to_child_arguments<ChildStrassenGemmM5>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 5, true);
+    auto args_m6 = to_child_arguments<ChildStrassenGemmM6>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 6, true);
+
+    return align_child_workspace_size(ChildStrassenGemmM0::get_workspace_size(args_m0)) +
+      align_child_workspace_size(ChildStrassenGemmM1::get_workspace_size(args_m1)) +
+      align_child_workspace_size(ChildStrassenGemmM2::get_workspace_size(args_m2)) +
+      align_child_workspace_size(ChildStrassenGemmM3::get_workspace_size(args_m3)) +
+      align_child_workspace_size(ChildStrassenGemmM4::get_workspace_size(args_m4)) +
+      align_child_workspace_size(ChildStrassenGemmM5::get_workspace_size(args_m5)) +
+      align_child_workspace_size(ChildStrassenGemmM6::get_workspace_size(args_m6));
+  }
+
+  /// Initializes GEMM state from arguments.
+  Status
+  initialize(
+    Arguments const& args,
+    int swizzles[7],
+    void* workspace = nullptr,
+    cudaStream_t stream = nullptr,
+    CudaHostAdapter* cuda_adapter = nullptr) {
+
+    CUTLASS_TRACE_HOST("GemmUniversal::initialize() - workspace "
+      << workspace << ", stream: " << (stream ? "non-null" : "null"));
+
+    auto args_m0 = to_child_arguments<ChildStrassenGemmM0>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 0, false);
+    auto args_m1 = to_child_arguments<ChildStrassenGemmM1>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 1, true);
+    auto args_m2 = to_child_arguments<ChildStrassenGemmM2>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 2, true);
+    auto args_m3 = to_child_arguments<ChildStrassenGemmM3>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 3, true);
+    auto args_m4 = to_child_arguments<ChildStrassenGemmM4>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 4, true);
+    auto args_m5 = to_child_arguments<ChildStrassenGemmM5>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 5, true);
+    auto args_m6 = to_child_arguments<ChildStrassenGemmM6>(args, args.mainloop.dA, args.mainloop.ptr_A, args.mainloop.dB, args.mainloop.ptr_B,
+                                                                 args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
+                                                                 args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
+                                                                 /*layoutforM(args.ref_A, 1), layoutforM(args.ref_B, 1),*/ 6, true);
+    size_t workspace_bytes_m0 = ChildStrassenGemmM0::get_workspace_size(args_m0);
+    size_t workspace_bytes_m1 = ChildStrassenGemmM1::get_workspace_size(args_m1);
+    size_t workspace_bytes_m2 = ChildStrassenGemmM2::get_workspace_size(args_m2);
+    size_t workspace_bytes_m3 = ChildStrassenGemmM3::get_workspace_size(args_m3);
+    size_t workspace_bytes_m4 = ChildStrassenGemmM4::get_workspace_size(args_m4);
+    size_t workspace_bytes_m5 = ChildStrassenGemmM5::get_workspace_size(args_m5);
+    size_t workspace_bytes_m6 = ChildStrassenGemmM6::get_workspace_size(args_m6);
+
+    char* workspace_bytes = ((char*)workspace);
+    size_t offset = 0;
+    auto workspace_m0 = workspace_bytes + offset;
+    offset += align_child_workspace_size(workspace_bytes_m0);
+    auto workspace_m1 = workspace_bytes + offset;
+    offset += align_child_workspace_size(workspace_bytes_m1);
+    auto workspace_m2 = workspace_bytes + offset;
+    offset += align_child_workspace_size(workspace_bytes_m2);
+    auto workspace_m3 = workspace_bytes + offset;
+    offset += align_child_workspace_size(workspace_bytes_m3);
+    auto workspace_m4 = workspace_bytes + offset;
+    offset += align_child_workspace_size(workspace_bytes_m4);
+    auto workspace_m5 = workspace_bytes + offset;
+    offset += align_child_workspace_size(workspace_bytes_m5);
+    auto workspace_m6 = workspace_bytes + offset;
+
+    auto err = child_strassen_gemm_m0.initialize(args_m0, swizzles, workspace_m0);
+    if (err != Status::kSuccess) return err;
+
+    using AllPresums = typename ChildStrassenGemmM0::StrassenGroups::Group0::AllPresums;
+
+    ElementA* presum_a_ptr  = ChildStrassenGemmM0::get_presum_a_ptr(args_m0, workspace_m0);
+    ElementA* presum_b_ptr  = ChildStrassenGemmM0::get_presum_b_ptr(args_m0, workspace_m0);
+    ElementC* postsum_m_ptr = ChildStrassenGemmM0::get_postsum_m_ptr(args_m0, workspace_m0);
+
+    auto [M, N, K, _] = args.problem_shape;
+    const int halfM = M/2;
+    const int halfN = N/2;
+    const int halfK = K/2;
+    const bool is_fp16 = std::is_same<ElementA, cutlass::half_t>::value;//TODO:Fix this
+
+    {
+      //m1 = a1@b2
+      auto ptr_A = args.mainloop.ptr_A + halfK; //TensorRefC ref_C = {}; TensorRefD ref_D = {};
+      auto ptr_B = args.mainloop.ptr_B + halfK*N;
+      StrideC stride_m0l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
+      auto ptr_m0l1 = postsum_m_ptr;
+      args_m1 = to_child_arguments<ChildStrassenGemmM1>(args, args.mainloop.dA, ptr_A, args.mainloop.dB, ptr_B,
+        stride_m0l1, ptr_m0l1, stride_m0l1, nullptr,
+        args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, nullptr,
+        1, true);
+
+      err = child_strassen_gemm_m1.initialize(args_m1, swizzles, (void*)workspace_m1, stream);
+      // printf("1799\n");
+      if (err != Status::kSuccess) return err;
+
+      //m2 = s2@s3
+      auto ptr_S2 = presum_a_ptr + AllPresums::indexAPresum(MmaStrassen::APresums::S2)*halfM*halfK;
+      auto stride_S2 = cutlass::make_cute_packed_stride(StrideA{}, {halfM, halfK, 1});
+
+      auto ptr_S3 = presum_b_ptr + AllPresums::indexBPresum(MmaStrassen::BPresums::S3)*halfN*halfK;
+      auto stride_S3 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
+
+      //m2 is stored at [1]
+      auto ptr_m2l1 = postsum_m_ptr + (is_fp16+1)*halfM*halfN;
+
+      args_m2 = to_child_arguments<ChildStrassenGemmM2>(args, stride_S2, ptr_S2, stride_S3, ptr_S3,
+                                                        stride_m0l1, ptr_m0l1,
+                                                        stride_m0l1, nullptr,
+                                                        stride_m0l1, ptr_m2l1,
+                                                        stride_m0l1, nullptr,
+                                                        2, true);
+      err = child_strassen_gemm_m2.initialize(args_m2, swizzles, workspace_m2, stream);
+      if (err != Status::kSuccess) return err;
+    }
+
+    {
+      // printf("1817 %p\n", presum_b_ptr +AllPresums::indexBPresum(MmaStrassen::BPresums::B31)*halfN*halfK);
+      //m3 = a02@b31
+      auto ptr_A02 = presum_a_ptr + AllPresums::indexAPresum(MmaStrassen::APresums::A02)*halfM*halfK;
+      auto stride_A02 = cutlass::make_cute_packed_stride(StrideA{}, {halfM, halfK, 1});
+
+      auto ptr_B31 = presum_b_ptr + AllPresums::indexBPresum(MmaStrassen::BPresums::B31)*halfN*halfK;
+      auto stride_B31 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
+
+      auto ptr_m2l1 = postsum_m_ptr + (is_fp16+1)*halfM*halfN;
+      StrideC stride_m2l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
+
+      //m3 is stored at [2]
+      auto ptr_m3l1 = postsum_m_ptr + (is_fp16+2)*halfM*halfN;
+      StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
+
+      args_m3 = to_child_arguments<ChildStrassenGemmM3>(args, stride_A02, ptr_A02, stride_B31, ptr_B31,
+                                                        stride_m2l1, ptr_m2l1,
+                                                        stride_m3l1, nullptr,
+                                                        stride_m3l1, ptr_m3l1,
+                                                        stride_m3l1, nullptr,
+                                                        3, true);
+      args_m3.epilogue.thread.beta = 1;
+      err = child_strassen_gemm_m3.initialize(args_m3, swizzles, workspace_m3, stream);
+      if (err != Status::kSuccess) return err;
+    }
+
+    {
+      //m4 = s1@b10
+      auto ptr_S1 = presum_a_ptr + AllPresums::indexAPresum(MmaStrassen::APresums::S1)*halfM*halfK;
+      auto stride_S1 = cutlass::make_cute_packed_stride(StrideA{}, {halfM, halfK, 1});
+
+      auto ptr_B10 = presum_b_ptr + AllPresums::indexBPresum(MmaStrassen::BPresums::B10)*halfN*halfK;
+      auto stride_B10 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
+
+      auto ptr_m3l1 = postsum_m_ptr + (is_fp16+2)*halfM*halfN;
+      StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
+
+      auto ptr_m4l1 = postsum_m_ptr + (is_fp16+3)*halfM*halfN;
+      StrideC stride_m4l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
+
+      auto ptr_D11 = args.epilogue.ptr_D + halfM*N + halfN;
+
+      args_m4 = to_child_arguments<ChildStrassenGemmM4>(args, stride_S1, ptr_S1, stride_B10, ptr_B10,
+                                                        stride_m3l1, ptr_m3l1,
+                                                        stride_m3l1, nullptr,
+                                                        args.epilogue.dD, ptr_D11,
+                                                        stride_m4l1, ptr_m4l1,
+                                                        4, true);
+      args_m4.epilogue.thread.beta = 1;
+      err = child_strassen_gemm_m4.initialize(args_m4, swizzles, workspace_m4, stream);
+      if (err != Status::kSuccess) return err;
+    }
+
+    {
+      //m5 = a1s2@b3
+      auto ptr_A1S2 = presum_a_ptr + AllPresums::indexAPresum(MmaStrassen::APresums::A1S2)*halfM*halfK;
+      auto stride_A1S2 = cutlass::make_cute_packed_stride(StrideA{}, {halfM, halfK, 1});
+
+      auto ptr_B3 = args.mainloop.ptr_B + halfK*N + halfN;
+
+      auto ptr_m2l1 = postsum_m_ptr + (is_fp16+1)*halfM*halfN;
+      StrideC stride_m2l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
+
+      auto ptr_m4l1 = postsum_m_ptr + (is_fp16+3)*halfM*halfN;
+      StrideC stride_m4l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
+
+      auto ptr_D01 = args.epilogue.ptr_D + halfN;
+
+      args_m5 = to_child_arguments<ChildStrassenGemmM5>(args, stride_A1S2, ptr_A1S2, args.mainloop.dB, ptr_B3,
+                                                        stride_m2l1, ptr_m2l1,
+                                                        stride_m4l1, ptr_m4l1,
+                                                        args.epilogue.dD, ptr_D01,
+                                                        args.epilogue.dD, nullptr,
+                                                        5, true);
+      args_m5.epilogue.thread.beta = 1;
+      err = child_strassen_gemm_m5.initialize(args_m5, swizzles, workspace_m5, stream);
+      if (err != Status::kSuccess) return err;
+    }
+
+    {
+      //m6 = a3@s3b2
+      auto ptr_A3 = args.mainloop.ptr_A + halfM*K + halfK;
+
+      auto ptr_S3B2 = presum_b_ptr + AllPresums::indexBPresum(MmaStrassen::BPresums::S3B2)*halfN*halfK;
+      auto stride_S3B2 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
+
+      //m3 is stored at [2]
+      auto ptr_m3l1 = postsum_m_ptr + (is_fp16+2)*halfM*halfN;
+      StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
+
+      auto ptr_D10 = args.epilogue.ptr_D + halfM*N;
+
+      args_m6 = to_child_arguments<ChildStrassenGemmM6>(args, args.mainloop.dA, ptr_A3, stride_S3B2, ptr_S3B2,
+                                                        stride_m3l1, ptr_m3l1,
+                                                        stride_m3l1, nullptr,
+                                                        args.epilogue.dD, ptr_D10,
+                                                        args.epilogue.dD, nullptr,
+                                                        6, true);
+      args_m6.epilogue.thread.alpha = -1;
+      args_m6.epilogue.thread.beta = 1;
+      err = child_strassen_gemm_m6.initialize(args_m6, swizzles, workspace_m6, stream);
+      if (err != Status::kSuccess) return err;
+    }
+
+    return Status::kSuccess;
+  }
+
+  /// Update API is preserved in 3.0, but does not guarantee a lightweight update of params.
+  Status
+  update(Arguments const& args, void* workspace = nullptr) {
+    printf("474 should not be called\n"); abort();
+    // CUTLASS_TRACE_HOST("GemmUniversal()::update() - workspace: " << workspace);
+
+    // size_t workspace_bytes = get_workspace_size(args);
+    // if (workspace_bytes > 0 && nullptr == workspace) {
+    //   return Status::kErrorWorkspaceNull;
+    // }
+
+    // params_ = GemmKernel::to_underlying_arguments(args, workspace);
+    // return Status::kSuccess;
+  }
+
+  /// Overload that allows a user to re-launch the   same kernel without updating internal params struct.
+  Status
+  run(
+    cudaStream_t* streams = nullptr,
+    int num_streams = 0,
+    CudaHostAdapter *cuda_adapter = nullptr,
+    bool launch_with_pdl = false) {
+    if (num_streams == 1) {
+      for (int i = 0; i < 49; i++)
+        streams[i] = streams[0];
+    }
+
+    if (num_streams <= 1) {
+      auto status = child_strassen_gemm_m0.run(streams, 1);
+      if (status != Status::kSuccess) return status;
+      if (ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 0) {
+        status = child_strassen_gemm_m1.run(streams, 1);
+        if (status != Status::kSuccess) return status;
+      }
+      status = child_strassen_gemm_m2.run(streams, 1);
+      if (status != Status::kSuccess) return status;
+      status = child_strassen_gemm_m3.run(streams, 1);
+      if (status != Status::kSuccess) return status;
+      status = child_strassen_gemm_m4.run(streams, 1);
+      if (status != Status::kSuccess) return status;
+      status = child_strassen_gemm_m5.run(streams, 1);
+      if (status != Status::kSuccess) return status;
+      status = child_strassen_gemm_m6.run(streams, 1);
+      if (status != Status::kSuccess) return status;
+
+      return Status::kSuccess;
+    }
+
+    if (num_streams != 49 || streams == nullptr) {
+      return Status::kErrorInvalidProblem;
+    }
+
+    auto status = child_strassen_gemm_m0.run(streams + 0 * 7, 7);
+    if (status != Status::kSuccess) return status;
+    if (ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 0) {
+      status = child_strassen_gemm_m1.run(streams + 1 * 7, 7);
+      if (status != Status::kSuccess) return status;
+    }
+
+    status = child_strassen_gemm_m2.run(streams + 2 * 7, 7);
+    if (status != Status::kSuccess) return status;
+    status = child_strassen_gemm_m3.run(streams + 3 * 7, 7);
+    if (status != Status::kSuccess) return status;
+    status = child_strassen_gemm_m4.run(streams + 4 * 7, 7);
+    if (status != Status::kSuccess) return status;
+    status = child_strassen_gemm_m5.run(streams + 5 * 7, 7);
+    if (status != Status::kSuccess) return status;
+    status = child_strassen_gemm_m6.run(streams + 6 * 7, 7);
+    if (status != Status::kSuccess) return status;
+
+    return Status::kSuccess;
+  }
+
+  /// Overload that allows a user to re-launch the same kernel without updating internal params struct.
+  // Status
+  // operator()(cudaStream_t stream = nullptr, CudaHostAdapter *cuda_adapter = nullptr, bool launch_with_pdl = false) {
+  //   return run(paramsM0_, stream, cuda_adapter, launch_with_pdl);
+  // }
+};
 
 } // namespace cutlass::gemm::device
 

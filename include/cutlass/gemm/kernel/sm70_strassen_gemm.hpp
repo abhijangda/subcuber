@@ -141,6 +141,27 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
       mode(other.mode), problem_shape(other.problem_shape), mainloop(other.mainloop),
       epilogue(other.epilogue), hw_info(other.hw_info), scheduler(other.scheduler)
       {}
+
+    CUTLASS_HOST_DEVICE
+    int get_problem_shape_m(int idx = 0) const {
+      return get<0>(problem_shape);
+    }
+
+    CUTLASS_HOST_DEVICE
+    int get_problem_shape_n(int idx = 0) const {
+      return get<1>(problem_shape);
+    }
+
+    CUTLASS_HOST_DEVICE
+    int get_problem_shape_k(int idx = 0) const {
+      return get<2>(problem_shape);
+    }
+
+    CUTLASS_HOST_DEVICE
+    ProblemShape get_half_problem_shape(int idx = 0) const {
+      return ProblemShape{get_problem_shape_m(idx)/2, get_problem_shape_n(idx)/2,
+                          get_problem_shape_k(idx)/2, 1};
+    }
   };
 
   // Kernel entry point API
@@ -288,7 +309,8 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
     return status;
   }
 
-  static dim3
+  static CUTLASS_HOST_DEVICE 
+  dim3
   get_grid_shape(Params const& params) {
     int batch_count = 1;
     if constexpr (cute::rank(ProblemShape{}) == 4) {
@@ -344,8 +366,8 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
     auto all_inputs = collective_mma.load_init(problem_shape_MNKL, params.mainloop);
     auto load_inputs = collective_mma.get_inputs(all_inputs, 0);
 
-    Tensor gA = get<0>(load_inputs)(_, _, get<0>(blk_coord_mnkl), _, get<3>(blk_coord_mnkl)); // (BLK_M,BLK_K,k)
-    Tensor gB = get<1>(load_inputs)(_, _, get<1>(blk_coord_mnkl), _, get<3>(blk_coord_mnkl)); // (BLK_N,BLK_K,k)
+    auto gA = get<0>(load_inputs)(_, _, get<0>(blk_coord_mnkl), _, get<3>(blk_coord_mnkl)); // (BLK_M,BLK_K,k)
+    auto gB = get<1>(load_inputs)(_, _, get<1>(blk_coord_mnkl), _, get<3>(blk_coord_mnkl)); // (BLK_N,BLK_K,k)
 
     // Compute tile residues for predication
     auto m_max_coord = M / 2 - size<0>(gA) * get<0>(blk_coord_mnkl);                         // M/2 - BLK_M * m_coord
@@ -423,10 +445,12 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
 
     // Epilogue and write to gD
     CollectiveEpilogue epilogue{params.epilogue};
+
     if (any_global_dst_valid) {
       if (any_global_dst_matrix) {
         epilogue.store(
           problem_shape_MNKL,
+          get_grid_shape(params),
           blk_shape,
           blk_coord_mnkl,
           accumulators,
@@ -438,6 +462,7 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
       } else {
         epilogue.store_m0(
           problem_shape_MNKL,
+          get_grid_shape(params),
           blk_shape,
           blk_coord_mnkl,
           accumulators,

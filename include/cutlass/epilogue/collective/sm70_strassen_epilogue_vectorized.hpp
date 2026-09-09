@@ -175,8 +175,12 @@ public:
     using StrideBias = decltype(thread.dBias);
     ElementC const* ptr_C = nullptr;
     StrideC dC{};
+    ElementC const* ptr_C2 = nullptr;
+    StrideC dC2{};
     ElementD* ptr_D = nullptr;
     StrideD dD{};
+    ElementD* ptr_D2 = nullptr;
+    StrideD dD2{};
 
     Arguments(ThreadEpilogueOpArguments<ThreadEpilogueOp> thread, ElementC const* ptr_C, StrideC dC,
               ElementD* ptr_D, StrideD dD) : thread(thread), ptr_C(ptr_C), dC(dC), ptr_D(ptr_D), dD(dD)
@@ -186,7 +190,9 @@ public:
 
     template<typename Other>
     Arguments(const Other& other) : ptr_C(other.ptr_C), dC(other.dC),
-                                     ptr_D(other.ptr_D), dD(other.dD)
+                                     ptr_C2(other.ptr_C2), dC2(other.dC2),
+                                     ptr_D(other.ptr_D), dD(other.dD),
+                                     ptr_D2(other.ptr_D2), dD2(other.dD2)
               {
                 thread.alpha = other.thread.alpha;
                 thread.beta = other.thread.beta;
@@ -199,8 +205,12 @@ public:
     typename ThreadEpiOp::Params thread{};
     ElementC const* ptr_C = nullptr;
     StrideC dC{};
+    ElementC const* ptr_C2 = nullptr;
+    StrideC dC2{};
     ElementD* ptr_D = nullptr;
     StrideD dD{};
+    ElementD* ptr_D2 = nullptr;
+    StrideD dD2{};
     ElementBias const* ptr_Bias = nullptr;
     StrideBias dBias{};
     void* ptr_postsum_m;
@@ -214,8 +224,12 @@ public:
     typename ThreadEpiOp::ElementwiseArguments activation{};
     ElementC const* ptr_C = nullptr;
     StrideC dC{};
+    ElementC const* ptr_C2 = nullptr;
+    StrideC dC2{};
     ElementD* ptr_D = nullptr;
     StrideD dD{};
+    ElementD* ptr_D2 = nullptr;
+    StrideD dD2{};
     ElementBias const* ptr_Bias = nullptr;
     StrideBias dBias{};
   };
@@ -245,8 +259,12 @@ public:
         args.thread.activation,
         args.ptr_C,
         args.dC,
+        args.ptr_C2,
+        args.dC2,
         args.ptr_D,
         args.dD,
+        args.ptr_D2,
+        args.dD2,
         args.thread.bias_ptr,
         args.thread.dBias,
         postsum_m
@@ -257,8 +275,12 @@ public:
         thread_op_args,
         args.ptr_C,
         args.dC,
+        args.ptr_C2,
+        args.dC2,
         args.ptr_D,
         args.dD,
+        args.ptr_D2,
+        args.dD2,
         args.thread.bias_ptr,
         args.thread.dBias,
         postsum_m
@@ -308,9 +330,10 @@ public:
   CUTLASS_DEVICE void
   store_m0(
       ProblemShapeMNKL problem_shape_mnkl,
+      dim3 grid_shape,
       BlockShapeMNK blk_shape_MNK,
       BlockCoordMNKL blk_coord_mnkl,
-      cute::Tensor<FrgEngine,FrgLayout> const& accumulators,                   // (MMA,MMA_M,MMA_N)
+      cute::Tensor<FrgEngine,FrgLayout>& accumulators,                   // (MMA,MMA_M,MMA_N)
       TiledMma tiled_mma,
       ResidueMNK residue_mnk,
       int thread_idx,
@@ -325,7 +348,7 @@ public:
     constexpr uint NumMMAThreads = size(TiledMma{});
 
     VectorType* arrs = (VectorType*)&accumulators;
-
+ 
     #pragma unroll 4
     for (int co = 0; co < 4; co++) {
       auto dest_global_op = RWCTypes::PostsumGlobalDestByOutputIndex(co);
@@ -333,7 +356,9 @@ public:
       if (dest_global_op.is_layout_interim_linear()) {
 
       auto postsum_dst = postsum_m0 + (M/2*N/2 * dest_global_op.get_op());
-      
+
+      level_1_add_m0(problem_shape_mnkl, grid_shape, blk_shape_MNK, blk_coord_mnkl, accumulators, tiled_mma, thread_idx, dest_global_op);
+
       CUTLASS_PRAGMA_UNROLL
       for (int elem = 0; elem < accumulators.size(); elem += VectorType::kElements) {
         VectorType arr = arrs[elem/VectorType::kElements];
@@ -387,15 +412,101 @@ public:
     class BlockShapeMNK,
     class BlockCoordMNKL,
     class FrgEngine, class FrgLayout,
+    class TiledMma
+  >
+  CUTLASS_DEVICE void
+  add_source(
+      ProblemShapeMNKL problem_shape_mnkl,
+      BlockShapeMNK blk_shape_MNK,
+      BlockCoordMNKL blk_coord_mnkl,
+      cute::Tensor<FrgEngine,FrgLayout>& accumulators,                   // (MMA,MMA_M,MMA_N)
+      TiledMma tiled_mma,
+      const ElementD* source_ptr,
+      int thread_idx) {
+    auto [M, N, K, L] = problem_shape_mnkl;
+    auto [m_coord, n_coord, k_coord, l_coord] = blk_coord_mnkl;
+
+    // source_ptr = source_ptr + (m_coord*((N/2)/size<1>(BlockShapeMNK{})) + n_coord)*size<0>(BlockShapeMNK{})*size<1>(BlockShapeMNK{});
+    using VectorType = cutlass::Array<float, 16/sizeof(ElementD)>;
+    VectorType* arrs = (VectorType*)&accumulators;
+    constexpr uint NumMMAThreads = size(TiledMma{});
+
+    CUTLASS_PRAGMA_UNROLL
+    for (int elem = 0; elem < accumulators.size(); elem += VectorType::kElements) {
+      VectorType& arr = arrs[elem/VectorType::kElements];
+
+      const VectorType* postsum_src = (const VectorType*) (source_ptr + elem * NumMMAThreads +
+                                                           thread_idx*VectorType::kElements);
+      VectorType src_val;
+
+      arch::global_load<VectorType, sizeof(VectorType)>(src_val, postsum_src, true);
+      packed_add_f32x2(arr, src_val);
+    }
+  }
+
+  template<
+    class ProblemShapeMNKL,
+    class BlockShapeMNK,
+    class BlockCoordMNKL,
+    class FrgEngine, class FrgLayout,
+    class TiledMma
+  >
+  CUTLASS_DEVICE void
+  level_1_add_m0(
+      ProblemShapeMNKL problem_shape_mnkl,
+      dim3 grid_shape,
+      BlockShapeMNK blk_shape_MNK,
+      BlockCoordMNKL blk_coord_mnkl,
+      cute::Tensor<FrgEngine,FrgLayout>& accumulators,                   // (MMA,MMA_M,MMA_N)
+      TiledMma tiled_mma,
+      int thread_idx,
+      PostsumOp dst_op) {
+      auto M = get<0>(problem_shape_mnkl);
+      auto N = get<1>(problem_shape_mnkl);
+      auto L = get<3>(problem_shape_mnkl);
+
+      auto [m_coord, n_coord, k_coord, l_coord] = blk_coord_mnkl;
+
+      if (params.ptr_C != nullptr && StrassenMiGroup::Level == 1 &&
+        (StrassenMiGroup::Level1Idx == 1 || StrassenMiGroup::Level1Idx == 2
+          /*|| params.level_1_idx == 1 || params.level_1_idx == 2*/) &&
+        //TODO: This should be if StrassenMiGroup::continueMMA
+        ((StrassenMiGroup::FusedOrContinueMMA() == 1 && StrassenMiGroup::hasM0()) ||
+          (StrassenMiGroup::FusedOrContinueMMA() == 0 && StrassenMiGroup::hasM1()) ||
+          StrassenMiGroup::hasM5() || StrassenMiGroup::hasM6() || StrassenMiGroup::hasM4())
+        ) {
+      
+        bool is_fp16 = false;
+        const int c_o = dst_op.get_op();
+        auto source_ptr = &params.ptr_C[M*N*is_fp16];
+        source_ptr += (((c_o/2) * grid_shape.x + m_coord)  * grid_shape.y * (1 << StrassenMiGroup::Level) +
+                       ((c_o%2) * grid_shape.y + n_coord)) * (size<0>(blk_shape_MNK)*size<1>(blk_shape_MNK));
+
+        add_source(problem_shape_mnkl,
+                  blk_shape_MNK,
+                  blk_coord_mnkl,
+                  accumulators,
+                  tiled_mma,
+                  source_ptr,
+                  thread_idx);
+    }
+  }
+
+  template<
+    class ProblemShapeMNKL,
+    class BlockShapeMNK,
+    class BlockCoordMNKL,
+    class FrgEngine, class FrgLayout,
     class TiledMma,
     class ResidueMNK
   >
   CUTLASS_DEVICE void
   store(
       ProblemShapeMNKL problem_shape_mnkl,
+      dim3 grid_shape,
       BlockShapeMNK blk_shape_MNK,
       BlockCoordMNKL blk_coord_mnkl,
-      cute::Tensor<FrgEngine,FrgLayout> const& accumulators,                   // (MMA,MMA_M,MMA_N)
+      cute::Tensor<FrgEngine,FrgLayout>& accumulators,                         // (MMA,MMA_M,MMA_N)
       TiledMma tiled_mma,
       ResidueMNK residue_mnk,
       int thread_idx,
@@ -428,7 +539,9 @@ public:
 
     // Represent the full output tensor
     Tensor mC_mnl = make_tensor(make_gmem_ptr(params.ptr_C), make_shape(M,N,L), params.dC);             //             (m,n,l)
+    Tensor mC2_mnl = make_tensor(make_gmem_ptr(params.ptr_C2), make_shape(M,N,L), params.dC2);
     Tensor mD_mnl = make_tensor(make_gmem_ptr(params.ptr_D), make_shape(M,N,L), params.dD);             //             (m,n,l)
+    Tensor mD2_mnl = make_tensor(make_gmem_ptr(params.ptr_D2), make_shape(M,N,L), params.dD2);
     ElementD* postsum_base = static_cast<ElementD*>(params.ptr_postsum_m);
     auto postsum_stride = make_stride(get<0>(params.dD)/2, get<1>(params.dD), get<2>(params.dD)/4);
     auto postsum_shape = make_shape(M/2,N/2,L);
@@ -441,7 +554,9 @@ public:
     Tensor mBias_mnl = make_tensor(make_gmem_ptr(params.ptr_Bias), make_shape(M,N,L), params.dBias);    //             (m,n,l)
     
     Tensor gC_mnl = local_tile(mC_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
+    Tensor gC2_mnl = local_tile(mC2_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});
     Tensor gD_mnl = local_tile(mD_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
+    Tensor gD2_mnl = local_tile(mD2_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});
     Tensor gPostsum_mnl = local_tile(mPostsum_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
     Tensor gPostsumSrc0_mnl = local_tile(mPostsumSrc0_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});
     Tensor gPostsumSrc2_mnl = local_tile(mPostsumSrc2_mnl, blk_shape_MNK, make_coord(_,_,_), Step<_1,_1, X>{});
@@ -453,7 +568,10 @@ public:
     const uint dst1_n_idx = (N/2)*(dst1_op.get_op()%2)/size<1>(blk_shape_MNK);
 
     Tensor gC = gC_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);                                                   // (BLK_M,BLK_N)
-    Tensor gD = gD_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);     
+    Tensor gC2 = gC2_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);
+    Tensor gD = gD_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);
+    Tensor gD2 = gD2_mnl(_,_,m_coord + dst1_m_idx,n_coord + dst1_n_idx,l_coord);
+
     Tensor gPostsum = gPostsum_mnl(_,_,m_coord,n_coord,l_coord);
     Tensor gPostsumSrc0 = gPostsumSrc0_mnl(_,_,m_coord,n_coord,l_coord);
     Tensor gPostsumSrc2 = gPostsumSrc2_mnl(_,_,m_coord,n_coord,l_coord);
@@ -476,7 +594,9 @@ public:
     // Tile gD and gC by the shape of SmemLayout first
     auto tile  = make_shape(size<0>(sAcc), size<1>(sAcc));
     Tensor gCt = flat_divide(gC, tile);                                                // (SMEM_M,SMEM_N,TILE_M,TILE_N)
+    Tensor gC2t = flat_divide(gC2, tile);
     Tensor gDt = flat_divide(gD, tile);                                                // (SMEM_M,SMEM_N,TILE_M,TILE_N)
+    Tensor gD2t = flat_divide(gD2, tile);
     Tensor gPostsumt = flat_divide(gPostsum, tile);
     Tensor gPostsumSrc0t = flat_divide(gPostsumSrc0, tile);
     Tensor gPostsumSrc2t = flat_divide(gPostsumSrc2, tile);
@@ -487,7 +607,9 @@ public:
     auto thread_s2r     = tiled_s2r.get_thread_slice(thread_idx);
     Tensor tSR_sAcc = thread_s2r.partition_S(sAcc);                      //               ((Atom,AtomNum),ATOM_M,ATOM_N)
     Tensor tSR_gC = thread_s2r.partition_D(gCt);                         // ((Atom,AtomNum),ATOM_M,ATOM_N,TILE_M,TILE_N)
+    Tensor tSR_gC2 = thread_s2r.partition_D(gC2t);
     Tensor tSR_gD = thread_s2r.partition_D(gDt);                         // ((Atom,AtomNum),ATOM_M,ATOM_N,TILE_M,TILE_N)
+    Tensor tSR_gD2 = thread_s2r.partition_D(gD2t);
     Tensor tSR_gPostsum = thread_s2r.partition_D(gPostsumt);
     Tensor tSR_gPostsumSrc0 = thread_s2r.partition_D(gPostsumSrc0t);
     Tensor tSR_gPostsumSrc2 = thread_s2r.partition_D(gPostsumSrc2t);
@@ -578,6 +700,8 @@ public:
       }
     }
 
+    level_1_add_m0(problem_shape_mnkl, grid_shape, blk_shape_MNK, blk_coord_mnkl, accumulators, tiled_mma, thread_idx, dst1_op);
+
     // For each tiling needed for SmemLayout to cover shape(gD)
     CUTLASS_PRAGMA_UNROLL
     for (int step_m = 0; step_m < size<2>(cDt); ++step_m) {
@@ -605,6 +729,7 @@ public:
         synchronize();
 
         Tensor tSR_gDmn = tSR_gD(_,_,_,step_m,step_n);
+        Tensor tSR_gD2mn = tSR_gD2(_,_,_,step_m,step_n);
         Tensor tSR_gPostsummn = tSR_gPostsum(_,_,_,step_m,step_n);
         Tensor tSR_gPostsumSrc0mn = tSR_gPostsumSrc0(_,_,_,step_m,step_n);
         Tensor tSR_gPostsumSrc2mn = tSR_gPostsumSrc2(_,_,_,step_m,step_n);
@@ -685,10 +810,22 @@ public:
             }
           }
         } else {
+          if (params.ptr_D2 != nullptr && epilogue_op.is_source_needed()) {
+            CUTLASS_PRAGMA_UNROLL
+            for (int m = 0; m < size<1>(tSR_gD2mn); ++m) {
+              CUTLASS_PRAGMA_UNROLL
+              for (int n = 0; n < size<2>(tSR_gD2mn); ++n) {
+                if (elem_less(tSR_cDmn(0,m,n), take<0,2>(residue_mnk))) {
+                  copy(CopyAtomR2G{}, tSR_rAcc(_,m,n), tSR_gD2mn(_,m,n));
+                }
+              }
+            }
+          }
           
           if (epilogue_op.is_source_needed()) {
             // source is needed
             Tensor tSR_gCmn = tSR_gC(_,_,_,step_m,step_n);
+            Tensor tSR_gC2mn = tSR_gC2(_,_,_,step_m,step_n);
 
             // Step 5. Copy C from GMEM to a fragment
             CUTLASS_PRAGMA_UNROLL
@@ -700,6 +837,9 @@ public:
                   CUTLASS_PRAGMA_UNROLL
                   for (int i = 0; i < size<0>(tSR_rAcc); ++i) {
                     tSR_rC(i,m,n) = tSR_gCmn(i,m,n);
+                    if (params.ptr_C2 != nullptr) {
+                      tSR_rC(i,m,n) += tSR_gC2mn(i,m,n);
+                    }
                   }
                 }
               }

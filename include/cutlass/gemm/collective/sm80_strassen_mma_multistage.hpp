@@ -730,8 +730,8 @@ struct CollectiveStrassenMma<
     auto& stride_a = mainloop_params.dA;
     auto& stride_b = mainloop_params.dB;
 
-    Tensor presum_mA_mkl = make_tensor(make_gmem_ptr(mainloop_params.ptr_presum_A), make_shape(4*halfM,halfK,init_L), make_stride(get<0>(stride_a)/2, get<1>(stride_a), get<2>(stride_a))); //(m,k,l)
-    Tensor presum_mB_nkl = make_tensor(make_gmem_ptr(mainloop_params.ptr_presum_B), make_shape(halfN,4*halfK,init_L), make_stride(get<0>(stride_b), get<1>(stride_b)/2, get<2>(stride_b))); //(n,k,l)
+    Tensor presum_mA_mkl = make_tensor(make_gmem_ptr(mainloop_params.ptr_presum_A), make_shape(4*halfM,halfK,init_L), make_stride(halfK, get<1>(stride_a), get<2>(stride_a))); //(m,k,l)
+    Tensor presum_mB_nkl = make_tensor(make_gmem_ptr(mainloop_params.ptr_presum_B), make_shape(halfN,4*halfK,init_L), make_stride(get<0>(stride_b), halfN, get<2>(stride_b))); //(n,k,l)
 
     // Make tiled views, defer the slice
     Tensor gA00_mkl = local_tile(domain_offset(make_coord(0, 0, 0), mA_mkl), TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});
@@ -766,55 +766,83 @@ struct CollectiveStrassenMma<
     auto load_inputs_a = take<0, 8  >(load_inputs);
     auto load_inputs_b = take<8, 8+8>(load_inputs);
 
-    if constexpr (StrassenMiGroup::hasM0()) {
-      if (!is_fused || sub_m_idx == 0) {
-        return make_tuple(get<MmaStrassen::APresums::A0>(load_inputs_a),
-                          get<MmaStrassen::BPresums::B0>(load_inputs_b));
-      }
-    }
-    if constexpr (StrassenMiGroup::hasM1()) {
-      if (!is_fused || sub_m_idx == 1) {
-        return make_tuple(get<MmaStrassen::APresums::A1>(load_inputs_a),
-                          get<MmaStrassen::BPresums::B2>(load_inputs_b));
-      }
-    }
-
     constexpr bool IsFusedM2M3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
     constexpr bool IsFusedM2M3M6 = StrassenMiGroup::hasM6() && IsFusedM2M3;
     constexpr bool IsFusedM4M5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
+    constexpr int MiCount = int(StrassenMiGroup::hasM0()) + int(StrassenMiGroup::hasM1()) +
+                            int(StrassenMiGroup::hasM2()) + int(StrassenMiGroup::hasM3()) +
+                            int(StrassenMiGroup::hasM4()) + int(StrassenMiGroup::hasM5()) +
+                            int(StrassenMiGroup::hasM6());
 
-    if constexpr (StrassenMiGroup::hasM2()) {
-      if (!IsFusedM2M3 || sub_m_idx == 0) {
+    if constexpr (StrassenMiGroup::numMs() == 1) {
+      if constexpr (StrassenMiGroup::hasM0()) {
+        return make_tuple(get<MmaStrassen::APresums::A0>(load_inputs_a),
+                          get<MmaStrassen::BPresums::B0>(load_inputs_b));
+      } else if constexpr (StrassenMiGroup::hasM1()) {
+        return make_tuple(get<MmaStrassen::APresums::A1>(load_inputs_a),
+                          get<MmaStrassen::BPresums::B2>(load_inputs_b));
+      } else if constexpr (StrassenMiGroup::hasM2()) {
         return make_tuple(get<MmaStrassen::APresums::S2>(load_inputs_a),
                           get<MmaStrassen::BPresums::S3>(load_inputs_b));
-      }
-    }
-    if constexpr (StrassenMiGroup::hasM3()) {
-      if (!IsFusedM2M3 || sub_m_idx == 1) {
+      } else if constexpr (StrassenMiGroup::hasM3()) {
         return make_tuple(get<StrassenMiGroup::APresums::A02>(load_inputs_a),
                           get<StrassenMiGroup::BPresums::B31>(load_inputs_b));
-      }
-    }
-    if constexpr (StrassenMiGroup::hasM4()) {
-      if (!IsFusedM4M5 || sub_m_idx == 0) {
+      } else if constexpr (StrassenMiGroup::hasM4()) {
         return make_tuple(get<StrassenMiGroup::APresums::S1>(load_inputs_a),
                           get<StrassenMiGroup::BPresums::B10>(load_inputs_b));
-      }
-    }
-    if constexpr (StrassenMiGroup::hasM5()) {
-      if (!IsFusedM4M5 || sub_m_idx == 1) {
+      } else if constexpr (StrassenMiGroup::hasM5()) {
         return make_tuple(get<StrassenMiGroup::APresums::A1S2>(load_inputs_a),
                           get<StrassenMiGroup::BPresums::B3>(load_inputs_b));
-      }
-    }
-    if constexpr (StrassenMiGroup::hasM6()) {
-      if (!IsFusedM2M3M6 || sub_m_idx == 2) {
+      } else {
         return make_tuple(get<StrassenMiGroup::APresums::A3>(load_inputs_a),
                           get<StrassenMiGroup::BPresums::S3B2>(load_inputs_b));
       }
-    }
+    } else {
+      if constexpr (StrassenMiGroup::hasM0()) {
+        if (!is_fused || sub_m_idx == 0) {
+          return make_tuple(get<MmaStrassen::APresums::A0>(load_inputs_a),
+                            get<MmaStrassen::BPresums::B0>(load_inputs_b));
+        }
+      }
+      if constexpr (StrassenMiGroup::hasM1()) {
+        if (!is_fused || sub_m_idx == 1) {
+          return make_tuple(get<MmaStrassen::APresums::A1>(load_inputs_a),
+                            get<MmaStrassen::BPresums::B2>(load_inputs_b));
+        }
+      }
+      if constexpr (StrassenMiGroup::hasM2()) {
+        if (!IsFusedM2M3 || sub_m_idx == 0) {
+          return make_tuple(get<MmaStrassen::APresums::S2>(load_inputs_a),
+                            get<MmaStrassen::BPresums::S3>(load_inputs_b));
+        }
+      }
+      if constexpr (StrassenMiGroup::hasM3()) {
+        if (!IsFusedM2M3 || sub_m_idx == 1) {
+          return make_tuple(get<StrassenMiGroup::APresums::A02>(load_inputs_a),
+                            get<StrassenMiGroup::BPresums::B31>(load_inputs_b));
+        }
+      }
+      if constexpr (StrassenMiGroup::hasM4()) {
+        if (!IsFusedM4M5 || sub_m_idx == 0) {
+          return make_tuple(get<StrassenMiGroup::APresums::S1>(load_inputs_a),
+                            get<StrassenMiGroup::BPresums::B10>(load_inputs_b));
+        }
+      }
+      if constexpr (StrassenMiGroup::hasM5()) {
+        if (!IsFusedM4M5 || sub_m_idx == 1) {
+          return make_tuple(get<StrassenMiGroup::APresums::A1S2>(load_inputs_a),
+                            get<StrassenMiGroup::BPresums::B3>(load_inputs_b));
+        }
+      }
+      if constexpr (StrassenMiGroup::hasM6()) {
+        if (!IsFusedM2M3M6 || sub_m_idx == 2) {
+          return make_tuple(get<StrassenMiGroup::APresums::A3>(load_inputs_a),
+                            get<StrassenMiGroup::BPresums::S3B2>(load_inputs_b));
+        }
+      }
 
-    CUTE_GCC_UNREACHABLE;
+      return make_tuple(get<0>(load_inputs_a), get<0>(load_inputs_b));
+    }
   }
 
   /// Perform a collective-scoped matrix multiply-accumulate
@@ -924,14 +952,14 @@ struct CollectiveStrassenMma<
     int new_n_coord = (n_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) >> mainloop_params.get_presum_tile_log_divider_a();
 
     PresumGlobalIteratorA iter_PresumA(
-      (ElementA*)mainloop_params.ptr_A, K, //params.ref_A.stride(0),
+      (ElementA*)mainloop_params.ptr_A, get<0>(mainloop_params.dA),
       {M, K},
       {m_coord * size<0>(TileShape{}), n_coord * size<1>(TileShape{}) /* (1 << params.presum_a_log_tile_multiplier)*/},
-      block_idx, {0, 0}, thread_idx, {0, halfK}, {halfM, 0}, {halfM, halfK}
+      block_idx, {0, 0}, thread_idx, {0, halfK}, {halfM, 0}, {halfM, halfK} //TODO: these halfM, halfK are wrong
     );
 
     PresumGlobalIteratorB iter_PresumB(
-      (ElementB*)mainloop_params.ptr_B, N, //params.ref_B.stride(0),
+      (ElementB*)mainloop_params.ptr_B, get<1>(mainloop_params.dB),
       {K, N},
       {m_coord * size<0>(TileShape{}), n_coord * size<1>(TileShape{})}, //Mma::PresumShapeB::kM * (1 << params.presum_b_log_tile_multiplier), threadblock_tile_offset.n() * Mma::PresumShapeB::kN},
       block_idx, {0, 0}, thread_idx, {0, halfN}, {halfK, 0}, {halfK, halfN}
@@ -1302,6 +1330,7 @@ struct CollectiveStrassenMma<
         // Transform before compute
         cute::transform(tCrA(_,_,k_block), TransformA{});
         cute::transform(tCrB(_,_,k_block), TransformB{});
+
         // Thread-level register gemm for k_block
         cute::gemm(tiled_mma, accum, tCrA(_,_,k_block), tCrB(_,_,k_block), src_accum);
       });
