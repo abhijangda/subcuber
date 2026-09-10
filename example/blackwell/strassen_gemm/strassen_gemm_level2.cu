@@ -141,7 +141,7 @@ using EpilogueSchedule = cutlass::epilogue::EpilogueSimtVectorized;
 using TileShape = cute::Shape<cute::_128, cute::_256, cute::_16>;
 using ThreadBlockShapeM2M6 = TileShape;
 using ThreadBlockShapeM0M1 = cute::Shape<cute::_128, cute::_256, cute::_16>;
-static const int Stages = 5;
+static const int Stages = 3;
 using PresumTileShapeA = cute::Shape<cute::_4, cute::_256>;
 using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
 #elif defined(TILE_SIZE_128)
@@ -163,7 +163,6 @@ constexpr int kStrassenLevel = 1;
 
 #if defined(PRESUM)
   using ThreadBlockShape = TileShape;
-  using InstructionShape = cutlass::gemm::GemmShape<1,1,1>;
   const bool splitK = SPLIT_K;
   const bool sub_gemm_parallel = SUB_GEMM_PARALLEL;
   constexpr int StageCountTypeM0 = Stages;
@@ -179,46 +178,46 @@ constexpr int kStrassenLevel = 1;
 
   using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<2, 0, ThreadBlockShape,
                                                               AllPresumsKernel>,
-                                                StrassenLevel1M0Group<2, 0, ThreadBlockShape, ClusterShape,  5,
+                                                StrassenLevel1M0Group<2, 0, ThreadBlockShape, ClusterShape,  Stages,
                                                                     RWMTypes<KeepAccums>,
-                                                                    RWCTypes<CUW<0, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
+                                                                    RWCTypes<CUW<0, LayoutM0, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
                                                                     AllPresumsM0>
                                                                     >;
   
   template<int level_1_idx>
   using StrassenGroups = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, ThreadBlockShape,
                                                               AllPresumsKernel>,
-                                              StrassenLevel1M0Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, 5,
+                                              StrassenLevel1M0Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<KeepAccums>,
-                                                                    RWCTypes<CUW<0, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
+                                                                    RWCTypes<CUW<0, LayoutM0, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
                                                                     AllPresumsM0>,
-                                              StrassenLevel1M1Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, 5,
+                                              StrassenLevel1M1Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<ContinueAccums>,
                                                                     RWCTypes<CUW<0, LayoutFinal,   LayoutNone, Expr<Plus<1>>>>,//C0 = C0+M1
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M2Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, 5,
+                                              StrassenLevel1M2Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Plus<2>>>>,
-                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<2>>, Expr<Plus<0, MemGlobal, LayoutInterim1D>>>>,//C1 = C1+M2 ; Reg = C1
+                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<2>>, Expr<Plus<0, MemGlobal, LayoutM0>>>>,//C1 = C1+M2 ; Reg = C1
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M3Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, 5,
+                                              StrassenLevel1M3Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<3, LayoutFinal, LayoutNone, Expr<Plus<3>>>>,
                                                                     RWCTypes<CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C2 = C1(Reg)+M3 
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M4Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, 5,
+                                              StrassenLevel1M4Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<0, LayoutFinal, LayoutNone, Expr<Plus<4>>>>,
                                                                     RWCTypes<CUW<0, LayoutInterim1D, LayoutNone, Expr<Plus<4>>>, //C1 = C1+M4
                                                                              CUW<3, LayoutFinal,   LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>,//C3 = C2+M4
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M5Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, 5,
+                                              StrassenLevel1M5Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>>>,
                                                                     RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>,
                                                                                                                                  Plus<0, MemGlobal, LayoutInterim1D>>>>, //C1 = C1+M5
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M6Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, 5,
+                                              StrassenLevel1M6Group<kStrassenLevel, level_1_idx, ThreadBlockShape, ClusterShape, Stages,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Plus<6>>>>,
                                                                     RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6

@@ -264,7 +264,6 @@ using StrassenGroups = MmaStrassen::StrassenLevel1Groups<StrassenPresum<kStrasse
                                                           sub_gemm_parallel>; // Layout of C matrix
 #elif defined(PRESUM)
   using ThreadBlockShape = TileShape;
-  using InstructionShape = cutlass::gemm::GemmShape<1,1,1>;
   const bool splitK = SPLIT_K;
   const bool sub_gemm_parallel = SUB_GEMM_PARALLEL;
   constexpr int StageCountTypeM0 = Stages;
