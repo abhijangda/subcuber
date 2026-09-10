@@ -91,7 +91,7 @@ using BlackwellF32Level2StrassenGemmKernels = cutlass::gemm::device::StrassenGem
   float, BlackwellF32Layout, BlackwellF32SubMatLayout,
   float, BlackwellF32Level2ClusterShape, cute::Int<kBlackwellF32Level2StagesM0M1>,
   BlackwellF32Level2PresumTileShape, BlackwellF32Level2PresumTileShape,
-  cutlass::gemm::device::PresumOpt<0, 0, 0, 0>, 1, 4, 4>;
+  cutlass::gemm::device::PresumOpt<>, 1, 4, 4>;
 
 using BlackwellF32SWInterleavedPresumLevel2_128x256Adapter =
   cutlass::gemm::device::StrassenGemmLevel2UniversalAdapter<

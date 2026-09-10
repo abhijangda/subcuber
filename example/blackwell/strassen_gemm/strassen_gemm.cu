@@ -268,7 +268,7 @@ using StrassenGroups = MmaStrassen::StrassenLevel1Groups<StrassenPresum<kStrasse
   const bool sub_gemm_parallel = SUB_GEMM_PARALLEL;
   constexpr int StageCountTypeM0 = Stages;
 
-  using PresumOpts = cutlass::gemm::device::PresumOpt<0, 0, 0, 0>;
+  using PresumOpts = cutlass::gemm::device::PresumOpt<>;
 
   //[m0], [m1], [m2], [m3], [m4], [m5], [m6]
   using AllPresumsKernel = AllPresums<>;
@@ -496,7 +496,7 @@ cudaError_t CutlassSgemmNN(
   args.scheduler.raster_order = RasterOrderOptions::AlongN;
   args.scheduler.max_swizzle_size = 1;
 
-  cutlass::Status status;// = CutlassGemm::can_implement(args);
+  cutlass::Status status = CutlassGemm::can_implement(args);
   // if (status != cutlass::Status::kSuccess) {
     // printf("invalid problem");
     // return cudaErrorInvalidValue;

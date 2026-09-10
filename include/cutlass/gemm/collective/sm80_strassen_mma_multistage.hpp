@@ -611,18 +611,19 @@ struct CollectiveStrassenMma<
               presum_tile_log_multiplier_b_;
     }
 
+    //Disable log divider
     CUTLASS_HOST_DEVICE
     uint32_t get_presum_tile_log_divider_a() const {
-      return (PresumOpt::FixedPresumTileDividerLogA != UINT32_MAX) ? 
-              PresumOpt::FixedPresumTileDividerLogA :
-              presum_tile_log_divider_a_;
+      return 0;//(PresumOpt::FixedPresumTileDividerLogA != UINT32_MAX) ? 
+              // PresumOpt::FixedPresumTileDividerLogA :
+              // presum_tile_log_divider_a_;
     }
 
     CUTLASS_HOST_DEVICE
     uint32_t get_presum_tile_log_divider_b() const {
-      return (PresumOpt::FixedPresumTileDividerLogB != UINT32_MAX) ? 
-              PresumOpt::FixedPresumTileDividerLogB :
-              presum_tile_log_divider_b_;
+      return 0;//(PresumOpt::FixedPresumTileDividerLogB != UINT32_MAX) ? 
+              // PresumOpt::FixedPresumTileDividerLogB :
+              // presum_tile_log_divider_b_;
     }
 
     Arguments() : Arguments(nullptr, StrideA{}, nullptr, StrideB{}) {}
@@ -954,14 +955,14 @@ struct CollectiveStrassenMma<
     PresumGlobalIteratorA iter_PresumA(
       (ElementA*)mainloop_params.ptr_A, get<0>(mainloop_params.dA),
       {M, K},
-      {m_coord * size<0>(TileShape{}), n_coord * size<1>(TileShape{}) /* (1 << params.presum_a_log_tile_multiplier)*/},
-      block_idx, {0, 0}, thread_idx, {0, halfK}, {halfM, 0}, {halfM, halfK} //TODO: these halfM, halfK are wrong
+      {m_coord * size<0>(TileShape{}), n_coord * size<1>(TileShape{}) * (1 << mainloop_params.get_presum_tile_log_multiplier_a())},
+      block_idx, {0, 0}, thread_idx, {0, halfK}, {halfM, 0}, {halfM, halfK}
     );
 
     PresumGlobalIteratorB iter_PresumB(
       (ElementB*)mainloop_params.ptr_B, get<1>(mainloop_params.dB),
       {K, N},
-      {m_coord * size<0>(TileShape{}), n_coord * size<1>(TileShape{})}, //Mma::PresumShapeB::kM * (1 << params.presum_b_log_tile_multiplier), threadblock_tile_offset.n() * Mma::PresumShapeB::kN},
+      {m_coord * size<0>(TileShape{}) * (1 << mainloop_params.get_presum_tile_log_multiplier_b()), n_coord * size<1>(TileShape{})},
       block_idx, {0, 0}, thread_idx, {0, halfN}, {halfK, 0}, {halfK, halfN}
     );
 
@@ -1014,8 +1015,8 @@ struct CollectiveStrassenMma<
     auto presumBComputeLoads = StrassenMiGroup::AllPresums::BPresumComputeLoads();
     const bool need_presum_A = presumAComputeLoads.numAccess() > 0;
     const bool need_presum_B = presumBComputeLoads.numAccess() > 0;
-    const int presumComputeIterationsA = kPresumComputeIterationsA;// * (1<<presum_a_log_tile_multiplier);
-    const int presumComputeIterationsB = kPresumComputeIterationsB;// * (1<<presum_b_log_tile_multiplier);
+    const int presumComputeIterationsA = kPresumComputeIterationsA * (1 << mainloop_params.get_presum_tile_log_multiplier_a());
+    const int presumComputeIterationsB = kPresumComputeIterationsB * (1 << mainloop_params.get_presum_tile_log_multiplier_b());
 
     auto presum_load = [&] (bool is_prologue) {
       if (need_presum_A && presumIter < presumComputeIterationsA*1 - (PresumStages - 1)) {
