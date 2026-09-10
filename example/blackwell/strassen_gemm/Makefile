@@ -41,8 +41,8 @@ strassen_winograd_presum_256_splitk: strassen_gemm.cu
 strassen_winograd_presum_256_level2: strassen_gemm_level2.cu
 	$(NVCC) $(NVCC_FLAGS) $< $(INCLUDES) -DPRESUM -DTILE_SIZE_256 -o $@ $(GENCODE) -DSUB_GEMM_PARALLEL
 
-# strassen_winograd_presum_128_level2: strassen_gemm_level2.cu
-# 	$(NVCC) $(NVCC_FLAGS) $< $(INCLUDES) -DPRESUM -DTILE_SIZE_128 -o $@ $(GENCODE) -DSUB_GEMM_PARALLEL
+strassen_winograd_presum_128_level2: strassen_gemm_level2.cu
+	$(NVCC) $(NVCC_FLAGS) $< $(INCLUDES) -DPRESUM -DTILE_SIZE_128 -o $@ $(GENCODE) -DSUB_GEMM_PARALLEL
 
 # Clean up generated files
 clean:
