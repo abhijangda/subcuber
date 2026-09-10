@@ -68,7 +68,8 @@ BLACKWELL_V2_SRCS := \
 	kernels/blackwell/strassen_winograd/blackwell_f64_sw_fused_presum_32x64.cu \
 	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_128x256.cu \
 	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_64x128.cu \
-	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_128x256_then_64x128.cu
+	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_128x256_then_64x128.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_level_2_128x256.cu
 
 VOLTA_CUBIC_SRCS := \
 	kernels/volta/cubic/volta_f32_cutlass_128x128.cu \
