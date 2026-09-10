@@ -148,12 +148,12 @@ using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
 #elif defined(TILE_SIZE_128)
 using TileShape = cute::Shape<cute::_64, cute::_128, cute::_16>;
 using ThreadBlockShapeM2M6 = TileShape;
-using ThreadBlockShapeM0M1 = cute::Shape<cute::_64, cute::_128, cute::_16>;
-using PresumTileShapeA = cute::Shape<cute::_4, cute::_128>;
-using PresumTileShapeB = cute::Shape<cute::_4, cute::_128>;
-// using ThreadBlockShapeM0M1 = cute::Shape<cute::_128, cute::_256, cute::_16>;
-// using PresumTileShapeA = cute::Shape<cute::_4, cute::_256>;
-// using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
+// using ThreadBlockShapeM0M1 = cute::Shape<cute::_64, cute::_128, cute::_16>;
+// using PresumTileShapeA = cute::Shape<cute::_4, cute::_128>;
+// using PresumTileShapeB = cute::Shape<cute::_4, cute::_128>;
+using ThreadBlockShapeM0M1 = cute::Shape<cute::_128, cute::_256, cute::_16>;
+using PresumTileShapeA = cute::Shape<cute::_4, cute::_256>;
+using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
 static const int Stages = 3;
 #endif
 
@@ -189,12 +189,12 @@ constexpr int kStrassenLevel = 1;
   using StrassenGroups = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, ThreadBlockShapeM0M1,
                                                               AllPresumsKernel>,
                                               StrassenLevel1M0Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM0M1, ClusterShape, StagesM0M1,
-                                                                    RWMTypes<KeepAccums>,
+                                                                    RWMTypes<>,
                                                                     RWCTypes<CUW<0, LayoutM0, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
                                                                     AllPresumsM0>,
                                               StrassenLevel1M1Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM0M1, ClusterShape, StagesM0M1,
-                                                                    RWMTypes<ContinueAccums>,
-                                                                    RWCTypes<CUW<0, LayoutFinal,   LayoutNone, Expr<Plus<1>>>>,//C0 = C0+M1
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<0, MemGlobal, LayoutM0>>>>,//C0 = C0+M1
                                                                     AllPresumsM1To6>,
                                               StrassenLevel1M2Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM2M6, ClusterShape, StagesM2M6,
                                                                     RWMTypes<>,
@@ -224,7 +224,8 @@ constexpr int kStrassenLevel = 1;
                                                                     RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                     AllPresumsM1To6>
                                               >;
-  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0, 1>>,
+  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 1>>,
                                                          ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
                                                          ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 3>>,
                                                          ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>,
