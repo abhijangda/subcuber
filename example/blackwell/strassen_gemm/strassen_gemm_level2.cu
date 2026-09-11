@@ -171,9 +171,9 @@ constexpr int kStrassenLevel = 1;
   using PresumOpts = cutlass::gemm::device::PresumOpt<>;//0, 0, 0, 0>;
 
   //[m0], [m1], [m2], [m3], [m4], [m5], [m6]
-  using AllPresumsKernel = AllPresums<>;
   using AllPresumsM0    = AllPresums<PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,    PresumCompute,  PresumCompute,    PresumCompute>;
   // using AllPresumsM0    = AllPresums<PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,    PresumGlobalKernel,  PresumGlobalKernel,    PresumGlobalKernel>;
+  using AllPresumsKernel = AllPresumsM0;
   using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable>;
   static const auto LayoutM0 = (get<0>(ThreadBlockShapeM0M1{}) == get<0>(ThreadBlockShapeM2M6{})) ? LayoutInterim1D : LayoutInterim;
 
