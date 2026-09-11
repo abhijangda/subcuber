@@ -315,6 +315,8 @@ struct StrassenGemm {
     typename Epilogue::SharedStorage epilogue;
   };
 
+  static const size_t SharedStorageSize = sizeof(SharedStorage);
+
   //
   // Methods
   //

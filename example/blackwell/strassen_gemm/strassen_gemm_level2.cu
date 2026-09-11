@@ -34,7 +34,7 @@
   matrix multiply kernel to verify its correctness.
 
   The CUTLASS Gemm template is instantiated in the function CutlassSgemmNN. This is kernel computes
-  the general matrix product (GEMM) using single-precision doubleing-point arithmetic and assumes
+  the general matrix product (GEMM) using single-precision floating-point arithmetic and assumes
   all matrices have column-major layout.
 
   The threadblock tile size is chosen as 128x128x8 which offers good performance for large matrices.
@@ -60,6 +60,9 @@
 
 // Helper methods to check for errors
 #include "helper.h"
+
+#define MY_PRINTF(...) ;//printf(__VA_ARGS__)
+
 #include "cuda/allocate_float_matrices.cuh"
 #include "cuda/strassen_reference_l1.cuh"
 
@@ -71,13 +74,21 @@
 #include "cutlass/gemm/device/strassen_gemm.h"
 #include "cutlass/cutlass.h"
 
+#include "cutlass/cutlass.h"
+#include "cutlass/arch/mma_sm100.h"
+#include "cutlass/epilogue/collective/collective_strassen_builder.hpp"
+#include "cutlass/epilogue/dispatch_policy.hpp"
+#include "cutlass/epilogue/thread/strassen_linear_combination.h"
+#include "cutlass/gemm/collective/collective_strassen_gemm_builder.hpp"
+#include "cutlass/gemm/device/strassen_gemm_universal_adapter.h"
+#include "cutlass/gemm/kernel/strassen_gemm_universal.hpp"
+#include "cutlass/kernel_hardware_info.h"
 #include "cutlass/util/command_line.h"
-#include "cutlass/util/host_tensor.h"
-#include "cutlass/util/reference/device/gemm.h"
-#include "cutlass/util/reference/host/tensor_compare.h"
-#include "cutlass/util/reference/host/tensor_copy.h"
-#include "cutlass/util/reference/host/tensor_fill.h"
-#include "cutlass/util/tensor_view_io.h"
+#include "cutlass/util/device_memory.h"
+#include "cutlass/util/packed_stride.hpp"
+
+#include "cute/tensor.hpp"
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 // This function defines a CUTLASS GEMM kernel instantiation, constructs its parameters object,
@@ -86,24 +97,24 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 using EpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
-  double,                                     // <- data type of output matrix
-  2,                                         // <- This is the number of elements per
+  float,                                     // <- data type of output matrix
+  1,                                         // <- This is the number of elements per
                                              // vectorized memory access. For half
                                              // precision, it's 8 elements. This becomes
                                              // the vector width of math instructions in
                                              // epilogue too
-  double,                                // <- data type of accumulator
-  double>;  // <- data type for alpha/beta in linear combination function
+  float,                                // <- data type of accumulator
+  float>;  // <- data type for alpha/beta in linear combination function
 
 using InterimEpilogueOp = cutlass::epilogue::thread::StrassenLinearCombination<
-  double,                                     // <- data type of output matrix
-  2,                                         // <- This is the number of elements per
+  float,                                     // <- data type of output matrix
+  4,                                         // <- This is the number of elements per
                                              // vectorized memory access. For half
                                              // precision, it's 8 elements. This becomes
                                              // the vector width of math instructions in
                                              // epilogue too
-  double,                                // <- data type of accumulator
-  double>;  // <- data type for alpha/beta in linear combination function
+  float,                                // <- data type of accumulator
+  float>;  // <- data type for alpha/beta in linear combination function
 
 using ColumnMajor = cutlass::layout::ColumnMajor;
 using RowMajor = cutlass::layout::RowMajor;
@@ -118,103 +129,185 @@ using RowMajor = cutlass::layout::RowMajor;
 
 const auto StrassenKind = StrassenType::StrassenWinograd;
 
-using ThreadBlockShape128 = cutlass::gemm::GemmShape<128, 128, 16>;
-using WarpShape64 = cutlass::gemm::GemmShape<32, 64, 16>;
-using ThreadBlockShape64 = cutlass::gemm::GemmShape<128,64,16>;
-using WarpShape32 = cutlass::gemm::GemmShape<32, 32, 16>;
-using InstructionShape = cutlass::gemm::GemmShape<16,8,4>;
+using Layout = cutlass::layout::RowMajor;
+using SubMatLayoutA = cutlass::layout::OriginalLayout;
+using SubMatLayoutB = cutlass::layout::OriginalLayout;
+using SubMatLayoutC = cutlass::layout::OriginalLayout;
+using ClusterShape = cute::Shape<cute::_2, cute::_1, cute::_1>;
+using KernelSchedule = cutlass::gemm::KernelMultistage;
+using EpilogueSchedule = cutlass::epilogue::EpilogueSimtVectorized;
+
+#ifdef TILE_SIZE_256
+using TileShape = cute::Shape<cute::_128, cute::_256, cute::_16>;
+using ThreadBlockShapeM2M6 = TileShape;
+using ThreadBlockShapeM0M1 = cute::Shape<cute::_128, cute::_256, cute::_16>;
+static const int StagesM0M1 = 3;
+static const int StagesM2M6 = 5;
+using PresumTileShapeA = cute::Shape<cute::_4, cute::_256>;
+using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
+#elif defined(TILE_SIZE_128)
+using TileShape = cute::Shape<cute::_64, cute::_128, cute::_16>;
+using ThreadBlockShapeM2M6 = TileShape;
+// using ThreadBlockShapeM0M1 = cute::Shape<cute::_64, cute::_128, cute::_16>;
+// using PresumTileShapeA = cute::Shape<cute::_4, cute::_128>;
+// using PresumTileShapeB = cute::Shape<cute::_4, cute::_128>;
+using ThreadBlockShapeM0M1 = cute::Shape<cute::_128, cute::_256, cute::_16>;
+using PresumTileShapeA = cute::Shape<cute::_4, cute::_256>;
+using PresumTileShapeB = cute::Shape<cute::_4, cute::_256>;
+static const int Stages = 3;
+#endif
 
 using namespace MmaStrassen;
+using ProblemShape = cute::Shape<int, int, int, int>;
+
+constexpr int kStrassenLevel = 1;
 
 #if defined(PRESUM)
-
-  #if defined(TILE_SIZE_128)
-    using ThreadBlockShape = ThreadBlockShape128;
-    using WarpShape = WarpShape64;
-  #elif defined(TILE_SIZE_64)
-    using ThreadBlockShape = ThreadBlockShape64;
-    using WarpShape = WarpShape32;
-  #endif
-
+  using ThreadBlockShape = TileShape;
   const bool splitK = SPLIT_K;
   const bool sub_gemm_parallel = SUB_GEMM_PARALLEL;
-  constexpr int kStrassenLevel = 1;
+  constexpr int StageCountTypeM0 = StagesM0M1;
+
+  using PresumOpts = cutlass::gemm::device::PresumOpt<>;//0, 0, 0, 0>;
 
   //[m0], [m1], [m2], [m3], [m4], [m5], [m6]
   using AllPresumsKernel = AllPresums<>;
-  using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                     PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+  using AllPresumsM0    = AllPresums<PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,   PresumCompute,    PresumCompute,  PresumCompute,    PresumCompute>;
   // using AllPresumsM0    = AllPresums<PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,   PresumGlobalKernel,    PresumGlobalKernel,  PresumGlobalKernel,    PresumGlobalKernel>;
   using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable>;
+  static const auto LayoutM0 = (get<0>(ThreadBlockShapeM0M1{}) == get<0>(ThreadBlockShapeM2M6{})) ? LayoutInterim1D : LayoutInterim;
 
-  using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<2, 0, ThreadBlockShape,
+  using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<2, 0, ThreadBlockShapeM0M1,
                                                               AllPresumsKernel>,
-                                                StrassenLevel1M0Group<2, 0, ThreadBlockShape, WarpShape, 3,
+                                                StrassenLevel1M0Group<2, 0, ThreadBlockShapeM0M1, ClusterShape,  StagesM0M1,
                                                                     RWMTypes<KeepAccums>,
-                                                                    RWCTypes<CUW<0, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
+                                                                    RWCTypes<CUW<0, LayoutM0, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
                                                                     AllPresumsM0>
                                                                     >;
   
   template<int level_1_idx>
-  using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, level_1_idx, ThreadBlockShape,
+  using StrassenGroups = StrassenLevel1Groups<StrassenPresum<kStrassenLevel, 0, ThreadBlockShapeM0M1,
                                                               AllPresumsKernel>,
-                                              StrassenLevel1M0Group<1, level_1_idx, ThreadBlockShape, WarpShape, 3,
-                                                                    RWMTypes<KeepAccums>,
-                                                                    RWCTypes<CUW<0, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>>,//M0 = M0
+                                              StrassenLevel1M0Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM0M1, ClusterShape, StagesM0M1,
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<0, LayoutM0, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
                                                                     AllPresumsM0>,
-                                              StrassenLevel1M1Group<1, level_1_idx, ThreadBlockShape, WarpShape, 3,
-                                                                    RWMTypes<ContinueAccums>,
-                                                                    RWCTypes<CUW<0, LayoutFinal,   LayoutNone, Expr<Plus<1>>>>,//C0 = M0(reg)+M1
+                                              StrassenLevel1M1Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM0M1, ClusterShape, StagesM0M1,
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<0, MemGlobal, LayoutM0>>>>,//C0 = C0+M1
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M2Group<1, level_1_idx, ThreadBlockShape, WarpShape, 3,
+                                              StrassenLevel1M2Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM2M6, ClusterShape, StagesM2M6,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Plus<2>>>>,
-                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<2>>, Expr<Plus<0, MemGlobal, LayoutInterim1D>>>>,//M2(1) = M0+M2 ; Reg = M2(1)
+                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<2>>, Expr<Plus<0, MemGlobal, LayoutM0>>>>,//C1 = C1+M2 ; Reg = C1
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M3Group<1, level_1_idx, ThreadBlockShape, WarpShape, 3,
+                                              StrassenLevel1M3Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM2M6, ClusterShape, StagesM2M6,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<3, LayoutFinal, LayoutNone, Expr<Plus<3>>>>,
-                                                                    RWCTypes<CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//M3(2) = M2(1)+M3
+                                                                    RWCTypes<CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C2 = C1(Reg)+M3 
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M4Group<1, level_1_idx, ThreadBlockShape, WarpShape, 3,
+                                              StrassenLevel1M4Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM2M6, ClusterShape, StagesM2M6,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<0, LayoutFinal, LayoutNone, Expr<Plus<4>>>>,
-                                                                    RWCTypes<CUW<3, LayoutInterim1D, LayoutNone, Expr<Plus<4>>>, //M4(3) = M4
-                                                                             CUW<3, LayoutFinal,   LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>,//C3 = M3(2)+M4
+                                                                    RWCTypes<CUW<0, LayoutInterim1D, LayoutNone, Expr<Plus<4>>>, //C1 = C1+M4
+                                                                             CUW<3, LayoutFinal,   LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>,//C3 = C2+M4
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M5Group<1, level_1_idx, ThreadBlockShape, WarpShape, 3,
+                                              StrassenLevel1M5Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM2M6, ClusterShape, StagesM2M6,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>>>,
-                                                                    RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>,   //C1 = M2(1)+M4(3)+M5
-                                                                                                                                 Plus<3, MemGlobal, LayoutInterim1D>>>>,
+                                                                    RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>,
+                                                                                                                                 Plus<0, MemGlobal, LayoutInterim1D>>>>, //C1 = C1+M5
                                                                     AllPresumsM1To6>,
-                                              StrassenLevel1M6Group<1, level_1_idx, ThreadBlockShape, WarpShape, 3,
+                                              StrassenLevel1M6Group<kStrassenLevel, level_1_idx, ThreadBlockShapeM2M6, ClusterShape, StagesM2M6,
                                                                     RWMTypes<>,
                                                                     // RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Plus<6>>>>,
-                                                                    RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = M3(2)-M6
+                                                                    RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                     AllPresumsM1To6>
                                               >;
-  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<true, FusedMiGroup<7, 0, 1>>,
-                                                         ParallelMiGroups<true, FusedMiGroup<7, 2>>,
-                                                         ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                         ParallelMiGroups<true, FusedMiGroup<7, 4>>,
-                                                         ParallelMiGroups<true, FusedMiGroup<7, 5>>,
-                                                         ParallelMiGroups<true, FusedMiGroup<7, 6>>
+  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 1>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 3>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 5>>,
+                                                         ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 6>>
                                                          >;
 
-  using CutlassGemm = cutlass::gemm::device::StrassenGemmLevel2<StrassenKind,
-                                                          StrassenGroupsM0, StrassenGroups<1>, StrassenGroups<2>,
-                                                          StrassenGroups<3>, StrassenGroups<4>, StrassenGroups<5>,
-                                                          StrassenGroups<6>,
-                                                          ScheduleStrassenGroups1,
-                                                          double,        // Data-type of A matrix
+  template<typename StrassenGroups>
+  using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups, ScheduleStrassenGroups1,
+                                                                       ProblemShape,
+                                                                       cutlass::arch::Sm100,
+                                                                       cutlass::arch::OpClassSimt,
+                                                                       float, Layout, SubMatLayoutA,
+                                                                       float, Layout, SubMatLayoutB,
+                                                                       float, Layout, SubMatLayoutC,
+                                                                       float, ClusterShape,
+                                                                       cute::Int<StageCountTypeM0>,
+                                                                       PresumTileShapeA, PresumTileShapeB,
+                                                                       PresumOpts, 1, 4, 4>;
+
+  using CutlassGemm = cutlass::gemm::device::StrassenGemmLevel2UniversalAdapter<StrassenGemmKernels<StrassenGroupsM0>,  StrassenGemmKernels<StrassenGroups<1>>,
+                                                                                StrassenGemmKernels<StrassenGroups<2>>, StrassenGemmKernels<StrassenGroups<3>>,
+                                                                                StrassenGemmKernels<StrassenGroups<4>>, StrassenGemmKernels<StrassenGroups<5>>,
+                                                                                StrassenGemmKernels<StrassenGroups<6>>
+                                                                                >;
+
+#elif defined(MIN_LDS_FOUR_PRESUM_FUSED)
+  //This is used for testing and for smaller sizes because with 256x128 tile size, the shared memory requirement
+  //is higher than what A100 provide
+  using ThreadBlockShape = cutlass::gemm::GemmShape<128, 128, 8>;
+  using WarpShape = cutlass::gemm::GemmShape<64, 32, 8>;
+  using InstructionShape = cutlass::gemm::GemmShape<1,1,1>;
+  const bool splitK = SPLIT_K;
+  const bool sub_gemm_parallel = SUB_GEMM_PARALLEL;
+
+  //[m0], [m1], [m2], [m3], [m4], [m5], [m6]
+  using AllPresumsM0    = AllPresums<PresumCompute,   PresumCompute,  PresumCompute,    PresumCompute,   PresumGlobalKernel,   PresumCompute,   PresumCompute,   PresumCompute>;
+  using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable>;
+
+  using StrassenGroups = StrassenLevel1Groups<StrassenLevel1M0Group<kStrassenLevel, ThreadBlockShape, WarpShape, 
+                                                                    RWMTypes<KeepAccums>,
+                                                                    RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>>,//C1 = M0
+                                                                    AllPresumsM0>,
+                                              StrassenLevel1M1Group<kStrassenLevel, ThreadBlockShape, WarpShape,
+                                                                    RWMTypes<ContinueAccums>,
+                                                                    RWCTypes<CUW<0, LayoutFinal,   LayoutNone, Expr<Plus<1>>>>,//C0 = C0+M1
+                                                                    AllPresumsM1To6>,
+                                              StrassenLevel1M2Group<kStrassenLevel, ThreadBlockShape, WarpShape,
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<1, LayoutNone, LayoutInterim1D, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C1(Shared) = C1+M2
+                                                                    AllPresumsM1To6>,
+                                              StrassenLevel1M3Group<kStrassenLevel, ThreadBlockShape, WarpShape,
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>, Expr<Plus<1, MemShared, LayoutInterim1D>>>>,//C2 = C1(Shared)+M3 ;
+                                                                    AllPresumsM1To6>,
+                                              StrassenLevel1M4Group<kStrassenLevel, ThreadBlockShape, WarpShape,
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<1, LayoutNone, LayoutInterim1D, Expr<Plus<4>>, Expr<Plus<1, MemShared, LayoutInterim1D>>>, //C1(Shared) = C1(Shared)+M4
+                                                                             CUW<3, LayoutFinal,  LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>,//C3 = C2+M4
+                                                                    AllPresumsM1To6>,
+                                              StrassenLevel1M5Group<kStrassenLevel, ThreadBlockShape, WarpShape,
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemShared, LayoutInterim1D>>>>, //C1(Shared) = C1(Shared)+M5
+                                                                    AllPresumsM1To6>,
+                                              StrassenLevel1M6Group<kStrassenLevel, ThreadBlockShape, WarpShape,
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
+                                                                    AllPresumsM1To6>
+                                              >;
+  using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, FusedMiGroup<7, 0, 1>>,
+                                                         ParallelMiGroups<false, FusedMiGroup<7, 2, 3, 4, 5>>,
+                                                         ParallelMiGroups<false, FusedMiGroup<7, 6>>>;
+
+  using CutlassGemm = cutlass::gemm::device::StrassenGemm<StrassenKind, StrassenGroups, ScheduleStrassenGroups1,
+                                                          float,        // Data-type of A matrix
                                                           RowMajor,  // Layout of A matrix
-                                                          double,        // Data-type of B matrix
+                                                          float,        // Data-type of B matrix
                                                           RowMajor,  // Layout of B matrix
-                                                          double,        // Data-type of C matrix
+                                                          float,        // Data-type of C matrix
                                                           RowMajor,
-                                                          double,
-                                                          cutlass::arch::OpClassTensorOp,
+                                                          float,
+                                                          cutlass::arch::OpClassSimt,
                                                           cutlass::arch::Sm80,
                                                           ThreadBlockShape,
                                                           WarpShape,
@@ -224,7 +317,7 @@ using namespace MmaStrassen;
                                                           cutlass::gemm::threadblock::StrassenGemmIdentityThreadblockSwizzle<8>,
                                                           3,
                                                           1, 1, splitK,
-                                                          true>; // Layout of C matrix
+                                                          sub_gemm_parallel>; // Layout of C matrix
 #endif
 
 // Command line options parsing
@@ -234,8 +327,8 @@ struct Options {
 
   cutlass::gemm::GemmCoord problem_size;
   int batch_count;
-  double alpha;
-  double beta;
+  float alpha;
+  float beta;
 
   bool reference_check;
   int iterations;
@@ -329,13 +422,13 @@ cudaError_t CutlassSgemmNN(
   int N,
   int K,
   int level,
-  double alpha,
-  double const *A,
+  float alpha,
+  float const *A,
   int lda,
-  double const *B,
+  float const *B,
   int ldb,
-  double beta,
-  double *C,
+  float beta,
+  float *C,
   int ldc,
   cudaStream_t stream[7],
   int num_streams,
@@ -343,7 +436,7 @@ cudaError_t CutlassSgemmNN(
   int runs = 1,
   int split_k_slices = 1) {
 
-  // Define type definition for single-precision CUTLASS GEMM with column-major
+// Define type definition for single-precision CUTLASS GEMM with column-major
   // input matrices and 128x128x8 threadblock tile size (chosen by default).
   //
   // To keep the interface manageable, several helpers are defined for plausible compositions
@@ -352,40 +445,53 @@ cudaError_t CutlassSgemmNN(
   //
   // To view the full gemm device API interface, see `cutlass/gemm/device/gemm.h`
 
-  
-  // Define a CUTLASS GEMM type
-  CutlassGemm gemm_operator;
+  using Kernel = typename CutlassGemm::ChildStrassenGemmM0::GemmKernel;
+  using StrideA = typename Kernel::StrideA;
+  using StrideB = typename Kernel::StrideB;
+  using StrideC = typename Kernel::StrideC;
+  using StrideD = typename Kernel::StrideD;
+  using RasterOrderOptions = typename Kernel::TileScheduler::RasterOrderOptions;
 
-  // Construct the CUTLASS GEMM arguments object.
-  //
-  // One of CUTLASS's design patterns is to define gemm argument objects that are constructible
-  // in host code and passed to kernels by value. These may include pointers, strides, scalars,
-  // and other arguments needed by Gemm and its components.
-  //
-  // The benefits of this pattern are (1.) a structured, composable strategy for passing host-constructible
-  // arguments to kernels and (2.) minimized initialization overhead on kernel entry.
-  //
+  (void)level;
+  (void)lda;
+  (void)ldb;
+  (void)ldc;
+  (void)split_k_slices;
 
-  CutlassGemm::Arguments args({M , N, K},  // Gemm Problem dimensions
-                              {A, lda},    // Tensor-ref for source matrix A
-                              {B, ldb},    // Tensor-ref for source matrix B
-#if defined(STRASSEN_GLOBAL_LEVEL1) || defined(MIN_LDS_NO_PRESUM) || defined(MIN_LDS_ONE_PRESUM) || defined(MIN_LDS_TWO_PRESUM) || defined(MIN_LDS_THREE_PRESUM) || defined(MIN_LDS_FOUR_PRESUM) || defined(MIN_LDS_FOUR_PRESUM_FUSED)
-                              {C, ldc},    // Tensor-ref for source matrix C
-#else
-                              {nullptr, ldc},
-#endif
-                              {C, ldc},    // Tensor-ref for destination matrix D (may be different memory than source C matrix)
-#if defined(STRASSEN_GLOBAL_LEVEL1)
-                              {1.0f, beta},//((StrassenKind == StrassenType::Normal) ? 0.0f : 0.0f)},
-#else
-                              {1.0f, beta},
-#endif
-                              split_k_slices); // Scalars used in the Epilogue
+  StrideA stride_a = cutlass::make_cute_packed_stride(StrideA{}, {M, K, 1});
+  StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {N, K, 1});
+  StrideC stride_c = cutlass::make_cute_packed_stride(StrideC{}, {M, N, 1});
+  StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {M, N, 1});
+
+  cutlass::KernelHardwareInfo hw_info;
+  hw_info.device_id = 0;
+  hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(0);
+
+  CutlassGemm::Arguments args(
+      cutlass::gemm::GemmUniversalMode::kGemm,
+      typename Kernel::ProblemShape{M, N, K, 1},
+      {A, stride_a, B, stride_b},
+      {{alpha, beta}, nullptr, stride_c, C, stride_d},
+      hw_info);
+
+  args.scheduler.raster_order = RasterOrderOptions::AlongN;
+  args.scheduler.max_swizzle_size = 1;
+
+  cutlass::Status status = CutlassGemm::can_implement(args);
+  // if (status != cutlass::Status::kSuccess) {
+    // printf("invalid problem");
+    // return cudaErrorInvalidValue;
+  // }
+
   size_t workspace_size = CutlassGemm::get_workspace_size(args);
-
   cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
-  cutlass::Status status = gemm_operator.initialize(args, workspace.get());// stream[1]);
 
+  int swizzles[7] = {1, 1, 1, 1, 1, 1, 1};
+  CutlassGemm gemm_operator;
+  status = gemm_operator.initialize(args, swizzles, workspace.get());
+  if (status != cutlass::Status::kSuccess) {
+    return cudaErrorUnknown;
+  }
   cudaDeviceSynchronize();
   //
   // Launch the CUTLASS GEMM kernel.
@@ -398,7 +504,7 @@ cudaError_t CutlassSgemmNN(
   cudaEventRecord(start);
 
   for (int r = 0; r < runs; r++) {
-    cutlass::Status status = gemm_operator.run(stream, num_streams);
+    cutlass::Status status = gemm_operator.run(stream, num_streams); 
     if (num_streams > 1) cudaDeviceSynchronize();
     //
     // Return a cudaError_t if the CUTLASS GEMM operator returned an error code.
@@ -428,8 +534,8 @@ cudaError_t CutlassSgemmNN(
       printf("%s\n", cudaGetErrorString(err));
       return err;
     }
-    double* hC = new double[M * K];
-    cudaMemcpy(hC, C, sizeof(double) * M * K, cudaMemcpyDeviceToHost);
+    float* hC = new float[M * K];
+    cudaMemcpy(hC, C, sizeof(float) * M * K, cudaMemcpyDeviceToHost);
     for (int i = 0; i < M * K; i++) {
       uint r = i / 128;
       uint c = i % 128;
@@ -444,7 +550,7 @@ cudaError_t CutlassSgemmNN(
 
 /// Allocate several matrices in GPU device memory and call a single-precision
 /// CUTLASS GEMM kernel.
-cudaError_t TestCutlassGemm(int M, int N, int K, int level, double alpha, double beta, int split_k_slices, int runs, bool check, int num_streams) {
+cudaError_t TestCutlassGemm(int M, int N, int K, int level, float alpha, float beta, int split_k_slices, int runs, bool check, int num_streams) {
   cudaError_t result;
 
   //
@@ -457,13 +563,13 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, double alpha, double
   int ldc = N;
 
   // Compute size in bytes of the C matrix.
-  size_t sizeof_C = sizeof(double) * M * ldc;
+  size_t sizeof_C = sizeof(float) * M * ldc;
 
   // Define pointers to matrices in GPU device memory.
-  double *A;
-  double *B;
-  double *C_cutlass;
-  double *C_reference;
+  float *A;
+  float *B;
+  float *C_cutlass;
+  float *C_reference;
 
   //
   // Allocate matrices in GPU device memory with arbitrary seeds.
@@ -476,8 +582,8 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, double alpha, double
       printf("%s\n", cudaGetErrorString(err));
       return err;
     }
-    double* hA = new double[M * K];
-    cudaMemcpy(hA, A, sizeof(double) * M * K, cudaMemcpyDeviceToHost);
+    float* hA = new float[M * K];
+    cudaMemcpy(hA, A, sizeof(float) * M * K, cudaMemcpyDeviceToHost);
     for (int i = 0; i < M * K; i++) {
       uint r = i / 128;
       uint c = i % 128;
@@ -505,19 +611,19 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, double alpha, double
   }
 
   if (false) {
-    double* hA = new double[M*K];
-    double* hB = new double[K*N];
+    float* hA = new float[M*K];
+    float* hB = new float[K*N];
 
-    cudaMemcpy(hA, A, sizeof(double) * M * K, cudaMemcpyDeviceToHost);
-    cudaMemcpy(hB, B, sizeof(double) * N * K, cudaMemcpyDeviceToHost);
+    cudaMemcpy(hA, A, sizeof(float) * M * K, cudaMemcpyDeviceToHost);
+    cudaMemcpy(hB, B, sizeof(float) * N * K, cudaMemcpyDeviceToHost);
 
-    double m1 = 0, m3 = 0;
+    float m1 = 0, m3 = 0;
 
     for (int k = 0; k < K/2; k++) {
-      double a2 = hA[64*K + k];
-      double a3 = hA[64*K + K/2 + k];
-      double b0 = hB[k*N];
-      double b2 = hB[(K/2+k)*N];
+      float a2 = hA[64*K + k];
+      float a3 = hA[64*K + K/2 + k];
+      float b0 = hB[k*N];
+      float b2 = hB[(K/2+k)*N];
       printf("442: %d %f+%f = %f\n", k, a2, a3, (a2+a3));
       // printf("442: %d %f\n", k, b0);
       m1 += (a2+a3)*b0;
@@ -589,14 +695,14 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, double alpha, double
   // Verify.
   //
   if (check) {
-    std::vector<double> host_reference(M * ldc, 0);
+    std::vector<float> host_reference(M * ldc, 0);
     // Launch reference GEMM
     result = ReferenceStrassenWinogradGemm<
-      double,
-      double,
-      double,
-      double,
-      double>(M, N, K, level, alpha, A, lda, B, ldb, beta, C_reference, ldc);
+      float,
+      float,
+      float,
+      float,
+      float>(M, N, K, level, alpha, A, lda, B, ldb, beta, C_reference, ldc);
     printf("reference\n");
     if (result != cudaSuccess) {
       std::cerr << "Reference GEMM kernel failed: "
@@ -611,7 +717,7 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, double alpha, double
     }
 
     // Copy to host and verify equivalence.
-    std::vector<double> host_cutlass(M * ldc, 0);
+    std::vector<float> host_cutlass(M * ldc, 0);
 
     result = cudaMemcpy(host_cutlass.data(), C_cutlass, sizeof_C, cudaMemcpyDeviceToHost);
 
@@ -647,8 +753,8 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, double alpha, double
     {
       bool eq = true;
       for (int i = 0; i < host_cutlass.size(); i++) {
-        double c = host_cutlass[i];
-        double r = host_reference[i];
+        float c = host_cutlass[i];
+        float r = host_reference[i];
 
         int row = i / N;
         int col = i % N;
@@ -656,7 +762,7 @@ cudaError_t TestCutlassGemm(int M, int N, int K, int level, double alpha, double
         int c_j = col / (N/2);
         int c_i = row / (M/2);
 
-        // if ((c_i == 0 && c_j == 0) || (c_i == 1 && c_j == 0) || (c_i == 1 && c_j == 1) || (c_i == 0 && c_j == 1))
+        // if ((c_i == 0 && c_j == 0) || (c_i == 1 && c_j == 0) || (c_i == 1 && c_j == 1))// || (c_i == 0 && c_j == 1))
         // {} else continue;
  
         if ((r == 0 && c == 0) || 

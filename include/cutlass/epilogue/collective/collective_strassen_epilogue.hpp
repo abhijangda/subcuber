@@ -61,7 +61,7 @@ class CollectiveStrassenEpilogue {
 // #include "default_epilogue.hpp"
 // #include "default_epilogue_array.hpp"
 // #include "epilogue_tensor_broadcast.hpp"
-// #include "sm70_epilogue_vectorized.hpp"
+#include "sm70_strassen_epilogue_vectorized.hpp"
 // #include "sm70_epilogue_vectorized_array.hpp"
 #include "sm90_strassen_epilogue_tma_warpspecialized.hpp"
 // #include "sm90_epilogue_tma_warpspecialized_bias_elementwise.hpp"

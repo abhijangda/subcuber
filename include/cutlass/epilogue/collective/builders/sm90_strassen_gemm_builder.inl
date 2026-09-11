@@ -264,6 +264,7 @@ struct CollectiveStrassenBuilder<
     ElementD_,
     GmemLayoutTagD,
     AlignmentD,
+    ProblemShape,
     Schedule,
     FusionOperation,
     cute::enable_if_t<cute::is_same_v<Schedule, TmaWarpSpecialized> ||

@@ -60,6 +60,7 @@ make -j all
 make -j kernel_runner_volta
 make -j kernel_runner_ampere
 make -j kernel_runner_hopper
+make -j kernel_runner_blackwell
 
 # Build the runner without CUDA declarations enabled in the runner objects
 make -j no_cuda_declarations
@@ -97,7 +98,7 @@ Supported values:
 
 ```text
 --dtype=f32|f16|fp64
---gpu_arch=volta|ampere|hopper
+--gpu_arch=volta|ampere|hopper|blackwell
 --strassen_level=0|1|2|all
 ```
 

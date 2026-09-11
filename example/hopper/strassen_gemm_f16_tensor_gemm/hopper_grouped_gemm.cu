@@ -404,6 +404,7 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
 
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups, ScheduleStrassenGroups1,
                                                                        ProblemShape,
+                                                                       ArchTag, OperatorClass,
                                                                        ElementA, LayoutA *, SubMatLayoutA,
                                                                        ElementB, LayoutB *, SubMatLayoutB,
                                                                        ElementC, LayoutC *, SubMatLayoutC,

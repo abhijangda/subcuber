@@ -118,24 +118,16 @@ using RowMajor = cutlass::layout::RowMajor;
 
 const auto StrassenKind = StrassenType::StrassenWinograd;
 
-using ThreadBlockShape128 = cutlass::gemm::GemmShape<128, 128, 16>;
-using WarpShape64 = cutlass::gemm::GemmShape<32, 64, 16>;
-using ThreadBlockShape64 = cutlass::gemm::GemmShape<128,64,16>;
-using WarpShape32 = cutlass::gemm::GemmShape<32, 32, 16>;
-using InstructionShape = cutlass::gemm::GemmShape<16,8,4>;
+using ThreadBlockShape64 = cutlass::gemm::GemmShape<32, 64, 16>;
+using WarpShape32 = cutlass::gemm::GemmShape<16, 32, 16>;
+using InstructionShape = cutlass::gemm::GemmShape<8,8,4>;
 
 using namespace MmaStrassen;
 
 #if defined(PRESUM)
-
-  #if defined(TILE_SIZE_128)
-    using ThreadBlockShape = ThreadBlockShape128;
-    using WarpShape = WarpShape64;
-  #elif defined(TILE_SIZE_64)
-    using ThreadBlockShape = ThreadBlockShape64;
-    using WarpShape = WarpShape32;
-  #endif
-
+  using ThreadBlockShape = ThreadBlockShape64;
+  using WarpShape = WarpShape32;
+ 
   const bool splitK = SPLIT_K;
   const bool sub_gemm_parallel = SUB_GEMM_PARALLEL;
   constexpr int kStrassenLevel = 1;

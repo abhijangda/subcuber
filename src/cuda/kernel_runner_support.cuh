@@ -191,12 +191,22 @@ int kernel_runner_run_gemm_cutlass2(KernelRunnerBuffers buffers, int m, int n, i
   using LayoutC = typename Kernel::LayoutC;
   using Arguments = typename Gemm::Arguments;
 
+  int problem_m = m;
+  int problem_n = n;
+  void const *operand_a = buffers.a;
+  void const *operand_b = buffers.b;
+  if constexpr (requires { Gemm::kTransposeProblem; }) {
+    if constexpr (Gemm::kTransposeProblem) {
+      std::swap(problem_m, problem_n);
+      std::swap(operand_a, operand_b);
+    }
+  }
   Arguments args(
-      cutlass::gemm::GemmCoord(m, n, k),
-      {reinterpret_cast<ElementA const *>(buffers.a), LayoutA::packed({m, k})},
-      {reinterpret_cast<ElementB const *>(buffers.b), LayoutB::packed({k, n})},
-      {reinterpret_cast<ElementC const *>(buffers.c), LayoutC::packed({m, n})},
-      {reinterpret_cast<ElementC *>(buffers.d), LayoutC::packed({m, n})},
+      cutlass::gemm::GemmCoord(problem_m, problem_n, k),
+      {reinterpret_cast<ElementA const *>(operand_a), LayoutA::packed({problem_m, k})},
+      {reinterpret_cast<ElementB const *>(operand_b), LayoutB::packed({k, problem_n})},
+      {reinterpret_cast<ElementC const *>(buffers.c), LayoutC::packed({problem_m, problem_n})},
+      {reinterpret_cast<ElementC *>(buffers.d), LayoutC::packed({problem_m, problem_n})},
       {1.0f, 0.0f},
       split_k_slices);
 
@@ -310,15 +320,24 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
   }
 
   int device_id = 0;
-  cutlass::KernelHardwareInfo hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Kernel>(device_id);
+  cutlass::KernelHardwareInfo hw_info;
+  hw_info.device_id = device_id;
+  hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(device_id);
   StrideA stride_a = cutlass::make_cute_packed_stride(StrideA{}, {m, k, 1});
   StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {n, k, 1});
   StrideC stride_c = cutlass::make_cute_packed_stride(StrideC{}, {m, n, 1});
   StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {m, n, 1});
+  auto problem_shape = [&] {
+    if constexpr (cute::rank(typename Kernel::ProblemShape{}) == 4) {
+      return typename Kernel::ProblemShape{m, n, k, 1};
+    } else {
+      return typename Kernel::ProblemShape{m, n, k};
+    }
+  }();
 
   Arguments args(
       cutlass::gemm::GemmUniversalMode::kGemm,
-      {m, n, k},
+      problem_shape,
       {reinterpret_cast<ElementA const *>(buffers.a), stride_a,
        reinterpret_cast<ElementB const *>(buffers.b), stride_b},
       {{1.0f, 0.0f}, reinterpret_cast<ElementC const *>(buffers.c), stride_c,
@@ -579,18 +598,26 @@ int kernel_runner_run_gemm_cutlass3(KernelRunnerBuffers buffers, int m, int n, i
   using StrideC = typename Kernel::StrideC;
   using StrideD = typename Kernel::StrideD;
   using Arguments = typename Gemm::Arguments;
-  using RasterOrderOptions = typename Gemm::RasterOrderOptions;
+  using RasterOrderOptions = typename Kernel::TileScheduler::RasterOrderOptions;
 
   int device_id = 0;
-  cutlass::KernelHardwareInfo hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Kernel>(device_id);
+  cutlass::KernelHardwareInfo hw_info;
+  hw_info.device_id = device_id;
+  hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(device_id);
   StrideA stride_a = cutlass::make_cute_packed_stride(StrideA{}, {m, k, 1});
   StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {n, k, 1});
   StrideC stride_c = cutlass::make_cute_packed_stride(StrideC{}, {m, n, 1});
   StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {m, n, 1});
+  typename Kernel::ProblemShape problem_shape;
+  if constexpr (cute::rank(typename Kernel::ProblemShape{}) == 4) {
+    problem_shape = {m, n, k, 1};
+  } else {
+    problem_shape = {m, n, k};
+  }
 
   Arguments args(
       cutlass::gemm::GemmUniversalMode::kGemm,
-      {m, n, k},
+      problem_shape,
       {reinterpret_cast<ElementA const *>(buffers.a), stride_a,
        reinterpret_cast<ElementB const *>(buffers.b), stride_b},
       {{1.0f, 0.0f}, reinterpret_cast<ElementC const *>(buffers.c), stride_c,

@@ -17,6 +17,7 @@ HOPPER_F16_NVCC_FLAGS ?= -std=c++20 -O3 -Xptxas -v,-O3 --split-compile=1 --expt-
 VOLTA_GENCODE := --generate-code=arch=compute_80,code=[compute_80,sm_80]    -DGENCODE_ARCH=700
 AMPERE_GENCODE := --generate-code=arch=compute_80,code=[compute_80,sm_80]    -DGENCODE_ARCH=800
 HOPPER_GENCODE := --generate-code=arch=compute_90a,code=[compute_90a,sm_90a] -DGENCODE_ARCH=900
+BLACKWELL_GENCODE := --generate-code=arch=compute_100a,code=[compute_100a,sm_100a] -DGENCODE_ARCH=1000
 INCLUDES := -I $(STRASSEN_CUTLASS) -I $(CUTLASS) -I $(CUTLASS_COMMON) -I $(UTIL_INCLUDE) -I $(STRASSEN_ROOT) -I $(GTEST_INCLUDE) -I ../src/
 GTEST_CXXFLAGS := -std=c++20 -O3 -pthread -I $(GTEST_INCLUDE) -I $(GTEST_SRC_INCLUDE)
 AMPERE_F32_SW_TILE_SRC := ../src/cuda/kernels/ampere/strassen_winograd/ampere_f32_sw_tile_64x128.cu
@@ -35,6 +36,8 @@ HOPPER_F32_SW_INTERLEAVED_PRESUM_SRC := ../src/cuda/kernels/hopper/strassen_wino
 HOPPER_F32_SW_INTERLEAVED_PRESUM_LEVEL_2_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f32_sw_interleaved_presum_level_2.cu
 HOPPER_F32_SW_KERNEL_PRESUM_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f32_sw_kernel_presum.cu
 HOPPER_F32_SW_FUSED_PRESUM_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f32_sw_fused_presum.cu
+BLACKWELL_F32_SW_INTERLEAVED_PRESUM_SRC := ../src/cuda/kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_128x256.cu
+BLACKWELL_F32_SW_INTERLEAVED_PRESUM_LEVEL_2_SRC := ../src/cuda/kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_level_2_128x256.cu
 HOPPER_F16_SW_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion.cu
 HOPPER_F16_SW_COOPERATIVE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion.cu
 HOPPER_F16_SW_COOPERATIVE_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion.cu
@@ -82,9 +85,14 @@ HOPPER_TESTS := test_hopper_f32_strassen_winograd_fused_presum \
 	test_hopper_f16_tensorop_strassen_winograd_cooperative \
 	test_hopper_f16_tensorop_strassen_winograd_cooperative_pingpong
 
-TARGETS := $(VOLTA_TESTS) $(AMPERE_TESTS) $(HOPPER_TESTS)
+BLACKWELL_TESTS := \
+	test_blackwell_f32_strassen_winograd_presum \
+	test_blackwell_f32_strassen_winograd_presum_level_2
 
-.PHONY: all clean test run-tests run-volta-tests run-ampere-tests run-hopper-tests $(addprefix run-,$(TARGETS))
+TARGETS := $(VOLTA_TESTS) $(AMPERE_TESTS) $(HOPPER_TESTS) $(BLACKWELL_TESTS)
+
+.PHONY: all clean test run-tests run-volta-tests run-ampere-tests run-hopper-tests \
+	run-blackwell-tests $(addprefix run-,$(TARGETS))
 
 all: $(TARGETS)
 
@@ -148,6 +156,12 @@ test_hopper_f32_strassen_winograd_presum: f32_strassen_winograd_presum.cu base_t
 test_hopper_f32_strassen_winograd_presum_level_2: f32_strassen_winograd_presum_level_2.cu base_test.cuh $(HOPPER_F32_SW_INTERLEAVED_PRESUM_LEVEL_2_SRC) $(GTEST_OBJECT)
 	$(NVCC) $(NVCC_FLAGS) $< $(HOPPER_F32_SW_INTERLEAVED_PRESUM_LEVEL_2_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v2 -DPRESUM -DTILE_SIZE_256 -DSPLIT_K=0 -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
 
+test_blackwell_f32_strassen_winograd_presum: blackwell_f32_strassen_winograd_presum.cu base_test.cuh $(BLACKWELL_F32_SW_INTERLEAVED_PRESUM_SRC) $(GTEST_OBJECT)
+	$(NVCC) $(NVCC_FLAGS) $< $(BLACKWELL_F32_SW_INTERLEAVED_PRESUM_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v3 -o $@ $(BLACKWELL_GENCODE) -Xcompiler -pthread
+
+test_blackwell_f32_strassen_winograd_presum_level_2: blackwell_f32_strassen_winograd_presum_level_2.cu base_test.cuh $(BLACKWELL_F32_SW_INTERLEAVED_PRESUM_LEVEL_2_SRC) $(GTEST_OBJECT)
+	$(NVCC) $(NVCC_FLAGS) $< $(BLACKWELL_F32_SW_INTERLEAVED_PRESUM_LEVEL_2_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v3 -o $@ $(BLACKWELL_GENCODE) -Xcompiler -pthread
+
 test_hopper_f32_strassen_winograd_kernel_presum: f32_strassen_winograd_kernel_presum.cu base_test.cuh $(HOPPER_F32_SW_KERNEL_PRESUM_SRC) $(GTEST_OBJECT)
 	$(NVCC) $(NVCC_FLAGS) $< $(HOPPER_F32_SW_KERNEL_PRESUM_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v2 -Dkernel_PRESUM -DTILE_SIZE_256 -DSPLIT_K=0 -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
 
@@ -195,6 +209,13 @@ run-ampere-tests: $(AMPERE_TESTS)
 run-hopper-tests: $(HOPPER_TESTS)
 	@set -e; \
 	for target in $(HOPPER_TESTS); do \
+		echo "== $$target =="; \
+		./$$target; \
+	done
+
+run-blackwell-tests: $(BLACKWELL_TESTS)
+	@set -e; \
+	for target in $(BLACKWELL_TESTS); do \
 		echo "== $$target =="; \
 		./$$target; \
 	done

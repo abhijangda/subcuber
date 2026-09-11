@@ -36,6 +36,7 @@ RUNNER_ARCH_FLAGS ?=
 VOLTA_GENCODE := --generate-code=arch=compute_80,code=[compute_80,sm_80] -DGENCODE_ARCH=700
 AMPERE_GENCODE := --generate-code=arch=compute_80,code=[compute_80,sm_80] -DGENCODE_ARCH=800
 HOPPER_GENCODE := --generate-code=arch=compute_90a,code=[compute_90a,sm_90a] -DGENCODE_ARCH=900
+BLACKWELL_GENCODE := --generate-code=arch=compute_100a,code=[compute_100a,sm_100a] -DGENCODE_ARCH=1000
 
 RUNNER_SRC := kernel_runner.cpp cublas_runner.cpp cublaslt_runner.cpp
 
@@ -55,6 +56,20 @@ HOPPER_CUBIC_SRCS := \
 	kernels/hopper/cubic/hopper_f64_cutlass_128x128.cu \
 	kernels/hopper/cubic/hopper_f32_cutlass_128x128.cu \
 	kernels/hopper/cubic/hopper_f32_cutlass_256x128.cu
+
+BLACKWELL_CUBIC_SRCS := \
+	kernels/blackwell/cubic/blackwell_f64_cutlass_32x64.cu \
+	kernels/blackwell/cubic/blackwell_f32_cutlass_128x128.cu \
+	kernels/blackwell/cubic/blackwell_f32_cutlass_256x128.cu
+
+BLACKWELL_V2_SRCS := \
+	kernels/blackwell/strassen_winograd/blackwell_f64_sw_interleaved_presum_32x64.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f64_sw_interleaved_presum_level_2_32x64.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f64_sw_fused_presum_32x64.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_128x256.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_64x128.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_128x256_then_64x128.cu \
+	kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_level_2_128x256.cu
 
 VOLTA_CUBIC_SRCS := \
 	kernels/volta/cubic/volta_f32_cutlass_128x128.cu \
@@ -114,7 +129,9 @@ VOLTA_V2_SRCS := \
 VOLTA_KERNEL_SRCS := $(VOLTA_CUBIC_SRCS) $(VOLTA_V2_SRCS)
 AMPERE_KERNEL_SRCS := $(AMPERE_CUBIC_SRCS) $(AMPERE_V2_SRCS)
 HOPPER_KERNEL_SRCS := $(HOPPER_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS)
-KERNEL_SRCS := $(VOLTA_KERNEL_SRCS) $(AMPERE_KERNEL_SRCS) $(HOPPER_KERNEL_SRCS)
+BLACKWELL_KERNEL_SRCS := $(BLACKWELL_CUBIC_SRCS) $(BLACKWELL_V2_SRCS)
+KERNEL_SRCS := $(AMPERE_V2_SRCS) $(AMPERE_CUBIC_SRCS) $(HOPPER_CUBIC_SRCS) $(BLACKWELL_CUBIC_SRCS) $(BLACKWELL_V2_SRCS) $(VOLTA_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS) $(VOLTA_V2_SRCS)
+
 RUNNER_OBJS := $(addprefix $(BUILD_DIR)/,$(RUNNER_SRC:.cpp=.o))
 KERNEL_OBJS := $(addprefix $(BUILD_DIR)/,$(KERNEL_SRCS:.cu=.o))
 OBJS := $(RUNNER_OBJS) $(KERNEL_OBJS)
@@ -158,6 +175,13 @@ kernel_runner_hopper:
 		RUNNER_ARCH_FLAGS=-DSTRASSEN_ENABLE_HOPPER \
 		$(BUILD_ROOT)/kernel_runner_hopper
 
+kernel_runner_blackwell:
+	$(MAKE) TARGET=$(BUILD_ROOT)/kernel_runner_blackwell \
+		BUILD_DIR=$(BUILD_ROOT)/obj/kernel_runner_blackwell \
+		KERNEL_SRCS='$(BLACKWELL_KERNEL_SRCS)' \
+		RUNNER_ARCH_FLAGS=-DSTRASSEN_ENABLE_BLACKWELL \
+		$(BUILD_ROOT)/kernel_runner_blackwell
+
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCC_FLAGS) $(OBJS) $(LDLIBS) -o $@
@@ -183,10 +207,10 @@ $(NO_CUDA_DECL_BUILD_DIR)/%.o: $(CUDA_SRC_DIR)/%.cpp $(CUDA_SRC_DIR)/kernel_runn
 $(BUILD_DIR)/kernels/%.o: $(CUDA_SRC_DIR)/kernels/%.cu $(CUDA_SRC_DIR)/kernel_runner_support.cuh
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCC_FLAGS) $(SPLIT_COMPILE_FLAGS) $(INCLUDES) \
-	  $(if $(findstring /hopper/,$<),$(HOPPER_GENCODE),$(if $(findstring /volta/,$<),$(VOLTA_GENCODE),$(AMPERE_GENCODE))) \
+	  $(if $(findstring /blackwell/,$<),$(BLACKWELL_GENCODE),$(if $(findstring /hopper/,$<),$(HOPPER_GENCODE),$(if $(findstring /volta/,$<),$(VOLTA_GENCODE),$(AMPERE_GENCODE)))) \
 	    $(if $(findstring /hopper/cubic/hopper_f16_cutlass_,$<),$(V3_FLAGS), \
 	    $(if $(findstring /cubic/,$<),$(CUBIC_FLAGS), \
-	  $(if $(or $(findstring hopper_f16_sw_interleaved_presum,$<),$(findstring hopper_f16_moe_sw_interleaved_presum,$<)),$(V3_FLAGS), \
+	  $(if $(or $(findstring hopper_f16_sw_interleaved_presum,$<),$(findstring hopper_f16_moe_sw_interleaved_presum,$<),$(findstring blackwell_f32_sw_interleaved_presum,$<)),$(V3_FLAGS), \
 	    $(if $(findstring _sw_tile,$<),$(TILE_FLAGS), \
 	    $(if $(findstring _fused_presum.cu,$<),$(FUSED_FLAGS), \
 	    $(if $(findstring _kernel_presum.cu,$<),$(KERNEL_PRESUM_FLAGS),$(PRESUM_FLAGS))))))) \

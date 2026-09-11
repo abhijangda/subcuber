@@ -176,11 +176,22 @@ inline cudaError_t run_cutlass_gemm(
 	StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {problem_size.m(), problem_size.n(), 1});
 
 	int device_id = 0;
-	auto kernel_hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<typename CutlassGemm::GemmKernel>(device_id);
+	cutlass::KernelHardwareInfo kernel_hw_info;
+	kernel_hw_info.device_id = device_id;
+	kernel_hw_info.sm_count = cutlass::KernelHardwareInfo::query_device_multiprocessor_count(device_id);
+	auto kernel_problem_size = [&] {
+		if constexpr (cute::rank(typename CutlassGemm::GemmKernel::ProblemShape{}) == 4) {
+			return typename CutlassGemm::GemmKernel::ProblemShape{
+				problem_size.m(), problem_size.n(), problem_size.k(), 1};
+		} else {
+			return typename CutlassGemm::GemmKernel::ProblemShape{
+				problem_size.m(), problem_size.n(), problem_size.k()};
+		}
+	}();
 
 	typename CutlassGemm::Arguments args(
 		cutlass::gemm::GemmUniversalMode::kGemm,
-		{problem_size.m(), problem_size.n(), problem_size.k()},
+		kernel_problem_size,
 		{ref_a.data(), stride_a, ref_b.data(), stride_b},
 		{{1.0f, 0.0f}, ref_c.data(), stride_c, ref_d.data(), stride_d},
 		kernel_hw_info);
@@ -194,7 +205,7 @@ inline cudaError_t run_cutlass_gemm(
 
 	size_t workspace_size = CutlassGemm::get_workspace_size(args);
 	cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
-	int swizzles[7] = {1, 1, 1, 1, 1, 1, 1};
+	int swizzles[7] = {2, 2, 1, 1, 1, 1, 1};
 
 	status = gemm_operator.initialize(args, swizzles, workspace.get());
 	if (status != cutlass::Status::kSuccess) {
@@ -291,7 +302,7 @@ inline cudaError_t run_case(TestCase const &test_case) {
 			problem_size.m(),
 			problem_size.n(),
 			problem_size.k(),
-			1,
+			test_case.level,
 			1.0f,
 			tensor_a.device_ref().data(),
 			lda,
