@@ -1119,12 +1119,13 @@ public:
                 }
               }
 
-              if (postsum_src_len == 0) continue;
+              bool needs_c_load = postsum_global_dest.is_layout_final() && collective_epilogue.is_C_load_needed();
+              if (postsum_src_len == 0 && !needs_c_load) continue;
               if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                 MY_PRINTF("1105 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
               has_global_src = has_global_src || postsum_src_len > 0;
 
-              for (int wg = 0; wg < min(NumMmaWarpGroups, num_mis_with_gl_loads); wg++) {
+              for (int wg = 0; wg < (StrassenMiGroup::numMs() > 1 ? NumMmaWarpGroups : 1); wg++) {
                 if (!work_tile_info2.is_valid()) continue;
 
                 auto m_coord = idx2crd(work_tile_info2.M_idx, shape<2>(gA_mkl));
@@ -1137,7 +1138,8 @@ public:
                 load_order_barrier.advance();
                 if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                   MY_PRINTF("1119 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
-                if (postsum_srcs[0].is_layout_interim_matrix()) {
+                if (postsum_srcs[0].is_layout_interim_matrix() ||
+                    (postsum_global_dest.is_layout_final() && collective_epilogue.is_C_load_needed())) {
                   epi_load_pipe_producer_state =
                   collective_epilogue.load(//TODO: Give postsum as argument
                     epi_load_pipeline,
@@ -1149,7 +1151,8 @@ public:
                     lane_idx,
                     shared_storage.tensors.extra_storage.epilogue,
                     shared_storage.tensors.extra_storage.epilogue2,
-                    postsum_srcs
+                    postsum_srcs,
+                    postsum_global_dest.is_layout_final()
                   );
                 } else if (postsum_srcs[0].is_layout_interim_linear()) {
                   epi_load_pipe_producer_state =
@@ -1190,7 +1193,7 @@ public:
           else {
 
           // Get next work tile
-          scheduler.advance_to_next_work(max(num_mis_with_gl_loads, 1));
+          scheduler.advance_to_next_work(StrassenMiGroup::numMs() > 1 ? NumMmaWarpGroups : 1);
           work_tile_info = scheduler.get_current_work();
           }
         } // Scheduler work fetch loop
@@ -1412,6 +1415,7 @@ public:
 
         bool any_global_dst_matrix = false;
         bool any_global_dst_valid = false;
+        bool any_global_dst_final = false;
 
         #pragma unroll 4
         for (int c = 0; c < 4; c++) {
@@ -1426,6 +1430,7 @@ public:
           
           any_global_dst_matrix = any_global_dst_matrix || postsum_global_dest.is_layout_final() ||
                                                           postsum_global_dest.is_layout_interim_matrix();
+          any_global_dst_final = any_global_dst_final || postsum_global_dest.is_layout_final();
           any_global_dst_valid = any_global_dst_valid || postsum_global_dest.valid();
 
           #pragma unroll 4
@@ -1440,7 +1445,8 @@ public:
 
         if (threadIdx.x%128 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
           MY_PRINTF("1521 %d : %d\n", threadIdx.x, has_global_src);
-        if (has_global_src) {
+        bool is_epi_load_needed = has_global_src || (any_global_dst_final && collective_epilogue.is_C_load_needed());
+        if (is_epi_load_needed) {
           load_order_barrier.arrive();
         }
 
@@ -1496,7 +1502,7 @@ public:
           epi_load_pipe_consumer_state_next,
           epi_store_pipeline,
           epi_store_pipe_producer_state_next,
-          has_global_src,
+          is_epi_load_needed,
           sub_m_idx
         );
 
@@ -1539,16 +1545,12 @@ public:
 
         // Update starting load/store pipeline states for the next tile
         // state has already been incremented by 1 tile in collective calls, advance once again for ping pong
-        bool is_epi_load_needed = collective_epilogue.is_producer_load_needed();
-        if (has_global_src)
+        if (is_epi_load_needed)
           epi_load_pipe_consumer_state = epi_load_pipe_consumer_state_next_;
         epi_store_pipe_producer_state = epi_store_pipe_producer_state_next_;
         if (threadIdx.x%128 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
           MY_PRINTF("1526 %d : %d\n", threadIdx.x, is_epi_load_needed);
-        uint32_t epilogue_load_advance_chunks = (consumer_sub_m_iter + 1 < ConsumerSubMIterations) ?
-          0 : ((StrassenMiGroup::numMs() > 1) ?
-               (NumMmaWarpGroups - 1) :
-               (NumMmaWarpGroups * ConsumerSubMIterations - ConsumerSubMIterations));
+        uint32_t epilogue_load_advance_chunks = NumMmaWarpGroups - 1;
         uint32_t epilogue_store_advance_chunks = (StrassenMiGroup::numMs() > 1) ? (NumMmaWarpGroups - 1) :
           ((consumer_sub_m_iter + 1 < ConsumerSubMIterations) ?
            0 : (NumMmaWarpGroups * ConsumerSubMIterations - ConsumerSubMIterations));

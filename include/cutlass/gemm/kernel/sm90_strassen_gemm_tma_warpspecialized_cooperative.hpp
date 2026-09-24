@@ -162,9 +162,8 @@ public:
   using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
   static constexpr size_t MainloopBStageBytes = sizeof(typename TiledMma::ValTypeB) *
       cute::cosize_v<typename CollectiveMainloop::SmemLayoutB> / DispatchPolicy::Stages;
-  static constexpr bool ReuseMainloopEpilogueStorage = DoesPresum && UseM0M1MainloopStorageReuse &&
-      !StrassenMiGroup::RWCTypes::HasGlobalSrcLoad() &&
-      sizeof(EpilogueTensorStorage) <= MainloopBStageBytes;
+  static constexpr bool ReuseMainloopEpilogueStorage = DoesPresum && UseM0M1MainloopStorageReuse;
+                                                      // sizeof(EpilogueTensorStorage) <= MainloopBStageBytes;
 
   struct TensorStorage1 : cute::aligned_struct<128, _1> {
     MainloopTensorStorage mainloop;
