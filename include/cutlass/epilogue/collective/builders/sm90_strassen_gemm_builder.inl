@@ -275,12 +275,15 @@ struct CollectiveStrassenBuilder<
 private:
   using ElementD = cute::conditional_t<cute::is_void_v<ElementD_>,
                      fusion::get_element_aux_t<FusionOperation>, ElementD_>;
+  static const bool is_cooperative = detail::sm90_is_cooperative_v<Schedule>;
   static const bool is_fused_m2_m3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
   static const bool is_fused_m4_m5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
-  static const uint StagesC = StrassenMiGroup::hasM0() ? (cute::is_void_v<ElementC> ? 2 : 4) : ((is_fused_m2_m3) ? 4 : (is_fused_m4_m5 ? 4 : 4));
+  static const uint StagesC = !is_cooperative ? 4 :
+                              (StrassenMiGroup::hasM0() ? (cute::is_void_v<ElementC> ? 2 : 2) :
+                                                        ((is_fused_m2_m3) ? 4 : (is_fused_m4_m5 ? 4 : 4)));
   static const uint StagesD = (is_fused_m2_m3) ? 4 : (is_fused_m4_m5 ? 4 : 2);
   using EpilogueTile_MN = cute::conditional_t<StrassenMiGroup::hasM0() or StrassenMiGroup::hasM1() or StrassenMiGroup::hasM2() or StrassenMiGroup::hasM3() or is_fused_m4_m5,
-                                              cute::conditional_t<detail::sm90_is_cooperative_v<Schedule>, cute::tuple<_128, _32>, cute::tuple<_64, _32>>,
+                                              cute::conditional_t<is_cooperative, cute::tuple<_128, _32>, cute::tuple<_64, _32>>,
                           decltype(detail::sm90_compute_tile_shape_or_override<ElementD, EpilogueTileType, Schedule, TileShape_MNK>())>;
   static constexpr auto get_m0_dispatch_policy() {
     if constexpr (detail::sm90_is_ptr_array_tma_v<Schedule>) {

@@ -294,11 +294,10 @@ public:
   struct SharedStorage {
     struct TensorStorage {
       using FusionStorage = typename FusionCallbacks::SharedStorage;
-      FusionStorage thread;
-
       using CollectiveStorage = cute::conditional_t<not is_source_supported, CollectiveStorageWithoutC,
                                   cute::conditional_t<ReuseSmemC, CollectiveStorageReuseC, CollectiveStorageWithC>>;
       CollectiveStorage collective;
+      FusionStorage thread;
     } tensors;
 
     using PipelineStorage = typename LoadPipeline::SharedStorage;
