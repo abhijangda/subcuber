@@ -754,7 +754,7 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  static bool HasGlobalSrcLoad() {
+  static constexpr bool HasGlobalSrcLoad() {
     return (... || CUWs::HasGlobalLoad());
   }
 
