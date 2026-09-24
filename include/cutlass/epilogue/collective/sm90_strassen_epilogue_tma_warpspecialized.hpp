@@ -186,7 +186,7 @@ private:
   static const bool IsFusedM2M3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
   static const bool IsFusedM4M5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
 
-  constexpr static bool support_smem_reuse = is_source_supported && is_destination_supported && StagesD <= StagesC
+  constexpr static bool support_smem_reuse = is_destination_supported && StagesD <= StagesC
                                             && cosize(take<0,2>(SmemLayoutC{})) == cosize(take<0,2>(SmemLayoutD{}));
   static_assert(not (ReuseSmemC && not support_smem_reuse), "Smem reuse requirements not met");
 
@@ -230,12 +230,22 @@ private:
 
   union CollectiveStorageWithoutC {
     cute::array<SmemElementC, 0> smem_C;
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_Postsum;
     alignas(SmemAlignmentD) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
   };
 
-  union CollectiveStorageReuseC_ {
+  union CollectiveStorageReuseCWithoutPostsum_ {
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_Postsum;
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+  };
+
+  struct CollectiveStorageReuseC_ {
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_Postsum;
+    union {
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+    };
   };
 
   union CollectiveStorageReuseCFusedM2M3Linear {
@@ -252,9 +262,9 @@ private:
     // alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, 2*8192> smem_reg_transfer;
   };
 
-  using CollectiveStorageReuseC = cute::conditional_t<false && (IsFusedM4M5 || StrassenMiGroup::hasM5() || StrassenMiGroup::hasM4()) && UseLinearStoreLoads,
-                                                      CollectiveStorageReuseCFusedM2M3Linear,
-                                                      CollectiveStorageReuseC_>;
+  using CollectiveStorageReuseC = cute::conditional_t<is_source_supported && !StrassenMiGroup::hasM0(),
+                                                      CollectiveStorageReuseC_,
+                                                      CollectiveStorageReuseCWithoutPostsum_>;
   
   using RWCTypes = typename StrassenMiGroup::RWCTypes;
 
@@ -542,7 +552,7 @@ public:
 
     bool beta_implementable = true;
 
-    if constexpr (cute::is_void_v<ElementC>) {
+    if constexpr (not is_source_supported) {
       if constexpr (detail::has_beta<Arguments>::value) {
         beta_implementable = args.thread.beta == 0.0;
       }
@@ -552,7 +562,7 @@ public:
     }
 
     if (!beta_implementable) {
-      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Beta/beta pointer was set, but epilogue is sourceless (void-C).\n");
+      CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Beta must be zero when ElementC is void.\n");
     }
 
     return implementable && fusion_implementable && beta_implementable;
@@ -595,7 +605,14 @@ public:
   CUTLASS_DEVICE
   bool
   is_producer_load_needed() const {
-    return StrassenMiGroup::NumMisWithGLLoads() > 0;
+    return StrassenMiGroup::NumMisWithGLLoads() > 0 ||
+           (is_source_supported && fusion_callbacks.is_C_load_needed());
+  }
+
+  CUTLASS_DEVICE
+  bool
+  is_C_load_needed() const {
+    return is_source_supported && fusion_callbacks.is_C_load_needed();
   }
 
   template<
@@ -624,6 +641,31 @@ public:
     }
 
     return cute::tuple(d0, false);
+  }
+
+  template<
+    class ProblemShapeMNKL
+  >
+  CUTLASS_DEVICE decltype(auto)
+  get_c_load_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx) {
+    auto [M, N, K, L] = problem_shape_mnkl;
+    Tensor c = params.tma_load_c.get_tma_tensor(make_shape(M, N, L));
+    auto c0_ptr = c.data() + make_coord(0, 0, _);
+    auto c0 = make_tensor(c0_ptr, c.layout());
+
+    #pragma unroll 4
+    for (int i = 0; i < 4; i++) {
+      auto global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(i);
+      int sign_mi = RWCTypes::MiSignByOutputIndex(i, StrassenMiGroup::getMi(sub_m_idx));
+      if (global_dest.valid() && global_dest.is_mem_global() &&
+          global_dest.is_layout_final() && sign_mi != 0) {
+        auto c_ptr = c.data() + make_coord((global_dest.get_op() % 2) * N / 2,
+                                           (global_dest.get_op() / 2) * M / 2, _);
+        return make_tensor(c_ptr, c.layout());
+      }
+    }
+
+    return c0;
   }
 
   template<
@@ -718,6 +760,7 @@ public:
       TensorStorage& shared_tensors,
       TensorStorage& shared_tensors2,
       PostsumOp src_global_ops[4],
+      bool is_dest_final,
       int subtile_idx=-1) {
     using namespace cute;
 
@@ -735,36 +778,63 @@ public:
     bool OutputDorM = StrassenMiGroup::hasM0(); //true for D and false for M
     
     auto first_load_tuple = get_load_tma(problem_shape_mnkl, sub_m_idx, src_global_ops[0]);
-    Tensor mC_mn = get<0>(first_load_tuple);                             //       (M,N,L)
-    auto& tma_load_m = params.tma_load_postsum_m;
+    bool has_first_load = src_global_ops[0].valid();
+    Tensor mPostsum_mn = get<0>(first_load_tuple);                        //       (M,N,L)
+    auto& tma_load_postsum = params.tma_load_postsum_m;
+    Tensor mPostsum = coalesce(mPostsum_mn, take<0,2>(CtaTileMNK{}));
+    Tensor gPostsum = local_tile(mPostsum, take<0,2>(CtaTileMNK{}), coord_shape);                       // (CTA_M,CTA_N)
+
+    Tensor mC_mn = [&]() CUTLASS_LAMBDA_FUNC_INLINE {
+      if constexpr (is_source_supported) {
+        return get_c_load_tma(problem_shape_mnkl, sub_m_idx);
+      }
+      else {
+        return mPostsum_mn;
+      }
+    }();
     Tensor mC = coalesce(mC_mn, take<0,2>(CtaTileMNK{}));
-    Tensor gC = local_tile(mC, take<0,2>(CtaTileMNK{}), coord_shape);                                  // (CTA_M,CTA_N)
+    Tensor gC = local_tile(mC, take<0,2>(CtaTileMNK{}), coord_shape);
 
     auto second_load_tuple = get_load_tma(problem_shape_mnkl, sub_m_idx, src_global_ops[1]);
-    bool has_second_load = src_global_ops[1].valid();
-    Tensor mC2_mn = get<0>(get_second_load_tma(problem_shape_mnkl));
-    Tensor mC2 = coalesce(mC2_mn, take<0,2>(CtaTileMNK{}));
-    Tensor gC2 = local_tile(mC2, take<0,2>(CtaTileMNK{}), coord_shape);
+    bool has_second_load = is_source_supported && src_global_ops[1].valid();
+    Tensor mPostsum2_mn = get<0>(get_second_load_tma(problem_shape_mnkl));
+    Tensor mPostsum2 = coalesce(mPostsum2_mn, take<0,2>(CtaTileMNK{}));
+    Tensor gPostsum2 = local_tile(mPostsum2, take<0,2>(CtaTileMNK{}), coord_shape);
 
     // Apply epilogue subtile, get matching smem tensor
+    auto ptr_sPostsum = shared_tensors.collective.smem_Postsum.begin();
     auto ptr_sC = shared_tensors.collective.smem_C.begin();
+    Tensor gPostsum_epi = flat_divide(gPostsum, EpilogueTile{});                 // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
     Tensor gC_epi = flat_divide(gC, EpilogueTile{});                             // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
+    Tensor sPostsum_epi = make_tensor(make_smem_ptr(ptr_sPostsum), SmemLayoutC{}); //      (EPI_TILE_M,EPI_TILE_N,PIPE_C)
     Tensor sC_epi = make_tensor(make_smem_ptr(ptr_sC), SmemLayoutC{});           //      (EPI_TILE_M,EPI_TILE_N,PIPE_C)
 
-    auto ptr_sC2 = shared_tensors.collective.smem_C.begin() + cosize_v<SmemLayoutC>;
-    Tensor gC2_epi = flat_divide(gC2, EpilogueTile{});                             // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
-    Tensor sC2_epi = make_tensor(make_smem_ptr(ptr_sC2), SmemLayoutC{});           //      (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+    auto ptr_sPostsum2 = ptr_sPostsum + cosize_v<SmemLayoutC>;
+    Tensor gPostsum2_epi = flat_divide(gPostsum2, EpilogueTile{});                // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
+    Tensor sPostsum2_epi = make_tensor(make_smem_ptr(ptr_sPostsum2), SmemLayoutC{}); //      (EPI_TILE_M,EPI_TILE_N,PIPE_C)
 
     // Prepare the thread(b)lock's (G)mem to (S)mem TMA tiled copy (bGS_)
-    ThrCopy thrblk_g2s = tma_load_m.get_slice(Int<0>{});
-    Tensor bGS_gC = thrblk_g2s.partition_S(gC_epi);                                    // (G2S,G2S_M,G2S_N,EPI_M,EPI_N)
-    Tensor bGS_sC = thrblk_g2s.partition_D(sC_epi);                                    // (G2S,G2S_M,G2S_N,PIPE_C)
+    ThrCopy thrblk_g2s_postsum = tma_load_postsum.get_slice(Int<0>{});
+    Tensor bGS_gPostsum = thrblk_g2s_postsum.partition_S(gPostsum_epi);                  // (G2S,G2S_M,G2S_N,EPI_M,EPI_N)
+    Tensor bGS_sPostsum = thrblk_g2s_postsum.partition_D(sPostsum_epi);                   // (G2S,G2S_M,G2S_N,PIPE_C)
+    Tensor bGS_sPostsumC = thrblk_g2s_postsum.partition_D(sC_epi);                       // (G2S,G2S_M,G2S_N,PIPE_C)
 
-    ThrCopy thrblk_g2s2 = tma_load_m.get_slice(Int<0>{});
-    Tensor bGS_gC2 = thrblk_g2s2.partition_S(gC2_epi);                                    // (G2S,G2S_M,G2S_N,EPI_M,EPI_N)
-    Tensor bGS_sC2 = thrblk_g2s2.partition_D(sC2_epi);                                    // (G2S,G2S_M,G2S_N,PIPE_C)
+    ThrCopy thrblk_g2s_c = [&]() CUTLASS_LAMBDA_FUNC_INLINE {
+      if constexpr (is_source_supported) {
+        return params.tma_load_c.get_slice(Int<0>{});
+      }
+      else {
+        return tma_load_postsum.get_slice(Int<0>{});
+      }
+    }();
+    Tensor bGS_gC = thrblk_g2s_c.partition_S(gC_epi);                                   // (G2S,G2S_M,G2S_N,EPI_M,EPI_N)
+    Tensor bGS_sC = thrblk_g2s_c.partition_D(sC_epi);                                   // (G2S,G2S_M,G2S_N,PIPE_C)
+
+    ThrCopy thrblk_g2s_postsum2 = tma_load_postsum.get_slice(Int<0>{});
+    Tensor bGS_gPostsum2 = thrblk_g2s_postsum2.partition_S(gPostsum2_epi);                // (G2S,G2S_M,G2S_N,EPI_M,EPI_N)
+    Tensor bGS_sPostsum2 = thrblk_g2s_postsum2.partition_D(sPostsum2_epi);                 // (G2S,G2S_M,G2S_N,PIPE_C)
     
-    cutlass::Array<ElementD, 8>* ptr_smem2 = (cutlass::Array<ElementD, 8>*)ptr_sC2;
+    cutlass::Array<ElementD, 8>* ptr_smem2 = (cutlass::Array<ElementD, 8>*)ptr_sPostsum2;
 
     // Get the fusion callbacks for the producer load warp
     auto pld_args = cutlass::epilogue::fusion::detail::ProducerLoadArgs(
@@ -776,7 +846,7 @@ public:
                       thread_idx
                     );
     auto pld_callbacks = fusion_callbacks.get_producer_load_callbacks(pld_args);
-    bool is_C_load_needed = is_source_supported && (fusion_callbacks.is_C_load_needed() || true);
+    bool is_C_load_needed = is_source_supported && is_dest_final && fusion_callbacks.is_C_load_needed();
 
     // Predication for TMA load (one thread issues TMA load)
     bool issue_tma_load = cute::elect_one_sync();
@@ -808,17 +878,26 @@ public:
         pld_callbacks.step(tma_barrier, epi_m, epi_n, load_pipe_producer_state.count(), issue_tma_load);
 
         // Execute the TMA load for C if needed
-        if (issue_tma_load && is_C_load_needed) {
-          copy(tma_load_m.with(*tma_barrier, mcast_mask),
-              bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
-          load_pipeline.producer_expect_transaction(load_pipe_producer_state);
+        if (issue_tma_load && (has_first_load || is_C_load_needed)) {
+          if (has_first_load) {
+            copy(tma_load_postsum.with(*tma_barrier, mcast_mask),
+                bGS_gPostsum(_,_,_,epi_m,epi_n), bGS_sPostsum(_,_,_,load_pipe_producer_state.index()));
+            load_pipeline.producer_expect_transaction(load_pipe_producer_state);
+          }
+          if constexpr (is_source_supported) {
+            if (is_C_load_needed) {
+              copy(params.tma_load_c.with(*tma_barrier, mcast_mask),
+                bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
+              load_pipeline.producer_expect_transaction(load_pipe_producer_state);
+            }
+          }
           if (has_second_load) {
             if (StrassenMiGroup::hasM5() and UseLinearStoreLoads) {
               SM90_BULK_COPY_G2S().copy(postsum_m0, tma_barrier, &ptr_smem2[load_pipe_producer_state.index()*STAGE_ELEMS/8],
                                         STAGE_ELEMS * sizeof(ElementD));
             } else {
-              copy(tma_load_m.with(*tma_barrier, mcast_mask),
-                bGS_gC2(_,_,_,epi_m,epi_n), bGS_sC2(_,_,_,load_pipe_producer_state.index()));
+              copy(tma_load_postsum.with(*tma_barrier, mcast_mask),
+                bGS_gPostsum2(_,_,_,epi_m,epi_n), bGS_sPostsum2(_,_,_,load_pipe_producer_state.index()));
             }
             load_pipeline.producer_expect_transaction(load_pipe_producer_state);
           }
@@ -1243,14 +1322,17 @@ struct SM90_BULK_TMA_ADD_S2G
 
     // Construct the corresponding pipelined smem tensors
     auto ptr_sC = shared_tensors.collective.smem_C.begin();
-    auto ptr_sC2 = shared_tensors.collective.smem_C.begin() + cosize_v<SmemLayoutC>;//StagesC*size<0>(EpilogueTile{})*size<1>(EpilogueTile{});
+    auto ptr_sPostsum = shared_tensors.collective.smem_Postsum.begin();
+    auto ptr_sPostsum2 = ptr_sPostsum + cosize_v<SmemLayoutC>;
     auto ptr_sD = shared_tensors.collective.smem_D.begin();
     auto ptr_sD2 = shared_tensors.collective.smem_C.begin();//StagesD*size<0>(EpilogueTile{})*size<1>(EpilogueTile{});
 
     Tensor sC_epi = cute::as_position_independent_swizzle_tensor(
                       make_tensor(make_smem_ptr(ptr_sC), SmemLayoutC{}));             // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
-    Tensor sC2_epi = cute::as_position_independent_swizzle_tensor(
-                      make_tensor(make_smem_ptr(ptr_sC2), SmemLayoutC{}));             // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+    Tensor sPostsum_epi = cute::as_position_independent_swizzle_tensor(
+              make_tensor(make_smem_ptr(ptr_sPostsum), SmemLayoutC{}));        // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+    Tensor sPostsum2_epi = cute::as_position_independent_swizzle_tensor(
+              make_tensor(make_smem_ptr(ptr_sPostsum2), SmemLayoutC{}));       // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
     Tensor sD_epi = cute::as_position_independent_swizzle_tensor(
                       make_tensor(make_smem_ptr(ptr_sD), SmemLayoutD{}));             // (EPI_TILE_M,EPI_TILE_N,PIPE_D)
     Tensor sD2_epi = cute::as_position_independent_swizzle_tensor(
@@ -1310,7 +1392,8 @@ struct SM90_BULK_TMA_ADD_S2G
     Tensor tSR_sC        = thread_s2r.partition_S(sC_epi);                                  // (S2R,S2R_M,S2R_N,PIPE_C)
     Layout tSR_rC_layout = thread_s2r.retile_D(tRS_rD).layout();                            // (S2R,S2R_M,S2R_N)
 
-    Tensor tSR_sC2        = thread_s2r.partition_S(sC2_epi);                                  // (S2R,S2R_M,S2R_N,PIPE_C)
+    Tensor tSR_sPostsum  = thread_s2r.partition_S(sPostsum_epi);                            // (S2R,S2R_M,S2R_N,PIPE_C)
+    Tensor tSR_sPostsum2 = thread_s2r.partition_S(sPostsum2_epi);                           // (S2R,S2R_M,S2R_N,PIPE_C)
 
     // Allocate C registers
     // If C smem load is a non-vectorized dst(i) = src(i) then we can allocate C registers directly in the compute type
@@ -1322,7 +1405,10 @@ struct SM90_BULK_TMA_ADD_S2G
     Tensor tSR_rC = thread_s2r.retile_D(tRS_rC);                                                   // (S2R,S2R_M,S2R_N)
     
     Tensor tRS_rC2 = make_tensor<RegisterElementC>(tRS_rD2_layout);                                  // (R2S,R2S_M,R2S_N)
-    Tensor tSR_rC2 = thread_s2r.retile_D(tRS_rC2);
+    Tensor tRS_rPostsum = make_tensor<RegisterElementC>(tRS_rD_layout);
+    Tensor tSR_rPostsum = thread_s2r.retile_D(tRS_rPostsum);
+    Tensor tRS_rPostsum2 = make_tensor<RegisterElementC>(tRS_rD2_layout);
+    Tensor tSR_rPostsum2 = thread_s2r.retile_D(tRS_rPostsum2);
 
     // thread(b)lock-partition for (s)mem to (g)mem copy (bSG_)
     ThrCopy thrblk_s2g = tma_store_dorm.get_slice(Int<0>{});
@@ -1384,11 +1470,15 @@ struct SM90_BULK_TMA_ADD_S2G
                       thread_idx
                     );
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<RefSrc>(cst_args);
-    bool is_producer_load_needed = first_store_srcs[0].valid() || second_store_srcs[0].valid();
+    bool is_M_load_needed = first_store_srcs[0].valid() || second_store_srcs[0].valid();
+    bool is_producer_load_needed = (fusion_callbacks.is_producer_load_needed() && first_store_dest.is_layout_final()) || is_M_load_needed;
+
     // if (StrassenMiGroup::hasM2() && sub_m_idx==0 && threadIdx.x%128==0 && blockIdx.x==0&&blockIdx.y == 0)
     //   printf("1396 %d : %d %d %d\n", sub_m_idx, is_producer_load_needed, first_store_srcs[0].valid(), second_store_srcs[0].valid());
     // StrassenMiGroup::hasM1() || StrassenMiGroup::hasM2() || StrassenMiGroup::hasM3() || StrassenMiGroup::hasM4() || StrassenMiGroup::hasM6();
-    bool is_C_load_needed = is_source_supported && (first_store_srcs[0].valid() || second_store_srcs[0].valid());
+    bool is_C_load_needed = is_source_supported && first_store_dest.is_layout_final() && fusion_callbacks.is_producer_load_needed();
+    if (StrassenMiGroup::hasM2() && m_coord == 0 && n_coord == 0 && thread_idx == 0)
+      MY_PRINTF("788 %d %d %d\n", is_C_load_needed, first_store_dest.is_layout_final(), fusion_callbacks.is_C_load_needed());
 
     auto cst_args2 = cutlass::epilogue::fusion::detail::ConsumerStoreArgs(
                       problem_shape_mnkl,
@@ -1545,38 +1635,46 @@ struct SM90_BULK_TMA_ADD_S2G
           // Wait for the producer load to fill smem
           load_pipeline.consumer_wait(load_wait_state);
 
-          if (is_C_load_needed) {
+          if (is_M_load_needed || is_C_load_needed) {
             // Copy source tile from smem to register
             const uint STAGE_ELEMS = (size<0>(EpilogueTile{}) * size<1>(EpilogueTile{}));
             if (first_store_srcs[0].valid()) {
-              // copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
               if (first_store_srcs[0].is_layout_interim_linear()) {
-                cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC + load_wait_state.index()*STAGE_ELEMS);
-                for (int i = 0; i < size(tSR_rC); i += 8) {
+                cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sPostsum + load_wait_state.index()*STAGE_ELEMS);
+                for (int i = 0; i < size(tSR_rPostsum); i += 8) {
                   auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
                   for (int j = 0; j < 8; j++)
-                    tSR_rC(i + j) = frg[j];
+                    tSR_rPostsum(i + j) = frg[j];
                 }
               }
               else {
-                copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
+                copy(tiled_s2r, tSR_sPostsum(_,_,_,load_wait_state.index()), tSR_rPostsum);
               }
             }
+            if (is_C_load_needed)
+              copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
             if (first_store_srcs[1].valid()) {
               if (first_store_srcs[1].is_layout_interim_linear()) {
-                cutlass::Array<ElementD, 8>* ptr_smem = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sC2 + load_wait_state.index()*(STAGE_ELEMS));
-                for (int i = 0; i < size(tSR_rC2); i += 8) {
-                  auto frg = ptr_smem[thread_idx + (i/8)*NumMMAThreads];
+                cutlass::Array<ElementD, 8>* ptr_src;
+                if constexpr (is_source_supported) {
+                  ptr_src = (cutlass::Array<ElementD, 8>*)((ElementD*)ptr_sPostsum2 + load_wait_state.index()*(STAGE_ELEMS));
+                }
+                else {
+                  ElementD* postsum_src = reinterpret_cast<ElementD*>(params.ptr_postsum_m) +
+                    first_store_srcs[1].get_op() * (M/2) * (N/2);
+                  postsum_src += (m_coord * ((N/2) / size<1>(TileShapeMNK{})) + n_coord) *
+                                 size<0>(TileShapeMNK{}) * size<1>(TileShapeMNK{});
+                  postsum_src += linear_store_stage * STAGE_ELEMS;
+                  ptr_src = reinterpret_cast<cutlass::Array<ElementD, 8>*>(postsum_src);
+                }
+                for (int i = 0; i < size(tSR_rPostsum2); i += 8) {
+                  auto frg = ptr_src[thread_idx + (i/8)*NumMMAThreads];
                   for (int j = 0; j < 8; j++) {
-                    tSR_rC2(i + j) = frg[j];
+                    tSR_rPostsum2(i + j) = frg[j];
                   }
                 }
               } else {
-                copy(tiled_s2r, tSR_sC2(_,_,_,load_wait_state.index()), tSR_rC2);
-                CUTLASS_PRAGMA_UNROLL
-                for (int i = 0; i < size(tSR_rC); ++i) {
-                  tSR_rC(i) = tSR_rC(i) + tSR_rC2(i);
-                }
+                copy(tiled_s2r, tSR_sPostsum2(_,_,_,load_wait_state.index()), tSR_rPostsum2);
               }
             }
             if (ReuseSmemC) //TODO: Optimize this it is only needed when output is
@@ -1659,8 +1757,8 @@ struct SM90_BULK_TMA_ADD_S2G
           //TODO: Here addition with source C happens
           if (first_store_srcs[0].valid() and (first_store_srcs[0].is_layout_interim_linear() || first_store_srcs[0].is_layout_interim_matrix())) {
             cutlass::Array<ElementD, FragmentSize> frg;
-            for (int i = 0; i < size(tSR_rC); i++) {
-              frg[i] = tSR_rC(i);
+            for (int i = 0; i < size(tSR_rPostsum); i++) {
+              frg[i] = tSR_rPostsum(i);
             }
 
             CUTLASS_PRAGMA_UNROLL
@@ -1673,10 +1771,9 @@ struct SM90_BULK_TMA_ADD_S2G
           }
 
           if (first_store_srcs[1].valid() and (first_store_srcs[1].is_layout_interim_linear() || first_store_srcs[1].is_layout_interim_matrix())) {
-            // typename decltype(tRS_rCompute_frg)::x y;
             cutlass::Array<ElementD, FragmentSize> frg;
-            for (int i = 0; i < size(tSR_rC2); i++) {
-              frg[i] = tSR_rC2(i);
+            for (int i = 0; i < size(tSR_rPostsum2); i++) {
+              frg[i] = tSR_rPostsum2(i);
             }
             // if (thread_idx == 1 && m_coord == 0 && n_coord == 0 && epi_m == 0 && epi_n == 0)
               // MY_PRINTF("1562 %f %f\n", float(tRS_rAcc_frg_mn(r2s_v)[0]), float(frg[0]));
@@ -1698,7 +1795,7 @@ struct SM90_BULK_TMA_ADD_S2G
         if constexpr (DelayTmaStore) {
           // Issue TMA stores for the previous subtile
           if (not is_first_iteration and subtile_idx == -1) {
-            tma_store_fn(epi_m_prev, epi_n_prev);
+            tma_store_fn(epi_m_prev, epi_n_prev, linear_store_stage - 1);
           }
           epi_m_prev = epi_m;
           epi_n_prev = epi_n;
@@ -1749,7 +1846,7 @@ struct SM90_BULK_TMA_ADD_S2G
 
     if constexpr (DelayTmaStore) {
       // Issue TMA stores for the last subtile
-      tma_store_fn(epi_m_prev, epi_n_prev, linear_store_stage);
+      tma_store_fn(epi_m_prev, epi_n_prev, linear_store_stage - 1);
     }
 
     // Post-loop fusion callback entry point
@@ -1764,7 +1861,7 @@ struct SM90_BULK_TMA_ADD_S2G
       LoadPipelineState load_pipe_consumer_state,
       StorePipeline store_pipeline,
       StorePipelineState store_pipe_producer_state,
-      const bool has_global_src,
+      const bool sync_load_pipe,
       uint sub_m_idx) {
     // wait for all TMA stores to complete
     store_pipeline.producer_tail(store_pipe_producer_state);
@@ -1772,7 +1869,7 @@ struct SM90_BULK_TMA_ADD_S2G
     issued_stores = 0;
 
     if constexpr (ReuseSmemC) {
-      if (has_global_src) {
+      if (sync_load_pipe) {
         // Issue releases on up to StagesD-1 previously issued TMA stores
         constexpr int release_stages = cute::min(StorePipeline::UnacquiredStages, get_load_pipe_increment(CtaTileMNK{}));
         CUTLASS_PRAGMA_UNROLL

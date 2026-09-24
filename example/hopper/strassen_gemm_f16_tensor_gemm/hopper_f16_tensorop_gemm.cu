@@ -109,10 +109,11 @@ using         SubMatLayoutB = cutlass::layout::StrassenLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = cutlass::half_t;                                // Element type for C and D matrix operands
+using         ElementC    = cutlass::half_t;                                           // No C source operand
+using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
-constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
+constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;    // Memory access granularity/alignment of C/D matrix in units of elements (up to 16 bytes)
 
 // Core kernel configurations
 using ElementAccumulator  = float;                                          // Element type for internal accumulation
@@ -139,7 +140,7 @@ using TileShapeM0           = Shape<_128,_256,_64>;                           //
 using TileShapeM2To6        = Shape<_128,_256,_64>;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
-const uint StageCountTypeM2M6 = 4 ;
+const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 4 : 3;
 using PresumTileShapeA    = Shape<_2, _256>;
 using PresumTileShapeB    = Shape<_2, _256>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
@@ -174,7 +175,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 1 //TMA Reduce
+#if 0 //TMA Reduce
 using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
@@ -225,7 +226,7 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSc
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
-#elif 1
+#elif 0
 #if defined(COOPERATIVE_PINGPONG)
 #error "This schedule do not work with mixed schedule"
 #endif
@@ -322,12 +323,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, Al
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0, EpilogueScheduleM0, false, FusedMiGroup<7, 0>>,
-                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>, //TODO: Change this to true
-                                                                                                                           FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
+                                                                                                                          //  FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                      //  ParallelMiGroups<false, FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;
@@ -394,7 +395,9 @@ using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenG
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
-                                                                       PresumOpts>;
+                                                                       PresumOpts,
+                                                                       AlignmentA, AlignmentB, AlignmentC,
+                                                                       ElementD>;
 
 using Gemm = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenGemmKernels>;
 
@@ -404,7 +407,7 @@ using DeviceGemmReference = cutlass::reference::device::Gemm<
   LayoutA,
   ElementB,
   LayoutB,
-  ElementC,
+  ElementD,
   LayoutC,
   ElementAccumulator,
   ElementAccumulator>;
@@ -427,7 +430,7 @@ uint64_t seed;
 
 cutlass::DeviceAllocation<typename Gemm::ElementA> block_A;
 cutlass::DeviceAllocation<typename Gemm::ElementB> block_B;
-cutlass::DeviceAllocation<typename Gemm::ElementC> block_C;
+cutlass::DeviceAllocation<ElementD> block_C;
 cutlass::DeviceAllocation<typename Gemm::EpilogueOutputOp::ElementOutput> block_D;
 cutlass::DeviceAllocation<typename Gemm::EpilogueOutputOp::ElementOutput> block_ref_D;
 
@@ -590,7 +593,7 @@ struct Result
 template <class Element>
 bool initialize_block(
   cutlass::DeviceAllocation<Element>& block,
-  uint64_t seed=2023, bool mod = false, bool ones = false) {
+  uint64_t seed=2023, bool mod = false, bool ones = false, bool twos = false) {
 
   Element scope_max, scope_min;
   int bits_input = cutlass::sizeof_bits<Element>::value;
@@ -606,7 +609,7 @@ bool initialize_block(
     scope_min = Element(-4);
   }
 
-  if (!mod and !ones) {
+  if (!mod and !ones and !twos) {
     cutlass::reference::device::BlockFillRandomUniform(
       block.get(), block.size(), seed, scope_max, scope_min, 0);
   } else if (mod) {
@@ -615,14 +618,14 @@ bool initialize_block(
       host[i] = (static_cast<Element>(i/(9*1024)));
     CUDA_CHECK(cudaMemcpy(block.get(), host, block.size() * sizeof(Element), cudaMemcpyHostToDevice));
     delete[] host;
-  } else if (ones) {
+  } else if (ones || twos) {
     using Layout = cutlass::layout::PackedVectorLayout;
     Layout::TensorCoord size(static_cast<Layout::Index>(block.size())); // -Wconversion
     Layout layout = Layout::packed(size);
     cutlass::TensorView<Element, Layout> view(block.get(), layout, size);
 
     cutlass::reference::device::TensorFill(
-      view, Element(1));
+      view, Element(ones ? 1.0f : (twos ? 128.0f : 3.0f)) );
   }
 
   return true;
@@ -644,7 +647,7 @@ void initialize(const Options &options) {
 
   initialize_block(block_A, seed + 2023, false, false);
   initialize_block(block_B, seed + 2022, false, false);
-  // initialize_block(block_C, seed + 2021);
+  initialize_block(block_C, seed + 2021, false, false, false);
 }
 
 template <class Element>
@@ -672,12 +675,16 @@ typename Gemm::Arguments args_from_options(const Options &options)
   // to use a GPU other than that with device ID 0.
   int device_id = 0;
   cutlass::KernelHardwareInfo kernel_hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Gemm::GemmKernel>(device_id);
+  ElementC const* ptr_C = nullptr;
+  if constexpr (!cute::is_void_v<ElementC>) {
+    ptr_C = block_C.get();
+  }
 
   typename Gemm::Arguments arguments(
     cutlass::gemm::GemmUniversalMode::kGemm,
     {options.m, options.n, options.k},
     {block_A.get(), stride_A, block_B.get(), stride_B},
-    {{options.alpha, options.beta}, nullptr, stride_C, block_D.get(), stride_D},
+    {{options.alpha, options.beta}, ptr_C, stride_C, block_D.get(), stride_D},
     kernel_hw_info
   );
 
@@ -736,10 +743,10 @@ bool verify(const Options &options) {
   // bool passed = cutlass::reference::device::BlockCompareEqual(block_ref_D.get(), block_D.get(), block_D.size());
   bool passed = true;
 
-  ElementC* host_ref_D = new ElementC[options.m*options.n];
-  CUDA_CHECK(cudaMemcpy(host_ref_D, block_ref_D.get(), options.m*options.n*sizeof(ElementC), cudaMemcpyDeviceToHost));
-  ElementC* host_D = new ElementC[options.m*options.n];
-  CUDA_CHECK(cudaMemcpy(host_D, block_D.get(), options.m*options.n*sizeof(ElementC), cudaMemcpyDeviceToHost));
+  ElementD* host_ref_D = new ElementD[options.m*options.n];
+  CUDA_CHECK(cudaMemcpy(host_ref_D, block_ref_D.get(), options.m*options.n*sizeof(ElementD), cudaMemcpyDeviceToHost));
+  ElementD* host_D = new ElementD[options.m*options.n];
+  CUDA_CHECK(cudaMemcpy(host_D, block_D.get(), options.m*options.n*sizeof(ElementD), cudaMemcpyDeviceToHost));
 
   float MAX_REL_ERR = 1e-2;
   float MAX_ABS_ERR = 5;
@@ -819,7 +826,7 @@ int run(Options &options)
   cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
   // Check if the problem size is supported or not
-  // CUTLASS_CHECK(gemm.can_implement(arguments));
+  CUTLASS_CHECK(gemm.can_implement(arguments));
 
   // Initialize CUTLASS kernel with arguments and workspace pointer
   CUTLASS_CHECK(gemm.initialize(arguments, options.swizzles, workspace.get()));
@@ -944,6 +951,13 @@ int main(int argc, char const **args) {
   if (options.help) {
     options.print_usage(std::cout) << std::endl;
     return 0;
+  }
+
+  if constexpr (!cute::is_void_v<ElementC>) {
+    if (options.beta == 0.0f) {
+      std::cerr << "Warning: beta=0 with non-void ElementC may reduce performance; "
+                   "use ElementC=void when C is not needed.\n";
+    }
   }
 
   //
