@@ -146,10 +146,9 @@ public:
 
   // 1 stage ordered sequence between mainloop and epilogue producer load threads
   using LoadWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
-  using StoreWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
-  static constexpr bool UseM0M1StoreOrderBarrier = CollectiveMainloop::PresumStages == 4 &&
-                                                   ((StrassenMiGroup::hasM0() && size<0>(typename CollectiveMainloop::PresumTileShapeA{}) > 2) ||
-                                                    (StrassenMiGroup::hasM1() && size<0>(typename CollectiveMainloop::PresumTileShapeB{}) > 2));
+  static constexpr bool UseM0M1MainloopStorageReuse = CollectiveMainloop::PresumStages == 4 &&
+                                                   ((StrassenMiGroup::hasM0() && (size<0>(typename CollectiveMainloop::PresumTileShapeA{}) > 2)) ||
+                                                    (StrassenMiGroup::hasM1() && (size<0>(typename CollectiveMainloop::PresumTileShapeB{}) > 2)));
 
   using TileSchedulerPipeline = typename TileScheduler::Pipeline;
   using TileSchedulerPipelineState = typename TileSchedulerPipeline::PipelineState;
@@ -161,31 +160,39 @@ public:
                                  (StrassenMiGroup::hasM1() && StrassenMiGroup::AllPresums::computeAnyBPresum());
   using MainloopTensorStorage = typename CollectiveMainloop::TensorStorage;
   using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
+  static constexpr size_t MainloopBStageBytes = sizeof(typename TiledMma::ValTypeB) *
+      cute::cosize_v<typename CollectiveMainloop::SmemLayoutB> / DispatchPolicy::Stages;
+  static constexpr bool ReuseMainloopEpilogueStorage = DoesPresum && UseM0M1MainloopStorageReuse &&
+      !StrassenMiGroup::RWCTypes::HasGlobalSrcLoad() &&
+      sizeof(EpilogueTensorStorage) <= MainloopBStageBytes;
 
   struct TensorStorage1 : cute::aligned_struct<128, _1> {
     MainloopTensorStorage mainloop;
     typename CollectiveMainloop::PresumTensorStorage presum_tensors;
     EpilogueTensorStorage epilogue;
+
+    CUTLASS_DEVICE
+    EpilogueTensorStorage& epilogue_storage(int stage) {
+      return epilogue;
+    }
   };
 
-  struct TensorStorage2 : cute::aligned_struct<128, _1> {
+  struct alignas(alignof(EpilogueTensorStorage)) TensorStorage2 : cute::aligned_struct<128, _1> {
     MainloopTensorStorage mainloop;
-    static constexpr size_t ReusedEpilogueStorageOffset = 16384;
+    typename CollectiveMainloop::PresumTensorStorage presum_tensors;
 
-    union {
-      struct {
-        typename CollectiveMainloop::PresumTensorStorage presum_tensors;
-      };
-      struct {
-        char padding[ReusedEpilogueStorageOffset];
-        EpilogueTensorStorage epilogue;
-      };
-    };
+    CUTLASS_DEVICE
+    EpilogueTensorStorage& epilogue_storage(int stage) {
+      static_assert(MainloopBStageBytes % alignof(EpilogueTensorStorage) == 0);
+      static_assert(offsetof(MainloopTensorStorage, smem_B) % alignof(EpilogueTensorStorage) == 0);
+      auto stage_end = reinterpret_cast<char*>(mainloop.smem_B.data()) +
+          (stage + 1) * MainloopBStageBytes;
+      return *reinterpret_cast<EpilogueTensorStorage*>(stage_end - sizeof(EpilogueTensorStorage));
+    }
   };
-  using TensorStorage = cute::conditional_t<DoesPresum,
-                                          cute::conditional_t<UseM0M1StoreOrderBarrier,
-                                                              TensorStorage2,
-                                                              TensorStorage1>,
+
+  using TensorStorage = cute::conditional_t<ReuseMainloopEpilogueStorage,
+                                          TensorStorage2,
                                           TensorStorage1>;
 
   // Kernel level shared memory storage
@@ -197,7 +204,6 @@ public:
       alignas(16) MainloopPipelineStorage mainloop;
       alignas(16) EpiLoadPipelineStorage epi_load;
       alignas(16) typename LoadWarpOrderBarrier::SharedStorage load_order;
-      alignas(16) typename StoreWarpOrderBarrier::SharedStorage store_order;
     } pipelines;
 
     alignas(16) TileSchedulerStorage scheduler;
@@ -567,7 +573,8 @@ public:
       CollectiveEpilogue::prefetch_tma_descriptors(params.epilogue);
     }
 
-    CollectiveEpilogue collective_epilogue(params.epilogue, shared_storage.tensors.epilogue);
+    auto& epilogue_tensors = shared_storage.tensors.epilogue_storage(0);
+    CollectiveEpilogue collective_epilogue(params.epilogue, epilogue_tensors);
     bool is_epi_load_needed = collective_epilogue.is_producer_load_needed();
     // TileScheduler pipeline
     typename TileSchedulerPipeline::Params scheduler_pipeline_params;
@@ -655,12 +662,6 @@ public:
                                           warp_group_role == WarpGroupRole::Consumer1) ? 0 : 1;
     params_load_order_barrier.group_size = NumMMAThreads;
     LoadWarpOrderBarrier load_order_barrier(shared_storage.pipelines.load_order, params_load_order_barrier);
-
-    typename StoreWarpOrderBarrier::Params params_store_order_barrier;
-    params_store_order_barrier.group_id = (warp_group_role == WarpGroupRole::Consumer0 ||
-                                           warp_group_role == WarpGroupRole::Consumer1) ? 0 : 1;
-    params_store_order_barrier.group_size = NumMMAThreads;
-    StoreWarpOrderBarrier store_order_barrier(shared_storage.pipelines.store_order, params_store_order_barrier);
 
     // Initialize starting pipeline states for the collectives
     // Epilogue store pipe is producer-only (consumer is TMA unit, waits via scoreboarding)
@@ -827,8 +828,7 @@ public:
                 block_rank_in_cluster,
                 shared_storage.tensors.mainloop,
                 all_presumld_inputs,
-                shared_storage.tensors.presum_tensors,
-                (UseM0M1StoreOrderBarrier) ? &store_order_barrier : (StoreWarpOrderBarrier*)nullptr
+                shared_storage.tensors.presum_tensors
               );
               mainloop_pipe_producer_state.advance(k_tile_count);
             };
@@ -851,8 +851,7 @@ public:
               block_rank_in_cluster,
               shared_storage.tensors.mainloop,
               all_presumld_inputs,
-              shared_storage.tensors.presum_tensors,
-              (StoreWarpOrderBarrier*)nullptr
+              shared_storage.tensors.presum_tensors
             );
             mainloop_pipe_producer_state.advance(k_tile_count);
           }
@@ -930,7 +929,7 @@ public:
         // unflushed global memory prior to this instruction
         cutlass::arch::wait_on_dependent_grids();
 
-        CollectiveEpilogue collective_epilogue(params.epilogue, shared_storage.tensors.epilogue);
+        CollectiveEpilogue collective_epilogue(params.epilogue, epilogue_tensors);
 
         while (work_tile_info.is_valid()) {
           #pragma unroll (StrassenMiGroup::numMs())
@@ -980,8 +979,8 @@ public:
                     blk_coord, fused_mi,
                     tiled_mma,
                     lane_idx,
-                    shared_storage.tensors.epilogue,
-                    shared_storage.tensors.epilogue,
+                    epilogue_tensors,
+                    epilogue_tensors,
                     postsum_srcs,
                     any_global_dst_final
                   );                  
@@ -995,8 +994,8 @@ public:
                     blk_coord, fused_mi,
                     tiled_mma,
                     lane_idx,
-                    shared_storage.tensors.epilogue,
-                    shared_storage.tensors.epilogue,
+                    epilogue_tensors,
+                    epilogue_tensors,
                     postsum_srcs
                   );
                 }
@@ -1027,9 +1026,7 @@ public:
     else if (warp_group_role == WarpGroupRole::Consumer0 || warp_group_role == WarpGroupRole::Consumer1) {
       work_tile_info = scheduler.initial_work_tile_info(ClusterShape{});
       cutlass::arch::warpgroup_reg_alloc<MmaRegisterRequirement>();
-      if constexpr (UseM0M1StoreOrderBarrier) store_order_barrier.arrive();
-      // if constexpr (UseM0M1StoreOrderBarrier) {asm volatile("bar.cta.sync %0, %1;" : : "r"(7), "r"(NumMMAThreads + 32));}
-      CollectiveEpilogue collective_epilogue(params.epilogue, shared_storage.tensors.epilogue);
+      CollectiveEpilogue collective_epilogue(params.epilogue, epilogue_tensors);
       const int mma_thread_idx = (threadIdx.x - 128) % NumMMAThreads;
 
       while (work_tile_info.is_valid()) {
@@ -1046,6 +1043,10 @@ public:
         #pragma unroll
         for (int consumer_sub_m_iter = 0; consumer_sub_m_iter < ConsumerSubMIterations; ++consumer_sub_m_iter) {
         auto sub_m_idx = consumer_sub_m_iter;
+        auto epilogue_mainloop_state = mainloop_pipe_consumer_state;
+        epilogue_mainloop_state.advance(k_tile_count - 1);
+        auto& epilogue_tensors = shared_storage.tensors.epilogue_storage(epilogue_mainloop_state.index());
+        CollectiveEpilogue collective_epilogue(params.epilogue, epilogue_tensors);
  
         if (sub_m_idx == 0 ||
             (StrassenMiGroup::numMs() >= 2 && sub_m_idx == 1) ||
@@ -1105,12 +1106,19 @@ public:
             params.mainloop
           );
 
-          // Make sure the math instructions are done and free buffers before entering the epilogue
-          collective_mainloop.mma_tail(
-            mainloop_pipeline,
-            mainloop_pipe_consumer_state,
-            k_tile_count
-          );
+          // Unlike mma_tail(), keep the aliased stage unreleased until epilogue stores finish.
+          // Both consumer warp groups must finish reading B before the epilogue overwrites it.
+          if constexpr (ReuseMainloopEpilogueStorage) {
+            static_assert(CollectiveMainloop::K_PIPE_MMAS == 1);
+            cute::warpgroup_wait<0>();
+            cutlass::arch::NamedBarrier::sync(NumMMAThreads, cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
+          } else {
+            collective_mainloop.mma_tail(
+              mainloop_pipeline,
+              mainloop_pipe_consumer_state,
+              k_tile_count
+            );
+          }
 
           // Update starting mainloop pipeline state for the next tile
           mainloop_pipe_consumer_state.advance(k_tile_count);
@@ -1157,8 +1165,8 @@ public:
               accumulators,
               tiled_mma,
               mma_thread_idx,
-              shared_storage.tensors.epilogue,
-              shared_storage.tensors.epilogue
+              epilogue_tensors,
+              epilogue_tensors
             );
             epi_load_pipe_consumer_state_next = get<0>(ret);
             epi_store_pipe_producer_state_next = get<1>(ret);
@@ -1177,8 +1185,8 @@ public:
               accumulators,
               tiled_mma,
               mma_thread_idx,
-              shared_storage.tensors.epilogue,
-              shared_storage.tensors.epilogue,
+              epilogue_tensors,
+              epilogue_tensors,
               work_tile_info.reduction_subtile_idx()
             );
             epi_load_pipe_consumer_state_next = get<0>(ret);
@@ -1202,7 +1210,14 @@ public:
         epi_load_pipe_consumer_state = get<0>(ret);
         epi_store_pipe_producer_state = get<1>(ret);
 
-        if constexpr (UseM0M1StoreOrderBarrier) store_order_barrier.arrive();
+        // Ensure both consumer warp groups have completed their epilogue TMA store waits.
+        // Then release the aliased stage so the mainloop producer can safely overwrite it.
+        if constexpr (ReuseMainloopEpilogueStorage) {
+          if (TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
+            // cutlass::arch::NamedBarrier::sync(NumMMAThreads, cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
+            mainloop_pipeline.consumer_release(epilogue_mainloop_state);
+          }
+        }
         }
 
         // Get next work tile
@@ -1217,7 +1232,6 @@ public:
           }
         }
       } // Scheduler work fetch loop
-      // if constexpr (UseM0M1StoreOrderBarrier) {asm volatile("bar.cta.sync %0, %1;" : : "r"(7), "r"(NumMMAThreads + 32));}
     } // Consumer Warp Groups End
 #endif
   }

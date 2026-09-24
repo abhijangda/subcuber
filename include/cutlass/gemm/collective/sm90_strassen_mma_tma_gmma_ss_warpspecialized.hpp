@@ -945,8 +945,7 @@ struct CollectiveStrassenMma<
     class TensorA, class TensorB,
     class PresumLDInputs,
     class KTileIterator, class BlockCoord,
-    class ProblemShape_MNKL,
-    class StoreWarpOrderBarrier
+    class ProblemShape_MNKL
   >
   CUTLASS_DEVICE void
   load(
@@ -962,10 +961,7 @@ struct CollectiveStrassenMma<
       uint32_t block_rank_in_cluster,
       TensorStorage& shared_tensors,
       PresumLDInputs const& all_presumld_inputs,
-      PresumTensorStorage& shared_presum_tensors,
-      StoreWarpOrderBarrier* store_order_barrier
-      // volatile int* load_epilogue_barrier,
-      // int load_epilogue_barrier_val
+      PresumTensorStorage& shared_presum_tensors
       ) {
     int lane_predicate = cute::elect_one_sync();
     //TODO: Optimize for when the presum tile log parameters are 0
@@ -1117,7 +1113,6 @@ struct CollectiveStrassenMma<
       const uint presumComputeIterationsAB = (StrassenMiGroup::hasM0() && sub_m_idx == 0) ? presumComputeIterationsA : presumComputeIterationsB;
 
       using BarrierType = typename MainloopPipeline::ProducerBarrierType;
-      bool store_order_barrier_advanced = false;
       auto issue_presum_loads = [&] (int presum_load_iter, int presum_write_stage, BarrierType* presum_tma_barrier) {
         if (sub_m_idx == 0 && validTB_A && StrassenMiGroup::hasM0() &&
             StrassenMiGroup::AllPresums::computeAnyAPresum() && presum_load_iter < presumComputeIterationsA) {
@@ -1197,26 +1192,6 @@ struct CollectiveStrassenMma<
         }
       };
 
-      // Complete the presum stages that do not overlap epilogue storage. The
-      // main loop issues the next stage's A/B loads before waiting on epilogue.
-      if (ComputesPresum && store_order_barrier != nullptr && k_tile_count >= PresumStages - 2) {
-        CUTLASS_PRAGMA_UNROLL
-        for (int prologue_iter = 0; prologue_iter < PresumStages - 2; ++prologue_iter) {
-          pipeline.producer_acquire(smem_pipe_write);
-          BarrierType* tma_barrier = pipeline.producer_get_barrier(smem_pipe_write);
-          int write_stage = smem_pipe_write.index();
-
-          copy(tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
-          copy(tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter + raw_sub_m_offset_b), tBsB(_,_,_,write_stage));
-          issue_presum_loads(presum_k_iter, write_stage, tma_barrier);
-
-          ++k_tile_iter;
-          ++presum_k_iter;
-          ++smem_pipe_write;
-          --k_tile_count;
-        }
-      }
-
       // Mainloop
       CUTLASS_PRAGMA_NO_UNROLL
       for ( ; k_tile_count > 0; --k_tile_count) {
@@ -1283,23 +1258,12 @@ struct CollectiveStrassenMma<
         copy(tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
         copy(tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter + raw_sub_m_offset_b), tBsB(_,_,_,write_stage));
 
-        if (ComputesPresum && store_order_barrier != nullptr && presum_k_iter == PresumStages - 2) {
-          store_order_barrier->wait();
-          store_order_barrier->advance();
-          store_order_barrier_advanced = true;
-        }
-
         issue_presum_loads(presum_k_iter, write_stage, tma_barrier);
 
         ++k_tile_iter;
         ++presum_k_iter;
         // Advance smem_pipe_write
         ++smem_pipe_write;
-      }
-
-      if (store_order_barrier != nullptr && !store_order_barrier_advanced) {
-        store_order_barrier->wait();
-        store_order_barrier->advance();
       }
 
       if (ComputesPresum) cute::tma_store_wait<0>();
