@@ -175,7 +175,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 0 //TMA Reduce
+#if 1 //TMA Reduce
 #if defined(COOPERATIVE)
   static_assert(StageCountTypeM2M6 == 4, "StageCountTypeM2M6 should be 4 for TMA Reduce");
 #endif
