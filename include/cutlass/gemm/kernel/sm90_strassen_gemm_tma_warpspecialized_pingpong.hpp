@@ -1114,12 +1114,13 @@ public:
               #pragma unroll 4
               for (read_c = 0; read_c < 4; read_c++) {
                 auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                if (postsum_src.valid() && postsum_src.is_mem_global()) {
+                if (postsum_src.valid() && postsum_src.is_mem_global() &&
+                    (postsum_src.is_layout_interim_linear() || postsum_src.is_layout_interim_matrix())) {
                   postsum_srcs[postsum_src_len++] = postsum_src;
                 }
               }
-
-              bool needs_c_load = postsum_global_dest.is_layout_final() && collective_epilogue.is_C_load_needed();
+              const bool mi_can_load_C = mi != 0 && mi != 2 && mi != 3;
+              bool needs_c_load = postsum_global_dest.is_layout_final() && collective_epilogue.is_C_load_needed() && mi_can_load_C;
               if (postsum_src_len == 0 && !needs_c_load) continue;
               if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                 MY_PRINTF("1105 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
@@ -1139,7 +1140,7 @@ public:
                 if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
                   MY_PRINTF("1119 %d %d: %d %d\n", m_coord, n_coord, postsum_src_len, num_mis_with_gl_loads);
                 if (postsum_srcs[0].is_layout_interim_matrix() ||
-                    (postsum_global_dest.is_layout_final() && collective_epilogue.is_C_load_needed())) {
+                    (postsum_global_dest.is_layout_final() && collective_epilogue.is_C_load_needed() && mi_can_load_C)) {
                   epi_load_pipe_producer_state =
                   collective_epilogue.load(//TODO: Give postsum as argument
                     epi_load_pipeline,
@@ -1443,9 +1444,12 @@ public:
           }
         }
 
+        const bool mi_can_load_C = StrassenMiGroup::getMi(fused_mi) != 0 &&
+                 StrassenMiGroup::getMi(fused_mi) != 2 && StrassenMiGroup::getMi(fused_mi) != 3;
+
         if (threadIdx.x%128 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
           MY_PRINTF("1521 %d : %d\n", threadIdx.x, has_global_src);
-        bool is_epi_load_needed = has_global_src || (any_global_dst_final && collective_epilogue.is_C_load_needed());
+        bool is_epi_load_needed = has_global_src || (any_global_dst_final && collective_epilogue.is_C_load_needed() && mi_can_load_C);
         if (is_epi_load_needed) {
           load_order_barrier.arrive();
         }
