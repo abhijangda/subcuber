@@ -240,7 +240,7 @@ private:
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
   };
 
-  struct CollectiveStorageReuseC_ {
+  struct CollectiveStorageReuseCWithPostsum_ {
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_Postsum;
     union {
       alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
@@ -262,8 +262,12 @@ private:
     // alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, 2*8192> smem_reg_transfer;
   };
 
-  using CollectiveStorageReuseC = cute::conditional_t<is_source_supported && !StrassenMiGroup::hasM0(),
-                                                      CollectiveStorageReuseC_,
+  static constexpr int MaxNumGLLoads = StrassenMiGroup::template MaxNumGlobalLoadsPerMi<ElementC>();
+  // struct TT {struct x {};};
+  // typename cute::conditional_t<StrassenMiGroup::hasM0() || StrassenMiGroup::hasM1() || StrassenMiGroup::hasM2() || StrassenMiGroup::hasM3() || StrassenMiGroup::hasM6(),
+  //                               TT, cute::Int<MaxNumGLLoads>>::x y;
+  using CollectiveStorageReuseC = cute::conditional_t<MaxNumGLLoads >= 2,
+                                                      CollectiveStorageReuseCWithPostsum_,
                                                       CollectiveStorageReuseCWithoutPostsum_>;
   
   using RWCTypes = typename StrassenMiGroup::RWCTypes;
@@ -845,7 +849,11 @@ public:
                       thread_idx
                     );
     auto pld_callbacks = fusion_callbacks.get_producer_load_callbacks(pld_args);
-    bool is_C_load_needed = is_source_supported && is_dest_final && fusion_callbacks.is_C_load_needed();
+    //TODO: Has to hard code for M2 & M3 with TMA Reduce
+    //If uses tma and M0, M2, or M3, then do not is_C_load_needed should be false
+    const bool mi_can_load_C = StrassenMiGroup::getMi(sub_m_idx) != 0 &&
+                   StrassenMiGroup::getMi(sub_m_idx) != 2 && StrassenMiGroup::getMi(sub_m_idx) != 3;
+    bool is_C_load_needed = is_source_supported && is_dest_final && fusion_callbacks.is_C_load_needed() && mi_can_load_C;
 
     // Predication for TMA load (one thread issues TMA load)
     bool issue_tma_load = cute::elect_one_sync();
@@ -1470,12 +1478,17 @@ struct SM90_BULK_TMA_ADD_S2G
                     );
     auto cst_callbacks = fusion_callbacks.template get_consumer_store_callbacks<RefSrc>(cst_args);
     bool is_M_load_needed = first_store_srcs[0].valid() || second_store_srcs[0].valid();
-    bool is_producer_load_needed = (fusion_callbacks.is_producer_load_needed() && first_store_dest.is_layout_final()) || is_M_load_needed;
 
     // if (StrassenMiGroup::hasM2() && sub_m_idx==0 && threadIdx.x%128==0 && blockIdx.x==0&&blockIdx.y == 0)
     //   printf("1396 %d : %d %d %d\n", sub_m_idx, is_producer_load_needed, first_store_srcs[0].valid(), second_store_srcs[0].valid());
     // StrassenMiGroup::hasM1() || StrassenMiGroup::hasM2() || StrassenMiGroup::hasM3() || StrassenMiGroup::hasM4() || StrassenMiGroup::hasM6();
-    bool is_C_load_needed = is_source_supported && first_store_dest.is_layout_final() && fusion_callbacks.is_producer_load_needed();
+        //TODO: Has to hard code for M2 & M3 with TMA Reduce
+    //If uses tma and M0, M2, or M3, then do not is_C_load_needed should be false
+    const bool mi_can_load_C = StrassenMiGroup::getMi(sub_m_idx) != 0 &&
+                   StrassenMiGroup::getMi(sub_m_idx) != 2 && StrassenMiGroup::getMi(sub_m_idx) != 3;
+    bool is_C_load_needed = is_source_supported && first_store_dest.is_layout_final() &&
+                            fusion_callbacks.is_C_load_needed() && mi_can_load_C;
+    bool is_producer_load_needed = is_M_load_needed || is_C_load_needed;
     if (StrassenMiGroup::hasM2() && m_coord == 0 && n_coord == 0 && thread_idx == 0)
       MY_PRINTF("788 %d %d %d\n", is_C_load_needed, first_store_dest.is_layout_final(), fusion_callbacks.is_C_load_needed());
 
@@ -1650,8 +1663,9 @@ struct SM90_BULK_TMA_ADD_S2G
                 copy(tiled_s2r, tSR_sPostsum(_,_,_,load_wait_state.index()), tSR_rPostsum);
               }
             }
-            if (is_C_load_needed)
+            if (is_C_load_needed) {
               copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
+            }
             if (first_store_srcs[1].valid()) {
               if (first_store_srcs[1].is_layout_interim_linear()) {
                 cutlass::Array<ElementD, 8>* ptr_src;

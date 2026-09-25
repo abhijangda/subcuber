@@ -955,12 +955,13 @@ public:
               #pragma unroll 4
               for (int read_c = 0; read_c < 4; read_c++) {
                 auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-                if (postsum_src.valid() && postsum_src.is_mem_global()) {
+                if (postsum_src.valid() && postsum_src.is_mem_global() && (postsum_src.is_layout_interim_linear() || postsum_src.is_layout_interim_matrix())) {
                   postsum_srcs[postsum_src_len++] = postsum_src;
                 }
               }
 
-              if (postsum_src_len > 0 || (any_global_dst_final && collective_epilogue.is_C_load_needed())) {
+              const bool mi_can_load_C = mi != 0 && mi != 2 && mi != 3;
+              if (postsum_src_len > 0 || (any_global_dst_final && collective_epilogue.is_C_load_needed() && mi_can_load_C)) {
                 if (StrassenMiGroup::hasM2() && lane_idx == 0 && m_coord == 0 && n_coord == 0)
                   MY_PRINTF("944 %d : %d %d\n", fused_mi, m_coord, n_coord);
                 load_order_barrier.wait();
@@ -968,7 +969,8 @@ public:
                 if (StrassenMiGroup::hasM2() && lane_idx == 0 && m_coord == 0 && n_coord == 0)
                   MY_PRINTF("948 %d : %d %d\n", fused_mi, m_coord, n_coord);
                 if (postsum_srcs[0].is_layout_interim_matrix() ||
-                    (any_global_dst_final && collective_epilogue.is_C_load_needed())) {
+                      (any_global_dst_final && collective_epilogue.is_C_load_needed() &&
+                       mi_can_load_C)) {
                   epi_load_pipe_producer_state =
                   collective_epilogue.load(
                     epi_load_pipeline,
@@ -1076,7 +1078,8 @@ public:
           #pragma unroll 4
           for (int read_c = 0; read_c < 4; read_c++) {
             auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
-            if (postsum_src.valid() && postsum_src.is_mem_global()) {
+            if (postsum_src.valid() && postsum_src.is_mem_global() &&
+                (postsum_src.is_layout_interim_linear() || postsum_src.is_layout_interim_matrix())) {
               has_global_src = true;
             }
           }
@@ -1086,9 +1089,13 @@ public:
           for (int i = 0; i < accumulators.size(); i++)
               accumulators[i] = -1 * accumulators[i];
 
+        //TODO: This is hard coded for TMA Reduce case
+        const bool mi_can_load_C = StrassenMiGroup::getMi(sub_m_idx) != 0 &&
+                 StrassenMiGroup::getMi(sub_m_idx) != 2 && StrassenMiGroup::getMi(sub_m_idx) != 3;
+
         if (StrassenMiGroup::hasM2() && mma_thread_idx == 0 && m_coord == 0 && n_coord == 0)
           MY_PRINTF("1089 %d : %d %d ; %d %d\n", sub_m_idx, m_coord, n_coord, any_global_dst_final, collective_epilogue.is_C_load_needed());
-        if (has_global_src || (any_global_dst_final && collective_epilogue.is_C_load_needed())) {
+        if (has_global_src || (any_global_dst_final && collective_epilogue.is_C_load_needed() && mi_can_load_C)) {
           load_order_barrier.arrive();
         }
 
@@ -1199,7 +1206,7 @@ public:
           epi_load_pipe_consumer_state_next,
           epi_store_pipeline,
           epi_store_pipe_producer_state_next,
-          has_global_src || (collective_epilogue.is_C_load_needed() && any_global_dst_final),
+          has_global_src || (collective_epilogue.is_C_load_needed() && mi_can_load_C && any_global_dst_final),
           sub_m_idx
         );
 
