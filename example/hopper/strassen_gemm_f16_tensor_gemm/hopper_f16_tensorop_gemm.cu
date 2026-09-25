@@ -109,7 +109,7 @@ using         SubMatLayoutB = cutlass::layout::StrassenLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = cutlass::half_t;                                           // No C source operand
+using         ElementC    = void;//cutlass::half_t;                                           // No C source operand
 using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
@@ -175,7 +175,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 1 //TMA Reduce
+#if 0 //TMA Reduce
 using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
