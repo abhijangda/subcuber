@@ -147,8 +147,8 @@ public:
   // 1 stage ordered sequence between mainloop and epilogue producer load threads
   using LoadWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
   static constexpr bool UseM0M1MainloopStorageReuse = CollectiveMainloop::PresumStages == 4 &&
-                                                   ((StrassenMiGroup::hasM0() && (size<0>(typename CollectiveMainloop::PresumTileShapeA{}) > 2)) ||
-                                                    (StrassenMiGroup::hasM1() && (size<0>(typename CollectiveMainloop::PresumTileShapeB{}) > 2)));
+                                                   ((StrassenMiGroup::hasM0() && (!cute::is_void_v<ElementC> || size<0>(typename CollectiveMainloop::PresumTileShapeA{}) > 2)) ||
+                                                    (StrassenMiGroup::hasM1() && (!cute::is_void_v<ElementC> || size<0>(typename CollectiveMainloop::PresumTileShapeB{}) > 2)));
 
   using TileSchedulerPipeline = typename TileScheduler::Pipeline;
   using TileSchedulerPipelineState = typename TileSchedulerPipeline::PipelineState;
@@ -160,10 +160,9 @@ public:
                                  (StrassenMiGroup::hasM1() && StrassenMiGroup::AllPresums::computeAnyBPresum());
   using MainloopTensorStorage = typename CollectiveMainloop::TensorStorage;
   using EpilogueTensorStorage = typename CollectiveEpilogue::TensorStorage;
-  static constexpr size_t MainloopBStageBytes = sizeof(typename TiledMma::ValTypeB) *
-      cute::cosize_v<typename CollectiveMainloop::SmemLayoutB> / DispatchPolicy::Stages;
-  static constexpr bool ReuseMainloopEpilogueStorage = DoesPresum && UseM0M1MainloopStorageReuse;
-                                                      // sizeof(EpilogueTensorStorage) <= MainloopBStageBytes;
+  static constexpr size_t MainloopStageBytes = sizeof(typename CollectiveMainloop::StageStorage);
+  static constexpr bool ReuseMainloopEpilogueStorage = DoesPresum && UseM0M1MainloopStorageReuse &&
+                                                      sizeof(EpilogueTensorStorage) <= MainloopStageBytes;
 
   struct TensorStorage1 : cute::aligned_struct<128, _1> {
     MainloopTensorStorage mainloop;
@@ -176,17 +175,16 @@ public:
     }
   };
 
-  struct alignas(alignof(EpilogueTensorStorage)) TensorStorage2 : cute::aligned_struct<128, _1> {
-    MainloopTensorStorage mainloop;
+  struct TensorStorage2 : cute::aligned_struct<128, _1> {
+    alignas(cute::max(alignof(MainloopTensorStorage), alignof(EpilogueTensorStorage))) MainloopTensorStorage mainloop;
     typename CollectiveMainloop::PresumTensorStorage presum_tensors;
 
     CUTLASS_DEVICE
     EpilogueTensorStorage& epilogue_storage(int stage) {
-      static_assert(MainloopBStageBytes % alignof(EpilogueTensorStorage) == 0);
-      static_assert(offsetof(MainloopTensorStorage, smem_B) % alignof(EpilogueTensorStorage) == 0);
-      auto stage_end = reinterpret_cast<char*>(mainloop.smem_B.data()) +
-          (stage + 1) * MainloopBStageBytes;
-      return *reinterpret_cast<EpilogueTensorStorage*>(stage_end - sizeof(EpilogueTensorStorage));
+      static_assert(sizeof(EpilogueTensorStorage) <= MainloopStageBytes);
+      static_assert(MainloopStageBytes % alignof(EpilogueTensorStorage) == 0);
+      static_assert(offsetof(MainloopTensorStorage, stages) % alignof(EpilogueTensorStorage) == 0);
+      return *reinterpret_cast<EpilogueTensorStorage*>(&mainloop.stages[stage]);
     }
   };
 
@@ -937,6 +935,18 @@ public:
         while (work_tile_info.is_valid()) {
           #pragma unroll (StrassenMiGroup::numMs())
           for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
+            /**Only for ReuseMainloopEpilogueStorage **/
+            auto epilogue_mainloop_state = mainloop_pipe_consumer_state;
+            epilogue_mainloop_state.advance(k_tile_count - 1);
+            auto& epilogue_tensors = shared_storage.tensors.epilogue_storage(epilogue_mainloop_state.index());
+            CollectiveEpilogue collective_epilogue(params.epilogue, epilogue_tensors);
+            if constexpr (ReuseMainloopEpilogueStorage) {
+              if (TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
+                mainloop_pipe_consumer_state.advance(k_tile_count);
+              }
+            }
+            /********/
+            
             auto m_coord = idx2crd(work_tile_info.M_idx, shape<2>(gA_mkl));
             auto n_coord = idx2crd(work_tile_info.N_idx, shape<2>(gB_nkl));
             auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
@@ -1048,9 +1058,11 @@ public:
         #pragma unroll
         for (int consumer_sub_m_iter = 0; consumer_sub_m_iter < ConsumerSubMIterations; ++consumer_sub_m_iter) {
         auto sub_m_idx = consumer_sub_m_iter;
+        /**Only for ReuseMainloopEpilogueStorage **/
         auto epilogue_mainloop_state = mainloop_pipe_consumer_state;
         epilogue_mainloop_state.advance(k_tile_count - 1);
         auto& epilogue_tensors = shared_storage.tensors.epilogue_storage(epilogue_mainloop_state.index());
+        /********/
         CollectiveEpilogue collective_epilogue(params.epilogue, epilogue_tensors);
  
         if (sub_m_idx == 0 ||
@@ -1099,7 +1111,8 @@ public:
 
         if (StrassenMiGroup::hasM2() && mma_thread_idx == 0 && m_coord == 0 && n_coord == 0)
           MY_PRINTF("1089 %d : %d %d ; %d %d\n", sub_m_idx, m_coord, n_coord, any_global_dst_final, collective_epilogue.is_C_load_needed());
-        if (has_global_src || (any_global_dst_final && collective_epilogue.is_C_load_needed() && mi_can_load_C)) {
+        if (!ReuseMainloopEpilogueStorage &&
+            (has_global_src || (any_global_dst_final && collective_epilogue.is_C_load_needed() && mi_can_load_C))) {
           load_order_barrier.arrive();
         }
 
@@ -1122,6 +1135,9 @@ public:
             static_assert(CollectiveMainloop::K_PIPE_MMAS == 1);
             cute::warpgroup_wait<0>();
             cutlass::arch::NamedBarrier::sync(NumMMAThreads, cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
+            if (has_global_src || (any_global_dst_final && collective_epilogue.is_C_load_needed() && mi_can_load_C)) {
+              load_order_barrier.arrive();
+            }
           } else {
             collective_mainloop.mma_tail(
               mainloop_pipeline,
@@ -1224,7 +1240,7 @@ public:
         // Then release the aliased stage so the mainloop producer can safely overwrite it.
         if constexpr (ReuseMainloopEpilogueStorage) {
           if (TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
-            // cutlass::arch::NamedBarrier::sync(NumMMAThreads, cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
+            cutlass::arch::NamedBarrier::sync(NumMMAThreads, cutlass::arch::ReservedNamedBarriers::EpilogueBarrier);
             mainloop_pipeline.consumer_release(epilogue_mainloop_state);
           }
         }

@@ -109,7 +109,7 @@ using         SubMatLayoutB = cutlass::layout::StrassenLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = void; //cutlass::half_t;                                           // No C source operand
+using         ElementC    = cutlass::half_t;                                           // No C source operand
 using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
