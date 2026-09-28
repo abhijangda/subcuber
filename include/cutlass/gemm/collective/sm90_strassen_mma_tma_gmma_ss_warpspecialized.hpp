@@ -217,6 +217,9 @@ struct CollectiveStrassenMma<
       make_shape(shape<1>(TileShape{}), shape<2>(TileShape{}), Int<DispatchPolicy::Stages>{}),
       cute::conditional_t< ::cutlass::gemm::detail::is_major<0,StrideB>(), Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
 
+  using SmemLayoutStageA = decltype(SmemLayoutA{}(_,_,cute::Int<0>{}));
+  using SmemLayoutStageB = decltype(SmemLayoutB{}(_,_,cute::Int<0>{}));
+
   // using PresumSmemLayoutA = decltype(tile_to_shape(
   //     PresumSmemLayoutAtomA{},
   //     make_shape(shape<0>(PresumTileShapeA{}), shape<1>(PresumTileShapeA{}), Int<1>{}),
@@ -250,9 +253,13 @@ struct CollectiveStrassenMma<
 
   struct SharedStorage
   {
+    struct alignas(128) StageStorage {
+      cute::array_aligned<typename TiledMma::ValTypeA, cute::cosize_v<SmemLayoutStageA>> smem_A;
+      cute::array_aligned<typename TiledMma::ValTypeB, cute::cosize_v<SmemLayoutStageB>> smem_B;
+    };
+
     struct TensorStorage : cute::aligned_struct<128, _0> {
-      cute::array_aligned<typename TiledMma::ValTypeA, cute::cosize_v<SmemLayoutA>> smem_A;
-      cute::array_aligned<typename TiledMma::ValTypeB, cute::cosize_v<SmemLayoutB>> smem_B;
+      cute::array<StageStorage, DispatchPolicy::Stages> stages;
     } tensors;
 
     using PipelineStorage = typename MainloopPipeline::SharedStorage;
@@ -320,6 +327,23 @@ struct CollectiveStrassenMma<
 
   using AllPresums = typename StrassenMiGroup::AllPresums;
   using TensorStorage = typename SharedStorage::TensorStorage;
+  using StageStorage = typename SharedStorage::StageStorage;
+  static_assert(sizeof(StageStorage) % sizeof(typename TiledMma::ValTypeA) == 0);
+  static_assert(sizeof(StageStorage) % sizeof(typename TiledMma::ValTypeB) == 0);
+  using InterleavedSmemLayoutA = decltype(make_composed_layout(
+      SmemLayoutA{}.layout_a(),
+      SmemLayoutA{}.offset(),
+      replace<2>(SmemLayoutA{}.layout_b(),
+                 make_layout(shape<2>(SmemLayoutA{}),
+                             replace<1>(stride<2>(SmemLayoutA{}.layout_b()),
+                                        Int<sizeof(StageStorage) / sizeof(typename TiledMma::ValTypeA)>{})))));
+  using InterleavedSmemLayoutB = decltype(make_composed_layout(
+      SmemLayoutB{}.layout_a(),
+      SmemLayoutB{}.offset(),
+      replace<2>(SmemLayoutB{}.layout_b(),
+                 make_layout(shape<2>(SmemLayoutB{}),
+                             replace<1>(stride<2>(SmemLayoutB{}.layout_b()),
+                                        Int<sizeof(StageStorage) / sizeof(typename TiledMma::ValTypeB)>{})))));
   using PipelineStorage = typename SharedStorage::PipelineStorage;
 
   // Host side kernel arguments
@@ -988,8 +1012,8 @@ struct CollectiveStrassenMma<
         block_idx, {0, 0}, 0, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}
       );
 
-      Tensor sA = make_tensor(make_smem_ptr(shared_tensors.smem_A.data()), SmemLayoutA{});        // (BLK_M,BLK_K,PIPE)
-      Tensor sB = make_tensor(make_smem_ptr(shared_tensors.smem_B.data()), SmemLayoutB{});        // (BLK_N,BLK_K,PIPE)
+      Tensor sA = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_A.data()), InterleavedSmemLayoutA{});        // (BLK_M,BLK_K,PIPE)
+      Tensor sB = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_B.data()), InterleavedSmemLayoutB{});        // (BLK_N,BLK_K,PIPE)
       
       Tensor gA0 = get<0>(all_presumld_inputs);
       Tensor gA1 = get<1>(all_presumld_inputs);
@@ -1736,8 +1760,8 @@ struct CollectiveStrassenMma<
     auto [M,N,K,L] = problem_shape;
     auto [halfM, halfN, halfK, halfL] = half_problem_shape;
 
-    Tensor sA = make_tensor(make_smem_ptr(shared_tensors.smem_A.data()), SmemLayoutA{});          // (BLK_M,BLK_K,PIPE)
-    Tensor sB = make_tensor(make_smem_ptr(shared_tensors.smem_B.data()), SmemLayoutB{});          // (BLK_N,BLK_K,PIPE)
+    Tensor sA = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_A.data()), InterleavedSmemLayoutA{});          // (BLK_M,BLK_K,PIPE)
+    Tensor sB = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_B.data()), InterleavedSmemLayoutB{});          // (BLK_N,BLK_K,PIPE)
 
     const uint presumComputeIterationsA = (kPresumComputeIterationsA * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) >> mainloop_params.get_presum_tile_log_divider_a();
     const uint presumComputeIterationsB = (kPresumComputeIterationsB * (1 << mainloop_params.get_presum_tile_log_multiplier_b())) >> mainloop_params.get_presum_tile_log_divider_b();

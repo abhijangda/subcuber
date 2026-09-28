@@ -279,7 +279,7 @@ private:
   static const bool is_fused_m2_m3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
   static const bool is_fused_m4_m5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
   static const uint StagesC = !is_cooperative ? (StrassenMiGroup::hasM0() && cute::is_void_v<ElementC> ? 2 : 4) :
-                              (StrassenMiGroup::hasM0() ? (cute::is_void_v<ElementC> ? 2 : 2) :
+                              (StrassenMiGroup::hasM0() ? (cute::is_void_v<ElementC> ? 2 : 4) :
                                                         ((is_fused_m2_m3) ? 4 : (is_fused_m4_m5 ? 4 : 4)));
   static const uint StagesD = (is_fused_m2_m3) ? 4 : (is_fused_m4_m5 ? 4 : 2);
   using EpilogueTile_MN = cute::conditional_t<StrassenMiGroup::hasM0() or StrassenMiGroup::hasM1() or StrassenMiGroup::hasM2() or StrassenMiGroup::hasM3() or is_fused_m4_m5,
