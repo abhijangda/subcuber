@@ -1922,15 +1922,11 @@ public:
       args.mode,
       (halve_problem_size) ? args.get_half_problem_shape() : args.problem_shape,
       {ptr_A, stride_A, ptr_B, stride_B},
-      {{args.epilogue.thread.alpha, 0.0f}, ptr_C, stride_C, ptr_D, stride_D},
+      {{args.epilogue.thread.alpha, 0.0f}, ptr_C, stride_C, ptr_D, stride_D, ptr_C2, stride_C2, ptr_D2, stride_D2},
       args.hw_info
     );
     args_child.scheduler.raster_order = args.scheduler.raster_order;
     args_child.scheduler.max_swizzle_size = args.scheduler.max_swizzle_size;
-    // args_child.epilogue.ptr_C2 = ptr_C2;
-    // args_child.epilogue.dC2 = stride_C2;
-    // args_child.epilogue.ptr_D2 = ptr_D2;
-    // args_child.epilogue.dD2 = stride_D2;
 
     return args_child;
   }
@@ -2103,13 +2099,13 @@ public:
       auto ptr_A = args.mainloop.ptr_A + halfK; //TensorRefC ref_C = {}; TensorRefD ref_D = {};
       auto ptr_B = args.mainloop.ptr_B + halfK*N;
       StrideC stride_m0l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
-      auto ptr_m0l1 = postsum_m_ptr;
+      auto ptr_m0l1 = postsum_m_ptr + (is_fp16)*halfM*halfN;
       args_m1 = to_child_arguments<ChildStrassenGemmM1>(args, args.mainloop.dA, ptr_A, args.mainloop.dB, ptr_B,
         stride_m0l1, ptr_m0l1, stride_m0l1, nullptr,
         args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, nullptr,
         1, true);
 
-      err = child_strassen_gemm_m1.initialize(args_m1, swizzles, (void*)workspace_m1, stream);
+      // err = child_strassen_gemm_m1.initialize(args_m1, swizzles, (void*)workspace_m1, stream);
       // printf("1799\n");
       if (err != Status::kSuccess) return err;
 
@@ -2129,6 +2125,7 @@ public:
                                                         stride_m0l1, ptr_m2l1,
                                                         stride_m0l1, nullptr,
                                                         2, true);
+                                        args_m2.epilogue.thread.beta = 1;
       err = child_strassen_gemm_m2.initialize(args_m2, swizzles, workspace_m2, stream);
       if (err != Status::kSuccess) return err;
     }
@@ -2160,7 +2157,7 @@ public:
       if (err != Status::kSuccess) return err;
     }
 
-    /*{
+    {
       //m4 = s1@b10
       auto ptr_S1 = presum_a_ptr + AllPresums::indexAPresum(MmaStrassen::APresums::S1)*halfM*halfK;
       auto stride_S1 = cutlass::make_cute_packed_stride(StrideA{}, {halfM, halfK, 1});
@@ -2183,7 +2180,9 @@ public:
                                                         stride_m4l1, ptr_m4l1,
                                                         4, true);
       args_m4.epilogue.thread.beta = 1;
+      printf("2183\n");
       err = child_strassen_gemm_m4.initialize(args_m4, swizzles, workspace_m4, stream);
+      printf("2185\n");
       if (err != Status::kSuccess) return err;
     }
 
@@ -2211,7 +2210,7 @@ public:
       args_m5.epilogue.thread.beta = 1;
       err = child_strassen_gemm_m5.initialize(args_m5, swizzles, workspace_m5, stream);
       if (err != Status::kSuccess) return err;
-    }*/
+    }
 
     {
       //m6 = a3@s3b2
@@ -2280,25 +2279,52 @@ public:
         all_streams[i] = streams[i];
     }
 
+
+    char* only_m = getenv("ONLY_L2_M");
+    int valid_ms[] = {1,1,1,1,1,1,1};
+
+    if (only_m) {
+      std::string str = std::string(only_m);
+      std::stringstream ss(str);
+      std::string t;
+      char del = ',';
+      for (int i = 0; i < 7; i++) valid_ms[i] = 0;
+      while (getline(ss, t, del)) {
+        valid_ms[std::stoi(t)] = 1;
+      }
+    }
+
     if (num_streams <= 1) {
-      auto status = child_strassen_gemm_m0.run(all_streams, 1);
-      if (status != Status::kSuccess) return status;
+      auto status = Status::kSuccess;
+      if (!only_m || valid_ms[0] == 1) {
+        status = child_strassen_gemm_m0.run(all_streams, 1);
+        if (status != Status::kSuccess) return status;
+      }
       // if (ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 0 ||
       //     ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 1) {
       //   status = child_strassen_gemm_m1.run(all_streams, 1);
       //   if (status != Status::kSuccess) return status;
       // }
-      status = child_strassen_gemm_m2.run(all_streams, 1);
-      if (status != Status::kSuccess) return status;
-      status = child_strassen_gemm_m3.run(all_streams, 1);
-      if (status != Status::kSuccess) return status;
-      // status = child_strassen_gemm_m4.run(all_streams, 1);
-      // if (status != Status::kSuccess) return status;
-      // status = child_strassen_gemm_m5.run(all_streams, 1);
-      // if (status != Status::kSuccess) return status;
-      status = child_strassen_gemm_m6.run(all_streams, 1);
-      if (status != Status::kSuccess) return status;
-
+      if (!only_m || valid_ms[2] == 1) {
+        status = child_strassen_gemm_m2.run(all_streams, 1);
+        if (status != Status::kSuccess) return status;
+      }
+      if (!only_m || valid_ms[3] == 1) {
+        status = child_strassen_gemm_m3.run(all_streams, 1);
+        if (status != Status::kSuccess) return status;
+      }
+      if (!only_m || valid_ms[4] == 1) {
+        status = child_strassen_gemm_m4.run(all_streams, 1);
+        if (status != Status::kSuccess) return status;
+      }
+      if (!only_m || valid_ms[5] == 1) {
+        status = child_strassen_gemm_m5.run(all_streams, 1);
+        if (status != Status::kSuccess) return status;
+      }
+      if (!only_m || valid_ms[6] == 1) {
+        status = child_strassen_gemm_m6.run(all_streams, 1);
+        if (status != Status::kSuccess) return status;
+      }
       return Status::kSuccess;
     }
 
@@ -2317,10 +2343,10 @@ public:
     if (status != Status::kSuccess) return status;
     status = child_strassen_gemm_m3.run(all_streams + 3 * 7, 7);
     if (status != Status::kSuccess) return status;
-    // status = child_strassen_gemm_m4.run(all_streams + 4 * 7, 7);
-    // if (status != Status::kSuccess) return status;
-    // status = child_strassen_gemm_m5.run(all_streams + 5 * 7, 7);
-    // if (status != Status::kSuccess) return status;
+    status = child_strassen_gemm_m4.run(all_streams + 4 * 7, 7);
+    if (status != Status::kSuccess) return status;
+    status = child_strassen_gemm_m5.run(all_streams + 5 * 7, 7);
+    if (status != Status::kSuccess) return status;
     status = child_strassen_gemm_m6.run(all_streams + 6 * 7, 7);
     if (status != Status::kSuccess) return status;
 

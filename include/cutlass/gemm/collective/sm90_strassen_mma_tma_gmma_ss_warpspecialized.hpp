@@ -505,8 +505,8 @@ struct CollectiveStrassenMma<
     Tensor tensor_a = get_tensor_a();
     Tensor tensor_b = get_tensor_b();
 
-    Tensor tensor_presum_a = make_tensor(ptr_presum_A, make_layout(make_shape(4*M/2,K/2,L), make_stride(get<0>(args.dA)/2, get<1>(args.dA), get<2>(args.dA))));
-    Tensor tensor_presum_b = make_tensor(ptr_presum_B, make_layout(make_shape(N/2,4*K/2,L), make_stride(get<0>(args.dB), get<1>(args.dB)/2, get<2>(args.dB))));
+    Tensor tensor_presum_a = make_tensor(ptr_presum_A, make_layout(make_shape(4*M/2,K/2,L), make_stride(K/2, get<1>(args.dA), get<2>(args.dA))));
+    Tensor tensor_presum_b = make_tensor(ptr_presum_B, make_layout(make_shape(N/2,4*K/2,L), make_stride(get<0>(args.dB), N/2, get<2>(args.dB))));
 
     typename Params::TMA_A tma_load_a = make_tma_copy_A_sm90(
         GmemTiledCopyA{},
@@ -558,7 +558,7 @@ struct CollectiveStrassenMma<
         
     typename Params::TMA_PresumStore_B tma_store_presumld_b = make_tma_copy(
         SM90_TMA_STORE{},
-        make_tensor(ptr_presum_B, make_layout(make_shape(4*K/2,N/2,L), make_stride(get<1>(args.dB)/2, get<1>(args.dA), get<2>(args.dA)))),
+      make_tensor(ptr_presum_B, make_layout(make_shape(4*K/2,N/2,L), make_stride(N/2, get<0>(args.dB), get<2>(args.dB)))),
         PresumSmemLayoutB__{});
 
     uint32_t transaction_bytes_mk = TmaTransactionBytesMK;

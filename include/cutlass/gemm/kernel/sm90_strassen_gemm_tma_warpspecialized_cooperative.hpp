@@ -272,6 +272,8 @@ public:
 
     void* workspace{nullptr};
 
+    StrideA dA{};
+    StrideB dB{};
     int run = 0;
 
     CUTLASS_HOST_DEVICE
@@ -291,12 +293,12 @@ public:
 
     CUTLASS_HOST_DEVICE
     int get_stride_A(int idx = 0) const {
-      return get_problem_shape_k(idx);
+      return get<0>(dA);
     }
 
     CUTLASS_HOST_DEVICE
     int get_stride_B(int idx = 0) const {
-      return get_problem_shape_n(idx);
+      return get<1>(dB);
     }
 
     CUTLASS_HOST_DEVICE
@@ -430,7 +432,9 @@ public:
       const_cast<ElementB*>(args.mainloop.ptr_B),
       const_cast<ElementD*>(args.epilogue.ptr_D),
       presum_m_a, presum_m_b, postsum_m,
-      workspace
+      workspace,
+      args.mainloop.dA,
+      args.mainloop.dB
     };
   }
 

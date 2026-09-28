@@ -230,18 +230,42 @@ private:
 
   union CollectiveStorageWithoutC {
     cute::array<SmemElementC, 0> smem_C;
+    ArrayEngine<SmemElementD, 0> smem_C2;
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_Postsum;
     alignas(SmemAlignmentD) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+    alignas(SmemAlignmentD) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D2;
   };
 
-  union CollectiveStorageReuseCWithoutPostsum_ {
-    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_Postsum;
+  template<bool HasD2>
+  union CollectiveStorageReuseCWithoutPostsumAndD2_ {
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_Postsum;
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
-    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_C2;
+    struct {
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+      alignas(int(HasD2)*MaxSmemAlignment) ArrayEngine<SmemElementD, int(HasD2)*cosize_v<SmemLayoutD>> smem_D2;
+    };
   };
 
+  template<bool HasD2>
   struct CollectiveStorageReuseCWithPostsum_ {
-    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_Postsum;
+    union {
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_Postsum;
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_C2;
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D2;
+    };
+    union {
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+    };
+  };
+
+  struct CollectiveStorageReuseCWithPostsumAndC2_ {
+    union {
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_Postsum;
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D2;
+    };
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C2;
     union {
       alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
       alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
@@ -263,16 +287,24 @@ private:
   };
 
   static constexpr int MaxNumGLLoads = StrassenMiGroup::template MaxNumGlobalLoadsPerMi<ElementC>();
-  // struct TT {struct x {};};
-  // typename cute::conditional_t<StrassenMiGroup::hasM0() || StrassenMiGroup::hasM1() || StrassenMiGroup::hasM2() || StrassenMiGroup::hasM3() || StrassenMiGroup::hasM6(),
-  //                               TT, cute::Int<MaxNumGLLoads>>::x y;
-  using CollectiveStorageReuseC = cute::conditional_t<MaxNumGLLoads >= 2,
-                                                      CollectiveStorageReuseCWithPostsum_,
-                                                      CollectiveStorageReuseCWithoutPostsum_>;
-  
+
+  //In 2 Level outer M4's inner M1,M5,M6 and M4 does 2 stores and 2 loads 
+  static constexpr bool Level2StoreM4_ = StrassenMiGroup::Level == 1 && StrassenMiGroup::Level1Idx == 4;
+  //In 2 Level outer M5's, inner M1 & M6 does 1 store and 2 loads (C and C2); M5 and M4 does 1 store and 3 loads (Postsum, C, and C2)
+  static constexpr bool Level2LoadsC2 = StrassenMiGroup::Level == 1 && StrassenMiGroup::Level1Idx == 5;
+
+  using CollectiveStorageReuseC = cute::conditional_t<MaxNumGLLoads + int(Level2LoadsC2) >= 3,
+                                                      CollectiveStorageReuseCWithPostsumAndC2_,
+                                                      cute::conditional_t<MaxNumGLLoads + int(Level2LoadsC2) >= 2  || Level2StoreM4_,
+                                                                          CollectiveStorageReuseCWithPostsum_<Level2StoreM4_>,
+                                                                          CollectiveStorageReuseCWithoutPostsumAndD2_<Level2StoreM4_>>>;
+  // struct x {struct y{};};
+  // cute::conditional_t<Level2StoreM4, cute::Int<sizeof(CollectiveStorageReuseC)>, x>::y z;
+
   using RWCTypes = typename StrassenMiGroup::RWCTypes;
 
 public:
+  static constexpr bool Level2StoreM4 = Level2StoreM4_;
   static const size_t PresumSmemSize = size<0>(PresumTileShapeA{})*size<1>(PresumTileShapeA{})*PresumStages;
   struct PresumTensorStorage : cute::aligned_struct<128, _0> {
   #if 0
@@ -317,19 +349,43 @@ public:
     StrideC dC;
     ElementD const* ptr_D;
     StrideD dD;
+    ElementC const* ptr_C2 = nullptr;
+    StrideC dC2;
+    ElementD const* ptr_D2 = nullptr;
+    StrideD dD2;
 
     Arguments(typename FusionCallbacks::Arguments thread, ElementC const* ptr_C, StrideC dC,
-              ElementD const* ptr_D, StrideD dD) : thread(thread), ptr_C(ptr_C), dC(dC), ptr_D(ptr_D), dD(dD)
+              ElementD const* ptr_D, StrideD dD,
+              ElementC const* ptr_C2 = nullptr, ElementD const* ptr_D2 = nullptr)
+              : thread(thread), ptr_C(ptr_C), dC(dC), ptr_D(ptr_D), dD(dD),
+                ptr_C2(ptr_C2), dC2(dD), ptr_D2(ptr_D2), dD2(dD)
               {
                 thread.beta = 0;
               }
 
+    Arguments(typename FusionCallbacks::Arguments thread, ElementC const* ptr_C, StrideC dC,
+              ElementD const* ptr_D, StrideD dD,
+              ElementC const* ptr_C2, StrideC dC2, ElementD const* ptr_D2, StrideD dD2)
+              : Arguments(thread, ptr_C, dC, ptr_D, dD, ptr_C2, ptr_D2)
+              {
+                this->dC2 = dC2;
+                this->dD2 = dD2;
+              }
+
     template<typename Other>
     Arguments(const Other& other) : ptr_C(other.ptr_C), dC(other.dC),
-                                     ptr_D(other.ptr_D), dD(other.dD)
+                                     ptr_D(other.ptr_D), dD(other.dD), dC2(other.dD), dD2(other.dD)
               {
                 thread.alpha = other.thread.alpha;
                 thread.beta = other.thread.beta;
+                if constexpr (requires { other.ptr_C2; other.dC2; }) {
+                  ptr_C2 = other.ptr_C2;
+                  dC2 = other.dC2;
+                }
+                if constexpr (requires { other.ptr_D2; other.dD2; }) {
+                  ptr_D2 = other.ptr_D2;
+                  dD2 = other.dD2;
+                }
               }
   };
 
@@ -394,6 +450,10 @@ public:
     TMA_C_1D tma_load_linear_m;
     uint32_t tma_transaction_bytes_presum_mk = TmaTransactionBytesPresum;
     void* ptr_postsum_m;
+    TMA_C tma_load_c2{};
+    TMA_D tma_store_d2{};
+    ElementC const* ptr_C2 = nullptr;
+    ElementD const* ptr_D2 = nullptr;
   };
 
   //
@@ -414,6 +474,7 @@ public:
 
     uint32_t transaction_bytes = TmaTransactionBytes;
     typename Params::TMA_C tma_load_c{};
+    typename Params::TMA_C tma_load_c2{};
     if constexpr (is_source_supported) {
       Tensor tensor_c = make_tensor(make_gmem_ptr<TmaElementC const>(args.ptr_C), make_layout(make_shape(M,N,L), args.dC));
       tma_load_c = make_tma_copy_C_sm90(
@@ -421,11 +482,19 @@ public:
           tensor_c,
           take<0,2>(SmemLayoutC{}),
           EpilogueTile{});
+      if (args.ptr_C2 != nullptr) {
+        Tensor tensor_c2 = make_tensor(make_gmem_ptr<TmaElementC const>(args.ptr_C2), make_layout(make_shape(M,N,L), args.dC2));
+        tma_load_c2 = make_tma_copy_C_sm90(
+            CopyOpG2S{},
+            tensor_c2,
+            take<0,2>(SmemLayoutC{}),
+            EpilogueTile{});
+      }
     }
 
     typename Params::TMA_C tma_load_postsum_m{};
 
-    Tensor tensor_load_m = make_tensor(make_gmem_ptr<TmaElementC const>(postsum_m), make_layout(make_shape(4*M/2,N/2,L), make_stride(get<0>(args.dD)/2, get<1>(args.dD), get<2>(args.dD))));
+    Tensor tensor_load_m = make_tensor(make_gmem_ptr<TmaElementC const>(postsum_m), make_layout(make_shape(4*M/2,N/2,L), make_stride(N/2, get<1>(args.dD), get<2>(args.dD))));
     tma_load_postsum_m = make_tma_copy_C_sm90(
         CopyOpG2S{},
         tensor_load_m,
@@ -433,7 +502,7 @@ public:
         EpilogueTile{});
 
     typename Params::TMA_D tma_store_postsum_m{};
-    Tensor tensor_store_m = make_tensor(make_gmem_ptr<TmaElementD>(postsum_m), make_layout(make_shape(4*M/2,N/2,L), make_stride(get<0>(args.dD)/2, get<1>(args.dD), get<2>(args.dD))));
+    Tensor tensor_store_m = make_tensor(make_gmem_ptr<TmaElementD>(postsum_m), make_layout(make_shape(4*M/2,N/2,L), make_stride(N/2, get<1>(args.dD), get<2>(args.dD))));
 
     tma_store_postsum_m = make_tma_copy_C_sm90(
         CopyOpS2G{},
@@ -457,6 +526,7 @@ public:
         PresumSmemLayoutA__{});
 
     typename Params::TMA_D tma_store_d{};
+    typename Params::TMA_D tma_store_d2{};
     typename Params::TMA_D_ADD tma_add_d{};
     if constexpr (is_destination_supported) {
       Tensor tensor_d = make_tensor(make_gmem_ptr<TmaElementD>(args.ptr_D), make_layout(make_shape(M,N,L), args.dD));
@@ -470,6 +540,14 @@ public:
           tensor_d,
           take<0,2>(SmemLayoutD{}),
           EpilogueTile{});
+      if (args.ptr_D2 != nullptr) {
+        Tensor tensor_d2 = make_tensor(make_gmem_ptr<TmaElementD>(args.ptr_D2), make_layout(make_shape(M,N,L), args.dD2));
+        tma_store_d2 = make_tma_copy_C_sm90(
+        CopyOpS2G{},
+        tensor_d2,
+        take<0,2>(SmemLayoutD{}),
+        EpilogueTile{});
+      }
     }
 
     // typename decltype(make_stride(1))::x y;
@@ -494,7 +572,11 @@ public:
       tma_load_presumld_a,
       tma_load_linear_m,
       TmaTransactionBytesPresum,
-      postsum_m
+      postsum_m,
+      tma_load_c2,
+      tma_store_d2,
+      args.ptr_C2,
+      args.ptr_D2
     };
   }
 
@@ -592,9 +674,15 @@ public:
   prefetch_tma_descriptors(Params const& epilogue_params) {
     if constexpr (is_source_supported) {
       cute::prefetch_tma_descriptor(epilogue_params.tma_load_c.get_tma_descriptor());
+      if (epilogue_params.ptr_C2 != nullptr) {
+        cute::prefetch_tma_descriptor(epilogue_params.tma_load_c2.get_tma_descriptor());
+      }
     }
     if constexpr (is_destination_supported) {
       cute::prefetch_tma_descriptor(epilogue_params.tma_store_d.get_tma_descriptor());
+      if (epilogue_params.ptr_D2 != nullptr) {
+        cute::prefetch_tma_descriptor(epilogue_params.tma_store_d2.get_tma_descriptor());
+      }
     }
 
     cute::prefetch_tma_descriptor(epilogue_params.tma_store_postsum_m.get_tma_descriptor());
@@ -647,12 +735,14 @@ public:
   }
 
   template<
+    bool SecondSource = false,
     class ProblemShapeMNKL
   >
   CUTLASS_DEVICE decltype(auto)
   get_c_load_tma(ProblemShapeMNKL problem_shape_mnkl, int sub_m_idx) {
     auto [M, N, K, L] = problem_shape_mnkl;
-    Tensor c = params.tma_load_c.get_tma_tensor(make_shape(M, N, L));
+    auto const& tma_load = SecondSource ? params.tma_load_c2 : params.tma_load_c;
+    Tensor c = tma_load.get_tma_tensor(make_shape(M, N, L));
     auto c0_ptr = c.data() + make_coord(0, 0, _);
     auto c0 = make_tensor(c0_ptr, c.layout());
 
@@ -798,6 +888,17 @@ public:
     Tensor mC = coalesce(mC_mn, take<0,2>(CtaTileMNK{}));
     Tensor gC = local_tile(mC, take<0,2>(CtaTileMNK{}), coord_shape);
 
+    Tensor mC2_mn = [&]() CUTLASS_LAMBDA_FUNC_INLINE {
+      if constexpr (Level2LoadsC2 && is_source_supported) {
+        if (params.ptr_C2 != nullptr) {
+          return get_c_load_tma<true>(problem_shape_mnkl, sub_m_idx);
+        }
+      }
+      return mC_mn;
+    }();
+    Tensor mC2 = coalesce(mC2_mn, take<0,2>(CtaTileMNK{}));
+    Tensor gC2 = local_tile(mC2, take<0,2>(CtaTileMNK{}), coord_shape);
+
     auto second_load_tuple = get_load_tma(problem_shape_mnkl, sub_m_idx, src_global_ops[1]);
     bool has_second_load = is_source_supported && src_global_ops[1].valid();
     Tensor mPostsum2_mn = get<0>(get_second_load_tma(problem_shape_mnkl));
@@ -811,6 +912,10 @@ public:
     Tensor gC_epi = flat_divide(gC, EpilogueTile{});                             // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
     Tensor sPostsum_epi = make_tensor(make_smem_ptr(ptr_sPostsum), SmemLayoutC{}); //      (EPI_TILE_M,EPI_TILE_N,PIPE_C)
     Tensor sC_epi = make_tensor(make_smem_ptr(ptr_sC), SmemLayoutC{});           //      (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+
+    auto ptr_sC2 = shared_tensors.collective.smem_C2.begin();
+    Tensor gC2_epi = flat_divide(gC2, EpilogueTile{});
+    Tensor sC2_epi = make_tensor(make_smem_ptr(ptr_sC2), SmemLayoutC{});
 
     auto ptr_sPostsum2 = ptr_sPostsum + cosize_v<SmemLayoutC>;
     Tensor gPostsum2_epi = flat_divide(gPostsum2, EpilogueTile{});                // (EPI_TILE_M,EPI_TILE_N,EPI_M,EPI_N)
@@ -832,6 +937,8 @@ public:
     }();
     Tensor bGS_gC = thrblk_g2s_c.partition_S(gC_epi);                                   // (G2S,G2S_M,G2S_N,EPI_M,EPI_N)
     Tensor bGS_sC = thrblk_g2s_c.partition_D(sC_epi);                                   // (G2S,G2S_M,G2S_N,PIPE_C)
+    Tensor bGS_gC2 = thrblk_g2s_c.partition_S(gC2_epi);
+    Tensor bGS_sC2 = thrblk_g2s_c.partition_D(sC2_epi);
 
     ThrCopy thrblk_g2s_postsum2 = tma_load_postsum.get_slice(Int<0>{});
     Tensor bGS_gPostsum2 = thrblk_g2s_postsum2.partition_S(gPostsum2_epi);                // (G2S,G2S_M,G2S_N,EPI_M,EPI_N)
@@ -896,6 +1003,13 @@ public:
               copy(params.tma_load_c.with(*tma_barrier, mcast_mask),
                 bGS_gC(_,_,_,epi_m,epi_n), bGS_sC(_,_,_,load_pipe_producer_state.index()));
               load_pipeline.producer_expect_transaction(load_pipe_producer_state);
+              if constexpr (Level2LoadsC2) {
+                if (params.ptr_C2 != nullptr) {
+                  copy(params.tma_load_c2.with(*tma_barrier, mcast_mask),
+                    bGS_gC2(_,_,_,epi_m,epi_n), bGS_sC2(_,_,_,load_pipe_producer_state.index()));
+                  load_pipeline.producer_expect_transaction(load_pipe_producer_state);
+                }
+              }
             }
           }
           if (has_second_load) {
@@ -1307,6 +1421,7 @@ struct SM90_BULK_TMA_ADD_S2G
     bool use_tma_first_store = false;
     auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, true, first_store_srcs, use_tma_first_store);
     PostsumOp first_store_dest = get<1>(first_store_tuple);
+    bool store_level2_m4 = Level2StoreM4 && params.ptr_D2 != nullptr && first_store_dest.is_layout_final();
     auto& tma_store_dorm = get<2>(first_store_tuple) ? params.tma_store_postsum_m : params.tma_store_d ;
     auto& tma_add_dorm = get<2>(first_store_tuple) ? params.tma_add_postsum_m : params.tma_add_d;
     Tensor mD_mn = get<0>(first_store_tuple);
@@ -1317,7 +1432,17 @@ struct SM90_BULK_TMA_ADD_S2G
     auto second_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, false, second_store_srcs, use_tma_second_store);
     bool has_second_store = get<1>(second_store_tuple).valid();
     PostsumOp second_store_dest = get<1>(second_store_tuple);
-    Tensor mD2_mn = get<0>(second_store_tuple);
+    Tensor mD2_mn = [&]() CUTLASS_LAMBDA_FUNC_INLINE {
+      if constexpr (Level2StoreM4) {
+        if (store_level2_m4) {
+          Tensor output_d2 = params.tma_store_d2.get_tma_tensor(make_shape(M, N, L));
+          auto output_d2_ptr = output_d2.data() + make_coord((first_store_dest.get_op() % 2) * N / 2,
+                                                           (first_store_dest.get_op() / 2) * M / 2, _);
+          return make_tensor(output_d2_ptr, output_d2.layout());
+        }
+      }
+      return get<0>(second_store_tuple);
+    }();
     Tensor mD2 = coalesce(mD2_mn, take<0,2>(CtaTileMNK{}));
     Tensor gD2 = local_tile(mD2, take<0,2>(CtaTileMNK{}), coord_shape);
 
@@ -1332,10 +1457,13 @@ struct SM90_BULK_TMA_ADD_S2G
     auto ptr_sPostsum = shared_tensors.collective.smem_Postsum.begin();
     auto ptr_sPostsum2 = ptr_sPostsum + cosize_v<SmemLayoutC>;
     auto ptr_sD = shared_tensors.collective.smem_D.begin();
-    auto ptr_sD2 = shared_tensors.collective.smem_C.begin();//StagesD*size<0>(EpilogueTile{})*size<1>(EpilogueTile{});
+    auto ptr_sD2 = shared_tensors.collective.smem_D2.begin();
 
     Tensor sC_epi = cute::as_position_independent_swizzle_tensor(
                       make_tensor(make_smem_ptr(ptr_sC), SmemLayoutC{}));             // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
+    auto ptr_sC2 = shared_tensors.collective.smem_C2.begin();
+    Tensor sC2_epi = cute::as_position_independent_swizzle_tensor(
+                      make_tensor(make_smem_ptr(ptr_sC2), SmemLayoutC{}));
     Tensor sPostsum_epi = cute::as_position_independent_swizzle_tensor(
               make_tensor(make_smem_ptr(ptr_sPostsum), SmemLayoutC{}));        // (EPI_TILE_M,EPI_TILE_N,PIPE_C)
     Tensor sPostsum2_epi = cute::as_position_independent_swizzle_tensor(
@@ -1397,6 +1525,7 @@ struct SM90_BULK_TMA_ADD_S2G
     TiledCopy tiled_s2r = make_tiled_copy_S(Copy_Atom<CopyOpS2R, SmemElementC>{}, tiled_copy_C_atom);
     ThrCopy thread_s2r = tiled_s2r.get_slice(thread_idx);
     Tensor tSR_sC        = thread_s2r.partition_S(sC_epi);                                  // (S2R,S2R_M,S2R_N,PIPE_C)
+    Tensor tSR_sC2       = thread_s2r.partition_S(sC2_epi);
     Layout tSR_rC_layout = thread_s2r.retile_D(tRS_rD).layout();                            // (S2R,S2R_M,S2R_N)
 
     Tensor tSR_sPostsum  = thread_s2r.partition_S(sPostsum_epi);                            // (S2R,S2R_M,S2R_N,PIPE_C)
@@ -1412,6 +1541,7 @@ struct SM90_BULK_TMA_ADD_S2G
     Tensor tSR_rC = thread_s2r.retile_D(tRS_rC);                                                   // (S2R,S2R_M,S2R_N)
     
     Tensor tRS_rC2 = make_tensor<RegisterElementC>(tRS_rD2_layout);                                  // (R2S,R2S_M,R2S_N)
+    Tensor tSR_rC2 = thread_s2r.retile_D(tRS_rC2);
     Tensor tRS_rPostsum = make_tensor<RegisterElementC>(tRS_rD_layout);
     Tensor tSR_rPostsum = thread_s2r.retile_D(tRS_rPostsum);
     Tensor tRS_rPostsum2 = make_tensor<RegisterElementC>(tRS_rD2_layout);
@@ -1422,8 +1552,16 @@ struct SM90_BULK_TMA_ADD_S2G
     Tensor bSG_sD = thrblk_s2g.partition_S(sD_epi);                                    // (S2G,S2G_M,S2G_N,PIPE_D)
     Tensor bSG_gD = thrblk_s2g.partition_D(gD_epi);                                    // (S2G,S2G_M,S2G_N,EPI_M,EPI_N)
     
-    Tensor bSG_sD2 = thrblk_s2g.partition_S(sD2_epi);                                    // (S2G,S2G_M,S2G_N,PIPE_D)
-    Tensor bSG_gD2 = thrblk_s2g.partition_D(gD2_epi);                                    // (S2G,S2G_M,S2G_N,EPI_M,EPI_N)
+    ThrCopy thrblk_s2g_d2 = [&]() CUTLASS_LAMBDA_FUNC_INLINE {
+      if constexpr (Level2StoreM4) {
+        if (store_level2_m4) {
+          return params.tma_store_d2.get_slice(Int<0>{});
+        }
+      }
+      return thrblk_s2g;
+    }();
+    Tensor bSG_sD2 = thrblk_s2g_d2.partition_S(sD2_epi);                                    // (S2G,S2G_M,S2G_N,PIPE_D)
+    Tensor bSG_gD2 = thrblk_s2g_d2.partition_D(gD2_epi);                                    // (S2G,S2G_M,S2G_N,EPI_M,EPI_N)
 
     // OOB predication for tile quantization "residue"
     // Absolute coordinate tensors (dynamic)
@@ -1561,6 +1699,12 @@ struct SM90_BULK_TMA_ADD_S2G
             copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
           }
 
+          if constexpr (Level2StoreM4) {
+            if (store_level2_m4) {
+              copy(params.tma_store_d2, bSG_sD2(_,_,_,store_pipe_producer_state.index()), bSG_gD2(_,_,_,epi_m,epi_n));
+            }
+          }
+
           if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_interim_linear() && thread_idx == 0) {
             //TODO: Can distribute writes over all threads a warp similar to layoutfinal copy
             ElementD* postsum_m0 = reinterpret_cast<ElementD*>(params.ptr_postsum_m) + second_store_dest.get_op()*(N/2)*(M/2);
@@ -1664,7 +1808,25 @@ struct SM90_BULK_TMA_ADD_S2G
               }
             }
             if (is_C_load_needed) {
-              copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
+              if constexpr (Level2LoadsC2) {
+                Tensor source_fragment = make_tensor<SmemElementC>(tRS_rD_layout);
+                Tensor source_fragment_s2r = thread_s2r.retile_D(source_fragment);
+                copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), source_fragment_s2r);
+                CUTLASS_PRAGMA_UNROLL
+                for (int element = 0; element < size(tSR_rC); ++element) {
+                  tSR_rC(element) = source_fragment_s2r(element);
+                }
+                if (params.ptr_C2 != nullptr) {
+                  copy(tiled_s2r, tSR_sC2(_,_,_,load_wait_state.index()), source_fragment_s2r);
+                  CUTLASS_PRAGMA_UNROLL
+                  for (int element = 0; element < size(tSR_rC); ++element) {
+                    tSR_rC(element) += source_fragment_s2r(element);
+                  }
+                }
+              }
+              else {
+                copy(tiled_s2r, tSR_sC(_,_,_,load_wait_state.index()), tSR_rC);
+              }
             }
             if (first_store_srcs[1].valid()) {
               if (first_store_srcs[1].is_layout_interim_linear()) {
@@ -1762,9 +1924,11 @@ struct SM90_BULK_TMA_ADD_S2G
             }
           }
 
-          CUTLASS_PRAGMA_UNROLL
-          for (int epi_v = 0; epi_v < size(tRS_rCompute_frg); ++epi_v) {
-            tRS_rCompute2_frg(epi_v) = cst_callbacks2.visit(tRS_rAcc_frg_mn(r2s_v + epi_v), epi_v, epi_m, epi_n);
+          if constexpr (!Level2StoreM4) {
+            CUTLASS_PRAGMA_UNROLL
+            for (int epi_v = 0; epi_v < size(tRS_rCompute_frg); ++epi_v) {
+              tRS_rCompute2_frg(epi_v) = cst_callbacks2.visit(tRS_rAcc_frg_mn(r2s_v + epi_v), epi_v, epi_m, epi_n);
+            }
           }
 
           //TODO: Here addition with source C happens
@@ -1799,7 +1963,18 @@ struct SM90_BULK_TMA_ADD_S2G
 
           CUTLASS_PRAGMA_UNROLL
           for (int epi_v = 0; epi_v < size(tRS_rCompute_frg); ++epi_v) {
-            tRS_rCompute_frg(epi_v) = cst_callbacks.visit(tRS_rAcc_frg_mn(r2s_v + epi_v), epi_v, epi_m, epi_n);
+            if constexpr (Level2StoreM4) {
+              if (store_level2_m4) {
+                tRS_rCompute2_frg(epi_v) = cutlass::NumericArrayConverter<RegisterElementD, ElementAccumulator, FragmentSize>{}(
+                  tRS_rAcc_frg_mn(r2s_v + epi_v));
+              }
+            }
+            if (first_store_dest.is_layout_final()) {
+              tRS_rCompute_frg(epi_v) = cst_callbacks.visit(tRS_rAcc_frg_mn(r2s_v + epi_v), epi_v, epi_m, epi_n);
+            } else {
+              tRS_rCompute_frg(epi_v) = cutlass::NumericArrayConverter<RegisterElementD, ElementAccumulator, FragmentSize>{}(
+                tRS_rAcc_frg_mn(r2s_v + epi_v));
+            }
           }
         }
 
@@ -1826,15 +2001,24 @@ struct SM90_BULK_TMA_ADD_S2G
 
           // Output register transformation before copying to shared memory.
           copy(tiled_r2r, tRR_rD_src, tRR_rD_dst);
+          if constexpr (Level2StoreM4) {
+            if (store_level2_m4) {
+              Tensor tRR_rD2_src = thread_r2r.retile_S(tRS_rCompute2);
+              Tensor tRR_rD2_dst = thread_r2r.retile_D(tRS_rCompute2);
+              copy(tiled_r2r, tRR_rD2_src, tRR_rD2_dst);
+            }
+          }
         }
 
         CUTLASS_PRAGMA_UNROLL
         for (int i = 0; i < size(tRS_rD_frg); ++i) {
           tRS_rD_frg(i) = cutlass::NumericArrayConverter<SmemElementD, RegisterElementD, FragmentSize>{}(tRS_rCompute_frg(i));
-          tRS_rD2_frg(i) = cutlass::NumericArrayConverter<SmemElementD, RegisterElementD, FragmentSize>{}(tRS_rCompute2_frg(i));
+          if (!Level2StoreM4 || store_level2_m4) {
+            tRS_rD2_frg(i) = cutlass::NumericArrayConverter<SmemElementD, RegisterElementD, FragmentSize>{}(tRS_rCompute2_frg(i));
+          }
         }
         
-        if (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_final()) {
+        if (store_level2_m4 || (second_store_dest.valid() && second_store_dest.is_mem_global() && second_store_dest.is_layout_final())) {
           copy(tiled_r2s, tRS_rD2, tRS_sD2(_,_,_,store_pipe_producer_state.index()));
         }
 
