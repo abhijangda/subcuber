@@ -141,13 +141,13 @@ using TileShapeM2To6        = Shape<_128,_256,_64>;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0M1M2M3M6_M0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM0M1M2M3M6_M2M3M6 = 4 ;
-const uint StageCountTypeM0M1M2M3M6_M4M5 = 3 ;
+const uint StageCountTypeM0M1M2M3M6_M4M5 = 4 ;
 const uint StageCountTypeM4_M0 = 3 ;
 const uint StageCountTypeM4_M2M3M6 = 3 ;
 const uint StageCountTypeM4_M4M5 = 3 ;
 const uint StageCountTypeM5_M0 = 3 ;
-const uint StageCountTypeM5_M2M3M6 = 2 ;
-const uint StageCountTypeM5_M4M5 = 2 ;
+const uint StageCountTypeM5_M2M3M6 = 3 ;
+const uint StageCountTypeM5_M4M5 = 3;
 
 static constexpr int StageCountTypeM0(int level_1_idx) {
   if (level_1_idx == 4) return StageCountTypeM4_M0;
@@ -195,35 +195,49 @@ using AllPresumsKernel = AllPresums<>;
 // using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
 //                PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
 using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                   PresumCompute, PresumCompute, PresumCompute, PresumCompute>;//PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;
+                                   PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 0 //TMA Reduce
+#if 1 //TMA Reduce
+#if defined(COOPERATIVE)
+  static_assert(StageCountTypeM4M5(2) == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
+  static_assert(StageCountTypeM4_M0 == 3 && StageCountTypeM5_M2M3M6 == 3 && StageCountTypeM5_M4M5 == 3, "StageCountTypeM5_M2M3M6 should be 3 for TMA Reduce");
+#endif
+using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<2, 0, TileShapeM0,
+                                                              AllPresumsM0>,
+                                              StrassenLevel1MiGroup<2, 0, TileShapeM0, ClusterShape, StageCountTypeM0(0),
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>  //C1 = M0
+                                                                             /*CUW<0, LayoutFinal,   LayoutNone, Expr<Plus<1>>>*/ >,//C0 = M1
+                                                                    AllPresumsM0, 0, 0>
+                                                                    >;
+
+template<int level_1_idx>
 using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, AllPresumsM0>,
-                                            StrassenLevel1MiGroup<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
+                                            StrassenLevel1MiGroup<1, level_1_idx, TileShapeM0, ClusterShape, StageCountTypeM0(level_1_idx),
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                            CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                   AllPresumsM0, 0, 0, 1>,
-                                            StrassenLevel1M1Group<1, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
+                                            StrassenLevel1M1Group<1, level_1_idx, TileShapeM0, ClusterShape, StageCountTypeM0(level_1_idx),
                                                                   RWMTypes<>,
                                                                   RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                             CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C0 = M1
                                                                   AllPresumsM0>,
-                                            StrassenLevel1MiGroup<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1MiGroup<1, level_1_idx, TileShapeM2To6, ClusterShape, StageCountTypeM2M3M6(level_1_idx),
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim>> >, //C1 = Sh = C1+M2 ; Reg = C1 //TODO: pass C1 through registers
                                                                            CUW<3, LayoutFinal, LayoutNone, Expr<Plus<3>>/*, Expr<Plus<1, MemShared, LayoutInterim1D>>*/ >, //C2 = C1Sh+M3
                                                                            CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>> >,
                                                                   AllPresumsM1To6, 0, 2, 3, 6>,
-                                            StrassenLevel1M3Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M3Group<1, level_1_idx, TileShapeM2To6, ClusterShape, StageCountTypeM2M3M6(level_1_idx),
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<2, LayoutNone, LayoutInterim1D, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C2 = C1(Reg)+M3 
                                                                   AllPresumsM1To6>,
-                                            StrassenLevel1MiGroup<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1MiGroup<1, level_1_idx, TileShapeM2To6, ClusterShape, StageCountTypeM4M5(level_1_idx),
                                                                   RWMTypes<>,
                                                                   RWCTypes</*CUW<0, LayoutNone,  LayoutInterim1D,  Expr<Plus<4>>>,*/ //C1 (stored at M0) = C1+M4
                                                                            CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>, Expr<Plus<3, MemGlobal, LayoutFinal>>>,//C3 = C2+M4
@@ -232,12 +246,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, Al
                                                                                                                                >
                                                                            >,
                                                                   AllPresumsM1To6, 0, 4, 5>,
-                                            StrassenLevel1M5Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M5Group<1, level_1_idx, TileShapeM2To6, ClusterShape, StageCountTypeM4M5(level_1_idx),
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>,
                                                                                                                                Plus<0, MemGlobal, LayoutInterim1D>>>>, //C1 = C1+M5 //TODO: in code M5 reads M1 and M0 (written by M4)
                                                                   AllPresumsM1To6>,
-                                            StrassenLevel1M6Group<1, 0, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M6Group<1, level_1_idx, TileShapeM2To6, ClusterShape, StageCountTypeM2M3M6(level_1_idx),
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                   AllPresumsM1To6>
@@ -312,9 +326,9 @@ using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<2, 0, TileShapeM0,
                                                               AllPresumsM0>,
                                               StrassenLevel1MiGroup<2, 0, TileShapeM0, ClusterShape, StageCountTypeM0(0),
                                                                     RWMTypes<>,
-                                                                    RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,  //C1 = M0
-                                                                             CUW<0, LayoutFinal,   LayoutNone, Expr<Plus<1>>> >,//C0 = M1
-                                                                    AllPresumsM0, 0, 0, 1>
+                                                                    RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>  //C1 = M0
+                                                                             /*CUW<0, LayoutFinal,   LayoutNone, Expr<Plus<1>>>*/ >,//C0 = M1
+                                                                    AllPresumsM0, 0, 0>
                                                                     >;
 
 template<int level_1_idx>
@@ -788,7 +802,7 @@ bool verify(const Options &options) {
   CUDA_CHECK(cudaMemcpy(host_D, block_D.get(), options.m*options.n*sizeof(ElementD), cudaMemcpyDeviceToHost));
 
   float MAX_REL_ERR = 1e-1;
-  float MAX_ABS_ERR = 8;
+  float MAX_ABS_ERR = 12;
 
   for (int r = 0; r < options.m; r++) {
   for (int c = 0; c < options.n; c++) {

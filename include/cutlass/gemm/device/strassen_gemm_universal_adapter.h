@@ -2104,8 +2104,9 @@ public:
         stride_m0l1, ptr_m0l1, stride_m0l1, nullptr,
         args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, nullptr,
         1, true);
+      args_m1.epilogue.thread.beta = 1;
 
-      // err = child_strassen_gemm_m1.initialize(args_m1, swizzles, (void*)workspace_m1, stream);
+      err = child_strassen_gemm_m1.initialize(args_m1, swizzles, (void*)workspace_m1, stream);
       // printf("1799\n");
       if (err != Status::kSuccess) return err;
 
@@ -2125,7 +2126,7 @@ public:
                                                         stride_m0l1, ptr_m2l1,
                                                         stride_m0l1, nullptr,
                                                         2, true);
-                                        args_m2.epilogue.thread.beta = 1;
+      args_m2.epilogue.thread.beta = 1;
       err = child_strassen_gemm_m2.initialize(args_m2, swizzles, workspace_m2, stream);
       if (err != Status::kSuccess) return err;
     }
@@ -2300,11 +2301,13 @@ public:
         status = child_strassen_gemm_m0.run(all_streams, 1);
         if (status != Status::kSuccess) return status;
       }
-      // if (ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 0 ||
-      //     ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 1) {
-      //   status = child_strassen_gemm_m1.run(all_streams, 1);
-      //   if (status != Status::kSuccess) return status;
-      // }
+      if (ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 0 ||
+          ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 1) {
+        if (!only_m || valid_ms[1] == 1) {
+          status = child_strassen_gemm_m1.run(all_streams, 1);
+          if (status != Status::kSuccess) return status;
+        }
+      }
       if (!only_m || valid_ms[2] == 1) {
         status = child_strassen_gemm_m2.run(all_streams, 1);
         if (status != Status::kSuccess) return status;
@@ -2334,10 +2337,13 @@ public:
 
     auto status = child_strassen_gemm_m0.run(all_streams + 0 * 7, 7);
     if (status != Status::kSuccess) return status;
-    // if (ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 0) {
-    //   status = child_strassen_gemm_m1.run(all_streams + 1 * 7, 7);
-    //   if (status != Status::kSuccess) return status;
-    // }
+    if (ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 0 ||
+        ChildStrassenGemmM0::StrassenGroups::Group0::FusedOrContinueMMA() == 1) {
+        if (!only_m || valid_ms[0] == 1) {
+          status = child_strassen_gemm_m1.run(all_streams, 1);
+          if (status != Status::kSuccess) return status;
+        }
+      }
 
     status = child_strassen_gemm_m2.run(all_streams + 2 * 7, 7);
     if (status != Status::kSuccess) return status;

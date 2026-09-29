@@ -452,6 +452,7 @@ public:
     void* ptr_postsum_m;
     TMA_C tma_load_c2{};
     TMA_D tma_store_d2{};
+    TMA_D_ADD tma_add_d2{};
     ElementC const* ptr_C2 = nullptr;
     ElementD const* ptr_D2 = nullptr;
   };
@@ -528,6 +529,7 @@ public:
     typename Params::TMA_D tma_store_d{};
     typename Params::TMA_D tma_store_d2{};
     typename Params::TMA_D_ADD tma_add_d{};
+    typename Params::TMA_D_ADD tma_add_d2{};
     if constexpr (is_destination_supported) {
       Tensor tensor_d = make_tensor(make_gmem_ptr<TmaElementD>(args.ptr_D), make_layout(make_shape(M,N,L), args.dD));
       tma_store_d = make_tma_copy_C_sm90(
@@ -547,6 +549,12 @@ public:
         tensor_d2,
         take<0,2>(SmemLayoutD{}),
         EpilogueTile{});
+
+        tma_add_d2 = make_tma_copy_C_sm90(
+            SM90_TMA_REDUCE_ADD{},
+            tensor_d2,
+            take<0,2>(SmemLayoutD{}),
+            EpilogueTile{});
       }
     }
 
@@ -575,6 +583,7 @@ public:
       postsum_m,
       tma_load_c2,
       tma_store_d2,
+      tma_add_d2,
       args.ptr_C2,
       args.ptr_D2
     };
@@ -1701,7 +1710,16 @@ struct SM90_BULK_TMA_ADD_S2G
 
           if constexpr (Level2StoreM4) {
             if (store_level2_m4) {
-              copy(params.tma_store_d2, bSG_sD2(_,_,_,store_pipe_producer_state.index()), bSG_gD2(_,_,_,epi_m,epi_n));
+              if (use_tma_first_store) {
+                if (thread_idx == 0) {
+                  Tensor sD2_tile = group_modes<0,2>(sD2_epi(_,_,store_pipe_producer_state.index()));
+                  Tensor gD2_tile = group_modes<0,2>(gD2_epi(_,_,epi_m,epi_n));
+                  copy(params.tma_add_d2, sD2_tile, gD2_tile);
+                }
+              }
+              else {
+                copy(params.tma_store_d2, bSG_sD2(_,_,_,store_pipe_producer_state.index()), bSG_gD2(_,_,_,epi_m,epi_n));
+              }
             }
           }
 
