@@ -293,14 +293,20 @@ private:
   //In 2 Level outer M5's, inner M1 & M6 does 1 store and 2 loads (C and C2); M5 and M4 does 1 store and 3 loads (Postsum, C, and C2)
   static constexpr bool Level2LoadsC2 = StrassenMiGroup::Level == 1 && StrassenMiGroup::Level1Idx == 5;
 
-  using CollectiveStorageReuseC = cute::conditional_t<MaxNumGLLoads + int(Level2LoadsC2) >= 3,
-                                                      CollectiveStorageReuseCWithPostsumAndC2_,
-                                                      cute::conditional_t<MaxNumGLLoads + int(Level2LoadsC2) >= 2  || Level2StoreM4_,
-                                                                          CollectiveStorageReuseCWithPostsum_<Level2StoreM4_>,
-                                                                          CollectiveStorageReuseCWithoutPostsumAndD2_<Level2StoreM4_>>>;
-  // struct x {struct y{};};
-  // cute::conditional_t<Level2StoreM4, cute::Int<sizeof(CollectiveStorageReuseC)>, x>::y z;
+#if defined(L2_SCHED_TMA_REDUCE_ADD)
+  static const bool l2_sched_tma_reduce_add = true;
+#else
+  static const bool l2_sched_tma_reduce_add = false;
+#endif
 
+  using CollectiveStorageReuseC = cute::conditional_t<(Level2StoreM4_ || Level2LoadsC2) && l2_sched_tma_reduce_add,
+                                                      CollectiveStorageReuseCWithoutPostsumAndD2_<Level2StoreM4_>,
+                                                      cute::conditional_t<MaxNumGLLoads + int(Level2LoadsC2) >= 3,
+                                                                          CollectiveStorageReuseCWithPostsumAndC2_,
+                                                                          cute::conditional_t<MaxNumGLLoads + int(Level2LoadsC2) >= 2  || Level2StoreM4_,
+                                                                                              CollectiveStorageReuseCWithPostsum_<Level2StoreM4_>,
+                                                                                              CollectiveStorageReuseCWithoutPostsumAndD2_<Level2StoreM4_>>>
+                                                     >;
   using RWCTypes = typename StrassenMiGroup::RWCTypes;
 
 public:
@@ -545,10 +551,10 @@ public:
       if (args.ptr_D2 != nullptr) {
         Tensor tensor_d2 = make_tensor(make_gmem_ptr<TmaElementD>(args.ptr_D2), make_layout(make_shape(M,N,L), args.dD2));
         tma_store_d2 = make_tma_copy_C_sm90(
-        CopyOpS2G{},
-        tensor_d2,
-        take<0,2>(SmemLayoutD{}),
-        EpilogueTile{});
+            CopyOpS2G{},
+            tensor_d2,
+            take<0,2>(SmemLayoutD{}),
+            EpilogueTile{});
 
         tma_add_d2 = make_tma_copy_C_sm90(
             SM90_TMA_REDUCE_ADD{},
@@ -1430,6 +1436,12 @@ struct SM90_BULK_TMA_ADD_S2G
     bool use_tma_first_store = false;
     auto first_store_tuple = get_store_tma(problem_shape_mnkl, sub_m_idx, true, first_store_srcs, use_tma_first_store);
     PostsumOp first_store_dest = get<1>(first_store_tuple);
+    if constexpr (Level2StoreM4 || Level2LoadsC2) {
+      //always do TMA Add for Level2's M4 and Level2's M5
+      use_tma_first_store = use_tma_first_store ||
+        (l2_sched_tma_reduce_add && first_store_dest.is_layout_final());
+    }
+
     bool store_level2_m4 = Level2StoreM4 && params.ptr_D2 != nullptr && first_store_dest.is_layout_final();
     auto& tma_store_dorm = get<2>(first_store_tuple) ? params.tma_store_postsum_m : params.tma_store_d ;
     auto& tma_add_dorm = get<2>(first_store_tuple) ? params.tma_add_postsum_m : params.tma_add_d;
