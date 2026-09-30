@@ -58,6 +58,8 @@
 
 #define MY_PRINTF(...) ;//printf(__VA_ARGS__)
 
+// #define L2_SCHED_TMA_REDUCE_ADD
+
 #include "cutlass/cutlass.h"
 
 #include "cute/tensor.hpp"
@@ -140,14 +142,14 @@ using TileShapeM0           = Shape<_128,_256,_64>;                           //
 using TileShapeM2To6        = Shape<_128,_256,_64>;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0M1M2M3M6_M0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
-const uint StageCountTypeM0M1M2M3M6_M2M3M6 = 4 ;
-const uint StageCountTypeM0M1M2M3M6_M4M5 = 4 ;
-const uint StageCountTypeM4_M0 = 3 ;
-const uint StageCountTypeM4_M2M3M6 = 3 ;
-const uint StageCountTypeM4_M4M5 = 3 ;
-const uint StageCountTypeM5_M0 = 3 ;
-const uint StageCountTypeM5_M2M3M6 = 3 ;
-const uint StageCountTypeM5_M4M5 = 3;
+const uint StageCountTypeM0M1M2M3M6_M2M3M6 = 4;
+const uint StageCountTypeM0M1M2M3M6_M4M5 = 3;//4 ;
+const uint StageCountTypeM4_M0 = 3;//4
+const uint StageCountTypeM4_M2M3M6 = 3;//4
+const uint StageCountTypeM4_M4M5 = 3;//4
+const uint StageCountTypeM5_M0 = 3;
+const uint StageCountTypeM5_M2M3M6 = 3;//4 ;
+const uint StageCountTypeM5_M4M5 = 2;//4;
 
 static constexpr int StageCountTypeM0(int level_1_idx) {
   if (level_1_idx == 4) return StageCountTypeM4_M0;
@@ -201,11 +203,16 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 1 //TMA Reduce
+#if defined(L2_SCHED_TMA_REDUCE_ADD) //TMA Reduce
 #if defined(COOPERATIVE)
   static_assert(StageCountTypeM4M5(2) == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
-  static_assert(StageCountTypeM4_M0 == 3 && StageCountTypeM5_M2M3M6 == 3 && StageCountTypeM5_M4M5 == 3, "StageCountTypeM5_M2M3M6 should be 3 for TMA Reduce");
+  static_assert(StageCountTypeM4_M0 >= 3 && StageCountTypeM5_M2M3M6 == 4 && StageCountTypeM5_M4M5 == 4, "StageCountTypeM5_M2M3M6 should be 3 for TMA Reduce");
 #endif
+
+constexpr bool UseTMAReduce = true;
+using ElementL2Postsum_M4 = void;
+using ElementL2Postsum_M5 = void;
+
 using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<2, 0, TileShapeM0,
                                                               AllPresumsM0>,
                                               StrassenLevel1MiGroup<2, 0, TileShapeM0, ClusterShape, StageCountTypeM0(0),
@@ -322,6 +329,10 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSc
                                                         >;
 
 #elif 1
+constexpr bool UseTMAReduce = false;
+using ElementL2Postsum_M4 = ElementD;
+using ElementL2Postsum_M5 = ElementD;
+
 using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<2, 0, TileShapeM0,
                                                               AllPresumsM0>,
                                               StrassenLevel1MiGroup<2, 0, TileShapeM0, ClusterShape, StageCountTypeM0(0),
@@ -436,25 +447,28 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<false, F
                                                         >;
 #endif
 
-using ElementL2Postsum = cutlass::half_t;
-
-template<typename StrassenGroups>
+template<typename StrassenGroups, typename ElementL2Postsum>
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups, ScheduleStrassenGroups1,
                                                                        ProblemShape,
                                                                        ArchTag, OperatorClass,
                                                                        ElementA, LayoutA, SubMatLayoutA,
                                                                        ElementB, LayoutB, SubMatLayoutB,
-                                                                       ElementL2Postsum, LayoutC, SubMatLayoutC,
+                                                                       ElementL2Postsum,
+                                                                       LayoutC, SubMatLayoutC,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0(0)>,
                                                                        PresumTileShapeA, PresumTileShapeB,
                                                                        PresumOpts, AlignmentA, AlignmentB, AlignmentC,
                                                                        ElementD>;
 
-using Gemm = cutlass::gemm::device::StrassenGemmLevel2UniversalAdapter<StrassenGemmKernels<StrassenGroupsM0>,  StrassenGemmKernels<StrassenGroups<1>>,
-                                                                              StrassenGemmKernels<StrassenGroups<2>>, StrassenGemmKernels<StrassenGroups<3>>,
-                                                                              StrassenGemmKernels<StrassenGroups<4>>, StrassenGemmKernels<StrassenGroups<5>>,
-                                                                              StrassenGemmKernels<StrassenGroups<6>>
+using Gemm = cutlass::gemm::device::StrassenGemmLevel2UniversalAdapter<StrassenGemmKernels<StrassenGroupsM0, void>,
+                                                                       StrassenGemmKernels<StrassenGroups<1>, ElementD>,
+                                                                      StrassenGemmKernels<StrassenGroups<2>, ElementD>,
+                                                                      StrassenGemmKernels<StrassenGroups<3>, ElementD>,
+                                                                      StrassenGemmKernels<StrassenGroups<4>, ElementL2Postsum_M4>,
+                                                                      StrassenGemmKernels<StrassenGroups<5>, ElementL2Postsum_M5>,
+                                                                      StrassenGemmKernels<StrassenGroups<6>, ElementD>,
+                                                                      UseTMAReduce
                                                                               >;
 
 // Reference device GEMM implementation type
@@ -844,9 +858,9 @@ bool verify(const Options &options) {
       }
     }
     // if (r > 0 || c > 4112) 
-    if (!passed) break;
+    // if (!passed) break;
   }
-  if (!passed) break;
+  // if (!passed) break;
   }
 
   return passed;

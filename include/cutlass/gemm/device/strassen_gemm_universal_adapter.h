@@ -1841,7 +1841,8 @@ template <typename StrassenGemmKernelsM0,
           typename StrassenGemmKernelsM3,
           typename StrassenGemmKernelsM4,
           typename StrassenGemmKernelsM5,
-          typename StrassenGemmKernelsM6
+          typename StrassenGemmKernelsM6,
+          bool UseTMAReduce = false
           >
 class StrassenGemmLevel2UniversalAdapter
 {
@@ -1922,7 +1923,7 @@ public:
       args.mode,
       (halve_problem_size) ? args.get_half_problem_shape() : args.problem_shape,
       {ptr_A, stride_A, ptr_B, stride_B},
-      {{args.epilogue.thread.alpha, 0.0f}, ptr_C, stride_C, ptr_D, stride_D, ptr_C2, stride_C2, ptr_D2, stride_D2},
+      {{args.epilogue.thread.alpha, 0.0f}, (typename ChildGemm::ElementC const*)ptr_C, stride_C, ptr_D, stride_D, (typename ChildGemm::ElementC const*)ptr_C2, stride_C2, ptr_D2, stride_D2},
       args.hw_info
     );
     args_child.scheduler.raster_order = args.scheduler.raster_order;
@@ -2118,12 +2119,12 @@ public:
       auto stride_S3 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
 
       //m2 is stored at [1]
-      auto ptr_m2l1 = postsum_m_ptr + (is_fp16+1)*halfM*halfN;
+      auto ptr_m2l1 = (UseTMAReduce) ? /*m2 at C1*/ args.epilogue.ptr_D + halfN : /*m2 at [1]*/postsum_m_ptr + (is_fp16+1)*halfM*halfN;
 
       args_m2 = to_child_arguments<ChildStrassenGemmM2>(args, stride_S2, ptr_S2, stride_S3, ptr_S3,
                                                         stride_m0l1, ptr_m0l1,
                                                         stride_m0l1, nullptr,
-                                                        stride_m0l1, ptr_m2l1,
+                                                        (UseTMAReduce) ? args.epilogue.dD : stride_m0l1, ptr_m2l1,
                                                         stride_m0l1, nullptr,
                                                         2, true);
       args_m2.epilogue.thread.beta = 1;
@@ -2140,17 +2141,16 @@ public:
       auto ptr_B31 = presum_b_ptr + AllPresums::indexBPresum(MmaStrassen::BPresums::B31)*halfN*halfK;
       auto stride_B31 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
 
-      auto ptr_m2l1 = postsum_m_ptr + (is_fp16+1)*halfM*halfN;
+      auto ptr_m2l1 = (UseTMAReduce) ? /*m2 at C1*/args.epilogue.ptr_D + halfN: /*m2 at [1]*/postsum_m_ptr + (is_fp16+1)*halfM*halfN;
       StrideC stride_m2l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
-      //m3 is stored at [2]
-      auto ptr_m3l1 = postsum_m_ptr + (is_fp16+2)*halfM*halfN;
+      auto ptr_m3l1 = (UseTMAReduce) ? /*m3 at C3*/args.epilogue.ptr_D + halfN*M + halfN : /*m3 at [2]*/postsum_m_ptr + (is_fp16+2)*halfM*halfN;
       StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
       args_m3 = to_child_arguments<ChildStrassenGemmM3>(args, stride_A02, ptr_A02, stride_B31, ptr_B31,
-                                                        stride_m2l1, ptr_m2l1,
+                                                        (UseTMAReduce) ? args.epilogue.dD : stride_m2l1, ptr_m2l1,
                                                         stride_m3l1, nullptr,
-                                                        stride_m3l1, ptr_m3l1,
+                                                        (UseTMAReduce) ? args.epilogue.dD : stride_m3l1, ptr_m3l1,
                                                         stride_m3l1, nullptr,
                                                         3, true);
       args_m3.epilogue.thread.beta = 1;
@@ -2166,10 +2166,10 @@ public:
       auto ptr_B10 = presum_b_ptr + AllPresums::indexBPresum(MmaStrassen::BPresums::B10)*halfN*halfK;
       auto stride_B10 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
 
-      auto ptr_m3l1 = postsum_m_ptr + (is_fp16+2)*halfM*halfN;
+      auto ptr_m3l1 = (UseTMAReduce) ? nullptr : postsum_m_ptr + (is_fp16+2)*halfM*halfN;
       StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
-      auto ptr_m4l1 = postsum_m_ptr + (is_fp16+3)*halfM*halfN;
+      auto ptr_m4l1 = (UseTMAReduce) ? /*m4 adds to C1*/ args.epilogue.ptr_D + halfN : postsum_m_ptr + (is_fp16+3)*halfM*halfN;
       StrideC stride_m4l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
       auto ptr_D11 = args.epilogue.ptr_D + halfM*N + halfN;
@@ -2178,9 +2178,9 @@ public:
                                                         stride_m3l1, ptr_m3l1,
                                                         stride_m3l1, nullptr,
                                                         args.epilogue.dD, ptr_D11,
-                                                        stride_m4l1, ptr_m4l1,
+                                                        (UseTMAReduce) ? args.epilogue.dD : stride_m4l1, ptr_m4l1,
                                                         4, true);
-      args_m4.epilogue.thread.beta = 1;
+      if (!UseTMAReduce) args_m4.epilogue.thread.beta = 1;
       printf("2183\n");
       err = child_strassen_gemm_m4.initialize(args_m4, swizzles, workspace_m4, stream);
       printf("2185\n");
@@ -2194,10 +2194,10 @@ public:
 
       auto ptr_B3 = args.mainloop.ptr_B + halfK*N + halfN;
 
-      auto ptr_m2l1 = postsum_m_ptr + (is_fp16+1)*halfM*halfN;
+      auto ptr_m2l1 = (UseTMAReduce) ? nullptr : postsum_m_ptr + (is_fp16+1)*halfM*halfN;
       StrideC stride_m2l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
-      auto ptr_m4l1 = postsum_m_ptr + (is_fp16+3)*halfM*halfN;
+      auto ptr_m4l1 = (UseTMAReduce) ? nullptr : postsum_m_ptr + (is_fp16+3)*halfM*halfN;
       StrideC stride_m4l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
       auto ptr_D01 = args.epilogue.ptr_D + halfN;
@@ -2208,7 +2208,7 @@ public:
                                                         args.epilogue.dD, ptr_D01,
                                                         args.epilogue.dD, nullptr,
                                                         5, true);
-      args_m5.epilogue.thread.beta = 1;
+      if (!UseTMAReduce) args_m5.epilogue.thread.beta = 1;
       err = child_strassen_gemm_m5.initialize(args_m5, swizzles, workspace_m5, stream);
       if (err != Status::kSuccess) return err;
     }
@@ -2221,13 +2221,13 @@ public:
       auto stride_S3B2 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
 
       //m3 is stored at [2]
-      auto ptr_m3l1 = postsum_m_ptr + (is_fp16+2)*halfM*halfN;
+      auto ptr_m3l1 = (UseTMAReduce) ? /*m3 at C3*/args.epilogue.ptr_D + halfM*N + halfN : /*m3 at [2]*/postsum_m_ptr + (is_fp16+2)*halfM*halfN;
       StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
       auto ptr_D10 = args.epilogue.ptr_D + halfM*N;
 
       args_m6 = to_child_arguments<ChildStrassenGemmM6>(args, args.mainloop.dA, ptr_A3, stride_S3B2, ptr_S3B2,
-                                                        stride_m3l1, ptr_m3l1,
+                                                        (UseTMAReduce) ? args.epilogue.dD : stride_m3l1, ptr_m3l1,
                                                         stride_m3l1, nullptr,
                                                         args.epilogue.dD, ptr_D10,
                                                         args.epilogue.dD, nullptr,
@@ -2316,16 +2316,16 @@ public:
         status = child_strassen_gemm_m3.run(all_streams, 1);
         if (status != Status::kSuccess) return status;
       }
+      if (!only_m || valid_ms[6] == 1) {
+        status = child_strassen_gemm_m6.run(all_streams, 1);
+        if (status != Status::kSuccess) return status;
+      }
       if (!only_m || valid_ms[4] == 1) {
         status = child_strassen_gemm_m4.run(all_streams, 1);
         if (status != Status::kSuccess) return status;
       }
       if (!only_m || valid_ms[5] == 1) {
         status = child_strassen_gemm_m5.run(all_streams, 1);
-        if (status != Status::kSuccess) return status;
-      }
-      if (!only_m || valid_ms[6] == 1) {
-        status = child_strassen_gemm_m6.run(all_streams, 1);
         if (status != Status::kSuccess) return status;
       }
       return Status::kSuccess;
@@ -2349,11 +2349,11 @@ public:
     if (status != Status::kSuccess) return status;
     status = child_strassen_gemm_m3.run(all_streams + 3 * 7, 7);
     if (status != Status::kSuccess) return status;
+    status = child_strassen_gemm_m6.run(all_streams + 6 * 7, 7);
+    if (status != Status::kSuccess) return status;
     status = child_strassen_gemm_m4.run(all_streams + 4 * 7, 7);
     if (status != Status::kSuccess) return status;
     status = child_strassen_gemm_m5.run(all_streams + 5 * 7, 7);
-    if (status != Status::kSuccess) return status;
-    status = child_strassen_gemm_m6.run(all_streams + 6 * 7, 7);
     if (status != Status::kSuccess) return status;
 
     return Status::kSuccess;
