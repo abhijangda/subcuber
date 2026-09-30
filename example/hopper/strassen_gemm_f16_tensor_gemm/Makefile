@@ -30,6 +30,9 @@ strassen_winograd_presum4_hopper_f16_tensorop_gemm_cooperative_pingpong: hopper_
 strassen_winograd_presum4_hopper_f16_tensorop_gemm_level_2_cooperative: hopper_f16_tensorop_gemm_level_2.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE
 
+strassen_winograd_presum4_hopper_f16_tensorop_gemm_level_2_pingpong: hopper_f16_tensorop_gemm_level_2.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DPINGPONG
+
 strassen_winograd_presum4_hopper_f16_tensorop_gemm_level_2_cooperative_pingpong: hopper_f16_tensorop_gemm_level_2.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE_PINGPONG
 

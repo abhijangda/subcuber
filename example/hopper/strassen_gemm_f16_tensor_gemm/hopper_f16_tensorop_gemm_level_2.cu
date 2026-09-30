@@ -58,7 +58,7 @@
 
 #define MY_PRINTF(...) ;//printf(__VA_ARGS__)
 
-// #define L2_SCHED_TMA_REDUCE_ADD
+#define L2_SCHED_TMA_REDUCE_ADD
 
 #include "cutlass/cutlass.h"
 
@@ -129,8 +129,23 @@ using TileShape           = Shape<_128,_128,_64>;                           // T
 using TileShapeM0         = TileShape;
 using TileShapeM2To6      = TileShape;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
-const uint StageCountTypeM0 = 6 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
-const uint StageCountTypeM2M6 = 6 ;
+const uint StageCountTypeM0M1M2M3M6_M0 = 6 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
+const uint StageCountTypeM0M1M2M3M6_M2M3M6 = 6;
+const uint StageCountTypeM0M1M2M3M6_M4M5 = 6;
+const uint StageCountTypeM4_M2M3M6 = 6;
+const uint StageCountTypeM4_M4M5 = 6;
+const uint StageCountTypeM5_M2M3M6 = 6;
+
+#if defined(L2_SCHED_TMA_REDUCE_ADD)
+const uint StageCountTypeM4_M0 = 6;
+const uint StageCountTypeM5_M4M5 = 6;
+const uint StageCountTypeM5_M0 = 6;
+#else
+const uint StageCountTypeM4_M0 = 5;
+const uint StageCountTypeM5_M0 = 5;
+const uint StageCountTypeM5_M4M5 = 5;
+#endif
+
 using PresumTileShapeA    = Shape<_2, _128>;
 using PresumTileShapeB    = Shape<_2, _128>;
 using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
@@ -150,6 +165,32 @@ const uint StageCountTypeM4_M4M5 = 3;//4
 const uint StageCountTypeM5_M0 = 3;
 const uint StageCountTypeM5_M2M3M6 = 3;//4 ;
 const uint StageCountTypeM5_M4M5 = 2;//4;
+using PresumTileShapeA    = Shape<_2, _256>;
+using PresumTileShapeB    = Shape<_2, _256>;
+using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
+using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecializedCooperative;
+using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
+using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
+#elif defined(COOPERATIVE_PINGPONG)
+using TileShapeM0         = Shape<_128,_256,_64>;                           // Threadblock-level tile size
+using TileShapeM2To6      = Shape<_128,_128,_64>;                           // Threadblock-level tile size
+using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
+const uint StageCountTypeM0M1M2M3M6_M0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
+const uint StageCountTypeM0M1M2M3M6_M2M3M6 = 6;
+const uint StageCountTypeM0M1M2M3M6_M4M5 = 6;
+const uint StageCountTypeM4_M0 = 4;
+const uint StageCountTypeM4_M2M3M6 = 6;
+const uint StageCountTypeM4_M4M5 = 6;
+const uint StageCountTypeM5_M0 = 4;
+const uint StageCountTypeM5_M2M3M6 = 6;
+const uint StageCountTypeM5_M4M5 = 6;
+using PresumTileShapeA    = Shape<_2, _256>;
+using PresumTileShapeB    = Shape<_2, _256>;
+using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
+using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecialized;
+using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
+using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
+#endif
 
 static constexpr int StageCountTypeM0(int level_1_idx) {
   if (level_1_idx == 4) return StageCountTypeM4_M0;
@@ -168,26 +209,6 @@ static constexpr int StageCountTypeM4M5(int level_1_idx) {
   if (level_1_idx == 5) return StageCountTypeM5_M4M5;
   return StageCountTypeM0M1M2M3M6_M4M5;
 }
-
-using PresumTileShapeA    = Shape<_2, _256>;
-using PresumTileShapeB    = Shape<_2, _256>;
-using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
-using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecializedCooperative;
-using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
-using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
-#elif defined(COOPERATIVE_PINGPONG)
-using TileShapeM0         = Shape<_128,_256,_64>;                           // Threadblock-level tile size
-using TileShapeM2To6      = Shape<_128,_128,_64>;                           // Threadblock-level tile size
-using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
-const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
-const uint StageCountTypeM2M6 = 6 ;
-using PresumTileShapeA    = Shape<_2, _256>;
-using PresumTileShapeB    = Shape<_2, _256>;
-using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
-using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecialized;
-using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
-using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
-#endif
 
 using PresumOpts = cutlass::gemm::device::PresumOpt<>;//<0,0,0,0>;
 //StageCount = 6 is a little slower than this with swizzle = 8.
@@ -858,9 +879,9 @@ bool verify(const Options &options) {
       }
     }
     // if (r > 0 || c > 4112) 
-    // if (!passed) break;
+    if (!passed) break;
   }
-  // if (!passed) break;
+  if (!passed) break;
   }
 
   return passed;
