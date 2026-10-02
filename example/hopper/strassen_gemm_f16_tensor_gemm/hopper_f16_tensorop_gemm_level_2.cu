@@ -158,13 +158,13 @@ using TileShapeM2To6        = Shape<_128,_256,_64>;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0M1M2M3M6_M0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM0M1M2M3M6_M2M3M6 = 4;
-const uint StageCountTypeM0M1M2M3M6_M4M5 = 3;//4 ;
-const uint StageCountTypeM4_M0 = 3;//4
-const uint StageCountTypeM4_M2M3M6 = 3;//4
-const uint StageCountTypeM4_M4M5 = 3;//4
-const uint StageCountTypeM5_M0 = 3;
-const uint StageCountTypeM5_M2M3M6 = 3;//4 ;
-const uint StageCountTypeM5_M4M5 = 2;//4;
+const uint StageCountTypeM0M1M2M3M6_M4M5 = 4;//3;//4 ;
+const uint StageCountTypeM4_M0 = 4;//3;//4
+const uint StageCountTypeM4_M2M3M6 = 4;//3;//4
+const uint StageCountTypeM4_M4M5 = 4;//3;//4
+const uint StageCountTypeM5_M0 = 4;//3;
+const uint StageCountTypeM5_M2M3M6 = 4;//3;//4 ;
+const uint StageCountTypeM5_M4M5 = 4;//2;//4;
 using PresumTileShapeA    = Shape<_2, _256>;
 using PresumTileShapeB    = Shape<_2, _256>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
@@ -914,7 +914,7 @@ int run(Options &options)
   cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
   // Check if the problem size is supported or not
-  // CUTLASS_CHECK(gemm.can_implement(arguments));
+  CUTLASS_CHECK(gemm.can_implement(arguments));
 
   // Initialize CUTLASS kernel with arguments and workspace pointer
   CUTLASS_CHECK(gemm.initialize(arguments, options.swizzles, workspace.get()));
