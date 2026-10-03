@@ -1916,8 +1916,8 @@ public:
                                                           StrideB stride_B, ElementB const* ptr_B,
                                                           StrideC stride_C, ElementC const* ptr_C,
                                                           StrideC stride_C2,  ElementC const* ptr_C2,
-                                                          StrideD stride_D,   ElementD const* ptr_D,
-                                                          StrideD stride_D2,  ElementD const* ptr_D2,
+                                                          StrideD stride_D,   ElementD* ptr_D,
+                                                          StrideD stride_D2,  ElementD* ptr_D2,
                                                           int level_1_idx, bool halve_problem_size) { 
     typename ChildGemm::Arguments args_child(
       args.mode,
@@ -1963,13 +1963,13 @@ public:
                                                                  args.epilogue.dC, args.epilogue.ptr_C, args.epilogue.dC, args.epilogue.ptr_C,
                                                                  args.epilogue.dD, args.epilogue.ptr_D, args.epilogue.dD, args.epilogue.ptr_D, 
                                                                  6, true);
-    if (!ChildStrassenGemmM0::can_implement(args_m0)) return Status::kInvalid;
-    if (!ChildStrassenGemmM1::can_implement(args_m1)) return Status::kInvalid;
-    if (!ChildStrassenGemmM2::can_implement(args_m2)) return Status::kInvalid;
-    if (!ChildStrassenGemmM3::can_implement(args_m3)) return Status::kInvalid;
-    if (!ChildStrassenGemmM4::can_implement(args_m4)) return Status::kInvalid;
-    if (!ChildStrassenGemmM5::can_implement(args_m5)) return Status::kInvalid;
-    if (!ChildStrassenGemmM6::can_implement(args_m6)) return Status::kInvalid;
+    if (ChildStrassenGemmM0::can_implement(args_m0) != Status::kSuccess) return Status::kInvalid;
+    if (ChildStrassenGemmM1::can_implement(args_m1) != Status::kSuccess) return Status::kInvalid;
+    if (ChildStrassenGemmM2::can_implement(args_m2) != Status::kSuccess) return Status::kInvalid;
+    if (ChildStrassenGemmM3::can_implement(args_m3) != Status::kSuccess) return Status::kInvalid;
+    if (ChildStrassenGemmM4::can_implement(args_m4) != Status::kSuccess) return Status::kInvalid;
+    if (ChildStrassenGemmM5::can_implement(args_m5) != Status::kSuccess) return Status::kInvalid;
+    if (ChildStrassenGemmM6::can_implement(args_m6) != Status::kSuccess) return Status::kInvalid;
 
     return Status::kSuccess;
   }
@@ -2089,7 +2089,9 @@ public:
     ElementA* presum_b_ptr  = ChildStrassenGemmM0::get_presum_b_ptr(args_m0, workspace_m0);
     ElementD* postsum_m_ptr = ChildStrassenGemmM0::get_postsum_m_ptr(args_m0, workspace_m0);
 
-    auto [M, N, K] = args.problem_shape;
+    const int M = cute::get<0>(args.problem_shape);
+    const int N = cute::get<1>(args.problem_shape);
+    const int K = cute::get<2>(args.problem_shape);
     const int halfM = M/2;
     const int halfN = N/2;
     const int halfK = K/2;

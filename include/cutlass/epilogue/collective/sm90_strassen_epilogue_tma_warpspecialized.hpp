@@ -353,16 +353,16 @@ public:
     typename FusionCallbacks::Arguments thread{};
     ElementC const* ptr_C;
     StrideC dC;
-    ElementD const* ptr_D;
+    ElementD* ptr_D;
     StrideD dD;
     ElementC const* ptr_C2 = nullptr;
     StrideC dC2;
-    ElementD const* ptr_D2 = nullptr;
+    ElementD* ptr_D2 = nullptr;
     StrideD dD2;
 
     Arguments(typename FusionCallbacks::Arguments thread, ElementC const* ptr_C, StrideC dC,
-              ElementD const* ptr_D, StrideD dD,
-              ElementC const* ptr_C2 = nullptr, ElementD const* ptr_D2 = nullptr)
+          ElementD* ptr_D, StrideD dD,
+          ElementC const* ptr_C2 = nullptr, ElementD* ptr_D2 = nullptr)
               : thread(thread), ptr_C(ptr_C), dC(dC), ptr_D(ptr_D), dD(dD),
                 ptr_C2(ptr_C2), dC2(dD), ptr_D2(ptr_D2), dD2(dD)
               {
@@ -370,8 +370,8 @@ public:
               }
 
     Arguments(typename FusionCallbacks::Arguments thread, ElementC const* ptr_C, StrideC dC,
-              ElementD const* ptr_D, StrideD dD,
-              ElementC const* ptr_C2, StrideC dC2, ElementD const* ptr_D2, StrideD dD2)
+              ElementD* ptr_D, StrideD dD,
+              ElementC const* ptr_C2, StrideC dC2, ElementD* ptr_D2, StrideD dD2)
               : Arguments(thread, ptr_C, dC, ptr_D, dD, ptr_C2, ptr_D2)
               {
                 this->dC2 = dC2;
@@ -460,7 +460,7 @@ public:
     TMA_D tma_store_d2{};
     TMA_D_ADD tma_add_d2{};
     ElementC const* ptr_C2 = nullptr;
-    ElementD const* ptr_D2 = nullptr;
+    ElementD* ptr_D2 = nullptr;
   };
 
   //
