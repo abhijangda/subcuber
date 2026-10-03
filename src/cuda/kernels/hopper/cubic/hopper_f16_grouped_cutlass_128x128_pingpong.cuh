@@ -17,13 +17,14 @@ public:
   using ProblemShape = cutlass::gemm::GroupProblemShape<Shape<int,int,int>>;
   using ElementA = cutlass::half_t;
   using ElementB = cutlass::half_t;
-  using ElementC = cutlass::half_t;
+  using ElementC = void;
+  using ElementD = cutlass::half_t;
   using LayoutA = cutlass::layout::RowMajor;
   using LayoutB = cutlass::layout::RowMajor;
   using LayoutC = cutlass::layout::RowMajor;
   static constexpr int AlignmentA = 128 / cutlass::sizeof_bits<ElementA>::value;
   static constexpr int AlignmentB = 128 / cutlass::sizeof_bits<ElementB>::value;
-  static constexpr int AlignmentC = 128 / cutlass::sizeof_bits<ElementC>::value;
+  static constexpr int AlignmentC = 128 / cutlass::sizeof_bits<ElementD>::value;
   using ElementAccumulator = float;
   using TileShape = Shape<_128,_128,_64>;
   using ClusterShape = Shape<_2,_1,_1>;
@@ -36,8 +37,8 @@ public:
       cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp, TileShape, ClusterShape,
       cutlass::epilogue::collective::EpilogueTileAuto,
       ElementAccumulator, ElementAccumulator, ElementC, LayoutC *, AlignmentC,
-      ElementC, LayoutC *, AlignmentC, EpilogueSchedule,
-      cutlass::epilogue::fusion::LinearCombination<ElementC, ElementAccumulator>>::CollectiveOp;
+      ElementD, LayoutC *, AlignmentC, EpilogueSchedule,
+      cutlass::epilogue::fusion::LinearCombination<ElementD, ElementAccumulator, ElementC>>::CollectiveOp;
   using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder<
       cutlass::arch::Sm90, cutlass::arch::OpClassTensorOp,
       ElementA, LayoutA *, AlignmentA, ElementB, LayoutB *, AlignmentB,

@@ -13,11 +13,13 @@ using MoePingpongTmaReduceScheduleStrassenGroups = ScheduleStrassenGroups<
 template<int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
 using MoePingpongTmaReduceStrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<
     StrassenGroupsTmaReduce<StageCount>, MoePingpongTmaReduceScheduleStrassenGroups,
-    MoeProblemShape, ElementA, LayoutA *, cutlass::layout::OriginalLayout,
+    MoeProblemShape, ArchTag, OperatorClass,
+    ElementA, LayoutA *, cutlass::layout::OriginalLayout,
     ElementB, LayoutB *, cutlass::layout::OriginalLayout,
     ElementC, LayoutC *, cutlass::layout::OriginalLayout,
     ElementAccumulator, ClusterShape, cute::Int<StageCount>, PresumTileShapeA,
-    PresumTileShapeB, cutlass::gemm::device::PresumOpt<0,0,0,0>>;
+    PresumTileShapeB, cutlass::gemm::device::PresumOpt<0,0,0,0>,
+    AlignmentA, AlignmentB, AlignmentC, ElementD>;
 
 using HopperF16MoeInterleavedPresumPingpongMaxFusionTmaReduce_2x128 =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<

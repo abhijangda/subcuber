@@ -22,9 +22,10 @@ constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;
 using         ElementB    = cutlass::half_t;
 using         LayoutB     = cutlass::layout::RowMajor;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;
-using         ElementC    = cutlass::half_t;
+using         ElementC    = void;
+using         ElementD    = cutlass::half_t;
 using         LayoutC     = cutlass::layout::RowMajor;
-constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;
+constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;
 using ElementAccumulator  = float;
 using ArchTag             = cutlass::arch::Sm90;
 using OperatorClass       = cutlass::arch::OpClassTensorOp;
@@ -85,13 +86,16 @@ template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileSha
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups<StageCountTypeM0>,
                                                                        ScheduleStrassenGroups1,
                                                                        ProblemShape,
+                                                                       ArchTag, OperatorClass,
                                                                        ElementA, LayoutA, cutlass::layout::OriginalLayout,
                                                                        ElementB, LayoutB, cutlass::layout::OriginalLayout,
                                                                        ElementC, LayoutC, cutlass::layout::OriginalLayout,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
-                                                                       PresumOpts>;
+                                                                       PresumOpts,
+                                                                       AlignmentA, AlignmentB, AlignmentC,
+                                                                       ElementD>;
 
 template<typename StrassenKernels>
 using StrassenGemmUniversalAdapter = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenKernels>;

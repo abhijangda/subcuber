@@ -306,6 +306,7 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
   using ElementA = typename Gemm::StrassenGemmKernel::ElementA;
   using ElementB = typename Gemm::StrassenGemmKernel::ElementB;
   using ElementC = typename Gemm::StrassenGemmKernel::ElementC;
+  using ElementD = typename Gemm::StrassenGemmKernel::ElementD;
   using StrideA = typename Kernel::StrideA;
   using StrideB = typename Kernel::StrideB;
   using StrideC = typename Kernel::StrideC;
@@ -341,7 +342,7 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
       {reinterpret_cast<ElementA const *>(buffers.a), stride_a,
        reinterpret_cast<ElementB const *>(buffers.b), stride_b},
       {{1.0f, 0.0f}, reinterpret_cast<ElementC const *>(buffers.c), stride_c,
-       reinterpret_cast<ElementC *>(buffers.d), stride_d},
+        reinterpret_cast<ElementD *>(buffers.d), stride_d},
       hw_info);
 
   args.scheduler.raster_order = RasterOrderOptions::AlongN;

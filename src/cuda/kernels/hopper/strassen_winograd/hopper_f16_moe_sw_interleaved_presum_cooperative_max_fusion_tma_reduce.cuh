@@ -13,11 +13,13 @@ using MoeCooperativeTmaReduceScheduleStrassenGroups = ScheduleStrassenGroups<
 template<int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
 using MoeCooperativeTmaReduceStrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<
     StrassenGroupsTmaReduce<StageCount>, MoeCooperativeTmaReduceScheduleStrassenGroups,
-    MoeProblemShape, ElementA, LayoutA *, cutlass::layout::OriginalLayout,
+    MoeProblemShape, ArchTag, OperatorClass,
+    ElementA, LayoutA *, cutlass::layout::OriginalLayout,
     ElementB, LayoutB *, cutlass::layout::OriginalLayout,
     ElementC, LayoutC *, cutlass::layout::OriginalLayout,
     ElementAccumulator, ClusterShape, cute::Int<StageCount>, PresumTileShapeA,
-    PresumTileShapeB, cutlass::gemm::device::PresumOpt<0,0,0,0>>;
+    PresumTileShapeB, cutlass::gemm::device::PresumOpt<0,0,0,0>,
+    AlignmentA, AlignmentB, AlignmentC, ElementD>;
 
 using HopperF16MoeInterleavedPresumCooperativeMaxFusionTmaReduce_2x256 =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<

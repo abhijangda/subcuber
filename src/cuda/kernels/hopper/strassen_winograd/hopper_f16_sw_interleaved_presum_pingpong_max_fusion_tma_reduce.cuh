@@ -50,13 +50,16 @@ template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileSha
 using StrassenGemmKernelsTmaReduce = cutlass::gemm::device::StrassenGemmKernels<StrassenGroupsTmaReduce<StageCountTypeM0>,
                                                                        ScheduleStrassenGroupsTmaReduce,
                                                                        ProblemShape,
+                                                                       ArchTag, OperatorClass,
                                                                        ElementA, LayoutA, cutlass::layout::OriginalLayout,
                                                                        ElementB, LayoutB, cutlass::layout::OriginalLayout,
                                                                        ElementC, LayoutC, cutlass::layout::OriginalLayout,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
-                                                                       PresumOpts>;
+                                                                       PresumOpts,
+                                                                       AlignmentA, AlignmentB, AlignmentC,
+                                                                       ElementD>;
 
 using HopperF16InterleavedPresumPingpongMaxFusionTmaReduce_2x128_2x128_OptNoKernel = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernelsTmaReduce<6, Shape<_2,_128>, Shape<_2, _128>>>;

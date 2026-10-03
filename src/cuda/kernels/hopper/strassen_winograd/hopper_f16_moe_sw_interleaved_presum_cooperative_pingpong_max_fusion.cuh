@@ -24,12 +24,14 @@ using MoeCooperativePingpongStrassenKernels =
     cutlass::gemm::device::StrassenGemmKernels<
         CooperativePingpongStrassenGroups<4>, MoeCooperativePingpongSchedule,
         MoeCooperativePingpongProblemShape,
+        ArchTag, OperatorClass,
         ElementA, LayoutA *, cutlass::layout::OriginalLayout,
         ElementB, LayoutB *, cutlass::layout::OriginalLayout,
         ElementC, LayoutC *, cutlass::layout::OriginalLayout,
         ElementAccumulator, ClusterShape, cute::Int<4>,
         Shape<_2,_256>, Shape<_2,_256>,
-        cutlass::gemm::device::PresumOpt<0,0,0,0>>;
+        cutlass::gemm::device::PresumOpt<0,0,0,0>,
+        AlignmentA, AlignmentB, AlignmentC, ElementD>;
 
 using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256 =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<

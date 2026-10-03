@@ -43,9 +43,10 @@ public:
   static constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
   // C/D matrix configuration
-  using         ElementC    = cutlass::half_t;                                // Element type for C and D matrix operands
+  using         ElementC    = void;                                           // No C source operand
+  using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
   using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
-  static constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
+  static constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;    // Memory access granularity/alignment of C/D matrix in units of elements (up to 16 bytes)
 
   // Core kernel configurations
   using ElementAccumulator  = float;                                          // Element type for internal accumulation
@@ -66,12 +67,12 @@ public:
       cutlass::epilogue::collective::EpilogueTileAuto,
       ElementAccumulator, ElementAccumulator,
       ElementC, LayoutC, AlignmentC,
-      ElementC, LayoutC, AlignmentC,
+      ElementD, LayoutC, AlignmentC,
       EpilogueSchedule,
       cutlass::epilogue::fusion::LinearCombination<
-        cutlass::half_t,
+        ElementD,
         float,
-        cutlass::half_t,
+        ElementC,
         float
       >
     >::CollectiveOp;
@@ -103,7 +104,7 @@ public:
     LayoutA,
     ElementB,
     LayoutB,
-    ElementC,
+    ElementD,
     LayoutC,
     ElementAccumulator,
     ElementAccumulator>;
