@@ -94,23 +94,29 @@ using namespace cute;
 /// GEMM kernel configurations
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+#ifdef TENSOROP_ELEM_FP16
+using TensorOpElem = cutlass::half_t;
+#elif defined(TENSOROP_ELEM_BF16)
+using TensorOpElem = cutlass::bfloat16_t;
+#endif
+
 // A matrix configuration
-using         ElementA    = cutlass::half_t;                                // Element type for A matrix operand
+using         ElementA    = TensorOpElem;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
 using         SubMatLayoutA = cutlass::layout::StrassenLayout;
 // using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
-using         ElementB    = cutlass::half_t;                                // Element type for B matrix operand
+using         ElementB    = TensorOpElem;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
 using         SubMatLayoutB = cutlass::layout::StrassenLayout;
 // using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = void;//cutlass::half_t;                                           // No C source operand
-using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
+using         ElementC    = void;//TensorOpElem;                                           // No C source operand
+using         ElementD    = TensorOpElem;                                // Element type for D matrix operand
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
 constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;    // Memory access granularity/alignment of C/D matrix in units of elements (up to 16 bytes)
@@ -178,7 +184,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 0 //TMA Reduce
+#if 1 //TMA Reduce
 #if defined(COOPERATIVE)
   static_assert(StageCountTypeM4M5 == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
 #endif
@@ -757,13 +763,17 @@ bool verify(const Options &options) {
   CUDA_CHECK(cudaMemcpy(host_D, block_D.get(), options.m*options.n*sizeof(ElementD), cudaMemcpyDeviceToHost));
 
   float MAX_REL_ERR = 1e-2;
+#ifdef TENSOROP_ELEM_BF16
+  float MAX_ABS_ERR = 16;
+#elif defined(TENSOROP_ELEM_FP16)
   float MAX_ABS_ERR = 5;
+#endif
 
   for (int r = 0; r < options.m; r++) {
   for (int c = 0; c < options.n; c++) {
     auto idx = r*options.n + c;
-    cutlass::half_t e1 = host_ref_D[idx];
-    cutlass::half_t e2 = host_D[idx];
+    TensorOpElem e1 = host_ref_D[idx];
+    TensorOpElem e2 = host_D[idx];
     float err = fabs((float)e1 -(float)e2)/fabs((float)e1 + 1e-6);
     float abs_err = fabs((float)e1 -(float)e2);
 
@@ -799,9 +809,9 @@ bool verify(const Options &options) {
       }
     }
     // if (r > 0 || c > 4112) 
-    if (!passed) break;
+    // if (!passed) break;
   }
-  if (!passed) break;
+  // if (!passed) break;
   }
 
   return passed;

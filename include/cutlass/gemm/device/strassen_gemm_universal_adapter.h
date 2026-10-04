@@ -439,13 +439,16 @@ public:
 
     if (GemmKernel::can_implement(args)) {
       if (!GemmKernelM0::StrassenMiGroup::hasAllM()) {
-        //Multiple kernels
-        if (!GemmKernelM0::StrassenMiGroup::hasM0() ||
-            !(GemmKernelM0::StrassenMiGroup::hasM0() && GemmKernelM0::StrassenMiGroup::hasM1()))
-          return Status::kErrorInvalidProblem;
-        
         bool has_A_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyAPresum(MmaStrassen::PresumCompute);
         bool has_B_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyBPresum(MmaStrassen::PresumCompute);
+
+        //Multiple kernels
+        if (!GemmKernelM0::StrassenMiGroup::hasM0() ||
+            has_A_presums && !GemmKernelM0::StrassenMiGroup::hasM0() ||
+            has_B_presums && !GemmKernelM0::StrassenMiGroup::hasM1()) {
+          return Status::kErrorInvalidProblem;
+        }
+
         using PresumOpt = typename GemmKernelM0::Mma::PresumOpt;
         auto problems = get_vector_of_problems(args);
         for (int i = 0; i < problems.size(); i++) {
@@ -2095,7 +2098,7 @@ public:
     const int halfM = M/2;
     const int halfN = N/2;
     const int halfK = K/2;
-    const bool is_fp16 = std::is_same<ElementA, cutlass::half_t>::value;//TODO:Fix this
+    const bool is_fp16 = std::is_same<ElementA, cutlass::half_t>::value || std::is_same<ElementA, cutlass::bfloat16_t>::value;//TODO:Fix this
 
     {
       //m1 = a1@b2

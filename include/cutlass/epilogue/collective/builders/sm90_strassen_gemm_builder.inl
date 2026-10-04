@@ -288,7 +288,7 @@ private:
   static constexpr auto get_m0_dispatch_policy() {
     if constexpr (detail::sm90_is_ptr_array_tma_v<Schedule>) {
       return cutlass::epilogue::Sm90PtrArrayTmaWarpSpecialized<
-        StagesC, StagesD, size<1>(EpilogueTile_MN{})/2, not cute::is_void_v<ElementC>, false,
+        StagesC, StagesD, size<1>(EpilogueTile_MN{})/2, true, false,
         Schedule::NumEpilogueWarpGroups>{};
     }
     else {
@@ -296,10 +296,11 @@ private:
         StagesC, StagesD, size<1>(EpilogueTile_MN{})/2, true, false>{};
     }
   }
+  using DispatchElementC = cute::conditional_t<cute::is_void_v<ElementC>, ElementD, ElementC>;
   using M0DispatchPolicy = decltype(get_m0_dispatch_policy());
   using DispatchPolicy = cute::conditional_t<StrassenMiGroup::hasM0(),
                                              M0DispatchPolicy,
-                                             decltype(detail::sm90_get_tma_dispatch_policy<TileShape_MNK,EpilogueTile_MN,ElementC,ElementD,Schedule>())>;
+                                             decltype(detail::sm90_get_tma_dispatch_policy<TileShape_MNK,EpilogueTile_MN,DispatchElementC,ElementD,Schedule>())>;
   // typename DispatchPolicy::x y;
 public:
   using CollectiveOp =

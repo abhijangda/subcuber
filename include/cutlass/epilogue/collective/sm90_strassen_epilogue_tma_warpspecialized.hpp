@@ -446,13 +446,6 @@ public:
     TMA_D_ADD tma_add_d;
     uint32_t tma_transaction_bytes = TmaTransactionBytes;
 
-    using TMA_PresumLoad_A = decltype(make_tma_copy(
-        SM90_TMA_LOAD{},
-        make_tensor(static_cast<cutlass::half_t const*>(nullptr),
-            repeat_like(StrideD{}, int32_t(0)), StrideD{}),
-          PresumSmemLayoutA__{}));
-
-    TMA_PresumLoad_A tma_load_presumld_a;
     TMA_C_1D tma_load_linear_m;
     uint32_t tma_transaction_bytes_presum_mk = TmaTransactionBytesPresum;
     void* ptr_postsum_m;
@@ -523,14 +516,6 @@ public:
       tensor_store_m,
       take<0,2>(SmemLayoutD{}),
       EpilogueTile{});
-    
-    typename Params::TMA_PresumLoad_A tma_load_presumld_a{};
-    Tensor tensor_presum_ld_a = make_tensor(make_gmem_ptr<TmaElementD>(ptr_presum_load_A), make_layout(make_shape(M,N,L), make_stride(get<0>(args.dD), get<1>(args.dD), get<2>(args.dD))));
-
-    tma_load_presumld_a = make_tma_copy(
-        SM90_TMA_LOAD{},
-        tensor_presum_ld_a,
-        PresumSmemLayoutA__{});
 
     typename Params::TMA_D tma_store_d{};
     typename Params::TMA_D tma_store_d2{};
@@ -583,7 +568,6 @@ public:
       tma_add_postsum_m,
       tma_add_d,
       transaction_bytes,
-      tma_load_presumld_a,
       tma_load_linear_m,
       TmaTransactionBytesPresum,
       postsum_m,
