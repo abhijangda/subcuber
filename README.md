@@ -112,6 +112,28 @@ Optional filtering:
 	--kernel_regex='presum'
 ```
 
+The Hopper fp16 level-2 cooperative-pingpong kernel uses the example's
+`L2_SCHED_TMA_REDUCE_ADD` schedule, with 2x256 A/B presum tiles and original
+row-major input layouts:
+
+```bash
+make kernel_runner_hopper
+timeout 30s ./build/kernel_runner_hopper \
+	--m=16384 --n=16384 --k=16384 \
+	--dtype=f16 --gpu_arch=hopper --strassen_level=2 \
+	--iterations=10 --warmup=2 --streams=1 \
+	--kernel_regex='level_2_cooperative_pingpong_max_fusion_tma_reduce'
+```
+
+This kernel defaults to `--split-compile=1`; parallel split compilation can
+fail register allocation with CUDA 13.2. The runner benchmarks without checking
+output. Run its full-output reference test separately:
+
+```bash
+make -C tests test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce
+timeout 30s ./tests/test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce
+```
+
 The fp16 MoE grouped GEMM treats `m` as the number of routed token rows per
 expert, `k` as the input hidden size, and `n` as the output hidden size. Each
 expert uses a separate `k` by `n` weight matrix, so the total number of token
