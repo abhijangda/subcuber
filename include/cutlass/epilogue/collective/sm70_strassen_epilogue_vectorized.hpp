@@ -183,7 +183,10 @@ public:
     StrideD dD2{};
 
     Arguments(ThreadEpilogueOpArguments<ThreadEpilogueOp> thread, ElementC const* ptr_C, StrideC dC,
-              ElementD* ptr_D, StrideD dD) : thread(thread), ptr_C(ptr_C), dC(dC), ptr_D(ptr_D), dD(dD)
+              ElementD* ptr_D, StrideD dD,
+              ElementC const* ptr_C2 = nullptr, StrideC dC2 = StrideC(), ElementD* ptr_D2 = nullptr, StrideD dD2 = StrideD()) :
+                thread(thread), ptr_C(ptr_C), dC(dC), ptr_D(ptr_D), dD(dD),
+                ptr_C2(ptr_C2), dC2(dC2), ptr_D2(ptr_D2), dD2(dD2)
               {
                 thread.beta = 0;
               }

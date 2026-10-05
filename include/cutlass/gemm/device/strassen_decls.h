@@ -479,14 +479,14 @@ public:
   // CUTLASS_HOST_DEVICE
   // constexpr PostsumOp(int op, int sign, MemType mem_type, MemLayout mem_layout) :
   //   op(op), sign(sign), mem_type(mem_type), mem_layout(mem_layout) {}
-
+  
   CUTLASS_HOST_DEVICE
-  PostsumOp(const PostsumOp& other):
-    PostsumOp(other.op, other.sign, other.mem_type, other.mem_layout) {}
+  constexpr PostsumOp(const PostsumOp& other) = default;
+    // PostsumOp(other.op, other.sign, other.mem_type, other.mem_layout) {}
 
   template<typename Expr>
   CUTLASS_HOST_DEVICE
-  PostsumOp(const Expr expr):
+  constexpr PostsumOp(const Expr expr):
     PostsumOp(expr.Op, expr.Sign, (MemType)expr.MemType, (MemLayout)expr.MemLayout) {}
 
   CUTLASS_HOST_DEVICE
@@ -547,7 +547,7 @@ public:
   static const int RWOp = int(kLayout);
 
   CUTLASS_HOST_DEVICE
-  static PostsumOp Adder() {
+  static constexpr PostsumOp Adder() {
     return PostsumOp(Plus());
   }
 };
@@ -562,7 +562,7 @@ public:
   static const int RWOp = int(kLayout);
 
   CUTLASS_HOST_DEVICE
-  static PostsumOp Adder() {
+  static constexpr PostsumOp Adder() {
     return PostsumOp(Neg());
   }
 };
@@ -603,7 +603,7 @@ public:
   using AdderTypeByIndex = typename FindExprOpTypeByIndex<kSrcIndex, SubExprs...>::type;
 
   CUTLASS_HOST_DEVICE
-  static PostsumOp Adder(int op) {
+  static constexpr PostsumOp Adder(int op) {
     PostsumOp val;
     bool found = (... || (SubExprs::Op == op ? (val = SubExprs::Adder(), true)
                                              : false));
@@ -611,7 +611,7 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  static PostsumOp AdderByIndex(int src_index) {
+  static constexpr  PostsumOp AdderByIndex(int src_index) {
     PostsumOp val;
     int index = 0;
     bool found = (... || (index++ == src_index ? (val = SubExprs::Adder(), true)
@@ -621,7 +621,7 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  static PostsumOp GlobalAsyncAdder() {
+  static constexpr  PostsumOp GlobalAsyncAdder() {
     PostsumOp val;
     bool _ = (... || (SubExprs::MemType == MemType::MemGlobalAsync ? (val = SubExprs::Adder(), true)
                                                                    : false)); 
@@ -672,12 +672,12 @@ public:
   using CExprType = CExpr;
 
   CUTLASS_HOST_DEVICE
-  static PostsumOp Adder(int ci) {
+  static constexpr PostsumOp Adder(int ci) {
     return CExpr::Adder(ci);
   }
 
   CUTLASS_HOST_DEVICE
-  static PostsumOp GlobalDest() {
+  static constexpr PostsumOp GlobalDest() {
     return PostsumOp(kDestC, 1, MemGlobal, kGlobalLayout);
   }
 
@@ -754,7 +754,7 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  static bool HasGlobalSrcLoad() {
+  static constexpr bool HasGlobalSrcLoad() {
     return (... || CUWs::HasGlobalLoad());
   }
 
@@ -783,7 +783,7 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  static int MiSignByOutputIndex(int output_index, int mi) {
+  static constexpr int MiSignByOutputIndex(int output_index, int mi) {
     int sign = 0;
     int index = 0;
     bool found = (... || (CUWs::HasGlobalDest()
@@ -812,7 +812,7 @@ public:
   }
 
   CUTLASS_HOST_DEVICE
-  static PostsumOp PostsumSrcByOutputIndex(int output_index, int src_index) {
+  static constexpr PostsumOp PostsumSrcByOutputIndex(int output_index, int src_index) {
     PostsumOp src;
     int index = 0;
     bool found = (... || (CUWs::HasGlobalDest() //TODO: Is this comparison needed?
@@ -1345,13 +1345,13 @@ public:
         if (misign == 0 || (!postsum_shared_dest.valid() && !postsum_global_dest.valid())) continue;
 
         int read_c = 0;
-        MmaStrassen::PostsumOp postsum_srcs[4] = {MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp(), MmaStrassen::PostsumOp()};
+
         int postsum_src_len = 0;
         #pragma unroll 4
         for (read_c = 0; read_c < 4; read_c++) {
           auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
           if (postsum_src.valid() && postsum_src.is_mem_global() && (postsum_src.is_layout_interim_linear() || postsum_src.is_layout_interim_matrix())) {
-            postsum_srcs[postsum_src_len++] = postsum_src;
+            postsum_src_len++;
           }
         }
 
@@ -1363,6 +1363,49 @@ public:
     }
 
     return num_mis_with_gl_loads;
+  }
+
+  template<typename ElementC>
+  CUTLASS_HOST CUTLASS_DEVICE
+  static constexpr uint MaxNumGlobalLoadsPerMi() {
+    uint max_num_gl_loads = 0;
+
+    #pragma unroll (numMs())
+    for (int fused_mi = 0; fused_mi < numMs(); fused_mi++) {
+      uint num_gl_loads = 0;
+
+      #pragma unroll 4
+      for (int c = 0; c < 4; c++) {
+        const MmaStrassen::PostsumOp postsum_global_dest = RWCTypes::PostsumGlobalDestByOutputIndex(c);
+
+        uint mi = getMi(fused_mi);
+        int misign = RWCTypes::MiSignByOutputIndex(c, mi);
+
+        if (misign == 0 || (!postsum_global_dest.valid())) continue;
+
+        int read_c = 0;
+
+        int postsum_src_len = 0;
+        #pragma unroll 4
+        for (read_c = 0; read_c < 4; read_c++) {
+          auto postsum_src = RWCTypes::PostsumSrcByOutputIndex(c, read_c);
+          if (postsum_src.valid() && postsum_src.is_mem_global() &&
+              (postsum_src.is_layout_interim_linear() || postsum_src.is_layout_interim_matrix())) {
+            if (postsum_src.is_layout_final() && postsum_global_dest.is_layout_final() && postsum_src.get_op() == postsum_global_dest.get_op()) {}
+            else
+              postsum_src_len++;
+          }
+        }
+
+        bool c_load_needed = postsum_global_dest.is_layout_final() && !cute::is_void_v<ElementC>;
+        //TODO: Fix this hard coded because of TMA Reduce
+        c_load_needed = c_load_needed && (mi != 2 && mi != 3);
+        num_gl_loads += postsum_src_len + int(c_load_needed);
+      }
+      max_num_gl_loads = std::max(num_gl_loads, max_num_gl_loads);
+    }
+
+    return max_num_gl_loads;
   }
 };
 

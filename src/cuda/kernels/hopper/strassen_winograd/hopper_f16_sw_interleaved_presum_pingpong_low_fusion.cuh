@@ -27,9 +27,10 @@ using         LayoutB     = cutlass::layout::RowMajor;                   // Layo
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = cutlass::half_t;                                // Element type for C and D matrix operands
+using         ElementC    = void;                                           // No C source operand
+using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
-constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
+constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;    // Memory access granularity/alignment of C/D matrix in units of elements (up to 16 bytes)
 
 // Core kernel configurations
 using ElementAccumulator  = float;                                          // Element type for internal accumulation
@@ -113,13 +114,16 @@ template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileSha
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups<StageCountTypeM0>,
                                                                        ScheduleStrassenGroups1,
                                                                        ProblemShape,
+                                                                       ArchTag, OperatorClass,
                                                                        ElementA, LayoutA, cutlass::layout::OriginalLayout,
                                                                        ElementB, LayoutB, cutlass::layout::OriginalLayout,
                                                                        ElementC, LayoutC, cutlass::layout::OriginalLayout,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
-                                                                       PresumOpts>;
+                                                                       PresumOpts,
+                                                                       AlignmentA, AlignmentB, AlignmentC,
+                                                                       ElementD>;
 
 template<typename StrassenKernels>
 using StrassenGemmUniversalAdapter = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenKernels>;

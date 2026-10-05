@@ -197,12 +197,12 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
 
     CUTLASS_HOST_DEVICE
     int get_stride_A(int idx = 0) const {
-      return get_problem_shape_k(idx);
+      return get<0>(mainloop.dA);
     }
 
     CUTLASS_HOST_DEVICE
     int get_stride_B(int idx = 0) const {
-      return get_problem_shape_n(idx);
+      return get<1>(mainloop.dB);
     }
 
     CUTLASS_HOST_DEVICE

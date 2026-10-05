@@ -1069,9 +1069,11 @@ public:
       MY_PRINTF("936 EpiStore %d: %d %d : %d %d : %ld\n", threadIdx.x, m_coord, n_coord, is_producer_load_needed, l_coord, params.postsum_m_batch_indices[l_coord]);
 
     LoadPipelineState load_wait_state = load_pipe_consumer_state;
-    if (is_producer_load_needed && ReuseSmemC) {
-      load_wait_state = store_pipe_producer_state;
-      load_wait_state.phase_ ^= 1;
+    if constexpr (ReuseSmemC) {
+      if (is_producer_load_needed) {
+        load_wait_state = store_pipe_producer_state;
+        load_wait_state.phase_ ^= 1;
+      }
     }
     
     #pragma unroll (128/STAGE_ELEMS)

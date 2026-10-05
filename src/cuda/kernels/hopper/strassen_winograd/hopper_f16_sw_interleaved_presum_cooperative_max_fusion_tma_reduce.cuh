@@ -44,13 +44,16 @@ template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileSha
 using StrassenGemmKernelsTmaReduce = cutlass::gemm::device::StrassenGemmKernels<StrassenGroupsTmaReduce<StageCountTypeM0>,
                                                                        ScheduleStrassenGroupsTmaReduce,
                                                                        ProblemShape,
+                                                                       ArchTag, OperatorClass,
                                                                        ElementA, LayoutA, cutlass::layout::OriginalLayout,
                                                                        ElementB, LayoutB, cutlass::layout::OriginalLayout,
                                                                        ElementC, LayoutC, cutlass::layout::OriginalLayout,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
-                                                                       PresumOpts>;
+                                                                       PresumOpts,
+                                                                       AlignmentA, AlignmentB, AlignmentC,
+                                                                       ElementD>;
 
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduce<4, Shape<_2,_256>, Shape<_2,_256>>>>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000 = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduce<4, Shape<_2,_256>, Shape<_2,_256>, cutlass::gemm::device::PresumOpt<0,0,0,0>>>>;

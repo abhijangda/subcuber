@@ -217,6 +217,9 @@ struct CollectiveStrassenMma<
       make_shape(shape<1>(TileShape{}), shape<2>(TileShape{}), Int<DispatchPolicy::Stages>{}),
       cute::conditional_t< ::cutlass::gemm::detail::is_major<0,StrideB>(), Step<_2,_1,_3>, Step<_1,_2,_3>>{}));
 
+  using SmemLayoutStageA = decltype(SmemLayoutA{}(_,_,cute::Int<0>{}));
+  using SmemLayoutStageB = decltype(SmemLayoutB{}(_,_,cute::Int<0>{}));
+
   // using PresumSmemLayoutA = decltype(tile_to_shape(
   //     PresumSmemLayoutAtomA{},
   //     make_shape(shape<0>(PresumTileShapeA{}), shape<1>(PresumTileShapeA{}), Int<1>{}),
@@ -250,9 +253,13 @@ struct CollectiveStrassenMma<
 
   struct SharedStorage
   {
+    struct alignas(128) StageStorage {
+      cute::array_aligned<typename TiledMma::ValTypeA, cute::cosize_v<SmemLayoutStageA>> smem_A;
+      cute::array_aligned<typename TiledMma::ValTypeB, cute::cosize_v<SmemLayoutStageB>> smem_B;
+    };
+
     struct TensorStorage : cute::aligned_struct<128, _0> {
-      cute::array_aligned<typename TiledMma::ValTypeA, cute::cosize_v<SmemLayoutA>> smem_A;
-      cute::array_aligned<typename TiledMma::ValTypeB, cute::cosize_v<SmemLayoutB>> smem_B;
+      cute::array<StageStorage, DispatchPolicy::Stages> stages;
     } tensors;
 
     using PipelineStorage = typename MainloopPipeline::SharedStorage;
@@ -320,6 +327,23 @@ struct CollectiveStrassenMma<
 
   using AllPresums = typename StrassenMiGroup::AllPresums;
   using TensorStorage = typename SharedStorage::TensorStorage;
+  using StageStorage = typename SharedStorage::StageStorage;
+  static_assert(sizeof(StageStorage) % sizeof(typename TiledMma::ValTypeA) == 0);
+  static_assert(sizeof(StageStorage) % sizeof(typename TiledMma::ValTypeB) == 0);
+  using InterleavedSmemLayoutA = decltype(make_composed_layout(
+      SmemLayoutA{}.layout_a(),
+      SmemLayoutA{}.offset(),
+      replace<2>(SmemLayoutA{}.layout_b(),
+                 make_layout(shape<2>(SmemLayoutA{}),
+                             replace<1>(stride<2>(SmemLayoutA{}.layout_b()),
+                                        Int<sizeof(StageStorage) / sizeof(typename TiledMma::ValTypeA)>{})))));
+  using InterleavedSmemLayoutB = decltype(make_composed_layout(
+      SmemLayoutB{}.layout_a(),
+      SmemLayoutB{}.offset(),
+      replace<2>(SmemLayoutB{}.layout_b(),
+                 make_layout(shape<2>(SmemLayoutB{}),
+                             replace<1>(stride<2>(SmemLayoutB{}.layout_b()),
+                                        Int<sizeof(StageStorage) / sizeof(typename TiledMma::ValTypeB)>{})))));
   using PipelineStorage = typename SharedStorage::PipelineStorage;
 
   // Host side kernel arguments
@@ -505,8 +529,8 @@ struct CollectiveStrassenMma<
     Tensor tensor_a = get_tensor_a();
     Tensor tensor_b = get_tensor_b();
 
-    Tensor tensor_presum_a = make_tensor(ptr_presum_A, make_layout(make_shape(4*M/2,K/2,L), make_stride(get<0>(args.dA)/2, get<1>(args.dA), get<2>(args.dA))));
-    Tensor tensor_presum_b = make_tensor(ptr_presum_B, make_layout(make_shape(N/2,4*K/2,L), make_stride(get<0>(args.dB), get<1>(args.dB)/2, get<2>(args.dB))));
+    Tensor tensor_presum_a = make_tensor(ptr_presum_A, make_layout(make_shape(4*M/2,K/2,L), make_stride(K/2, get<1>(args.dA), get<2>(args.dA))));
+    Tensor tensor_presum_b = make_tensor(ptr_presum_B, make_layout(make_shape(N/2,4*K/2,L), make_stride(get<0>(args.dB), N/2, get<2>(args.dB))));
 
     typename Params::TMA_A tma_load_a = make_tma_copy_A_sm90(
         GmemTiledCopyA{},
@@ -558,7 +582,7 @@ struct CollectiveStrassenMma<
         
     typename Params::TMA_PresumStore_B tma_store_presumld_b = make_tma_copy(
         SM90_TMA_STORE{},
-        make_tensor(ptr_presum_B, make_layout(make_shape(4*K/2,N/2,L), make_stride(get<1>(args.dB)/2, get<1>(args.dA), get<2>(args.dA)))),
+      make_tensor(ptr_presum_B, make_layout(make_shape(4*K/2,N/2,L), make_stride(N/2, get<0>(args.dB), get<2>(args.dB)))),
         PresumSmemLayoutB__{});
 
     uint32_t transaction_bytes_mk = TmaTransactionBytesMK;
@@ -945,8 +969,7 @@ struct CollectiveStrassenMma<
     class TensorA, class TensorB,
     class PresumLDInputs,
     class KTileIterator, class BlockCoord,
-    class ProblemShape_MNKL,
-    class StoreWarpOrderBarrier
+    class ProblemShape_MNKL
   >
   CUTLASS_DEVICE void
   load(
@@ -962,10 +985,7 @@ struct CollectiveStrassenMma<
       uint32_t block_rank_in_cluster,
       TensorStorage& shared_tensors,
       PresumLDInputs const& all_presumld_inputs,
-      PresumTensorStorage& shared_presum_tensors,
-      StoreWarpOrderBarrier* store_order_barrier
-      // volatile int* load_epilogue_barrier,
-      // int load_epilogue_barrier_val
+      PresumTensorStorage& shared_presum_tensors
       ) {
     int lane_predicate = cute::elect_one_sync();
     //TODO: Optimize for when the presum tile log parameters are 0
@@ -992,8 +1012,8 @@ struct CollectiveStrassenMma<
         block_idx, {0, 0}, 0, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}
       );
 
-      Tensor sA = make_tensor(make_smem_ptr(shared_tensors.smem_A.data()), SmemLayoutA{});        // (BLK_M,BLK_K,PIPE)
-      Tensor sB = make_tensor(make_smem_ptr(shared_tensors.smem_B.data()), SmemLayoutB{});        // (BLK_N,BLK_K,PIPE)
+      Tensor sA = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_A.data()), InterleavedSmemLayoutA{});        // (BLK_M,BLK_K,PIPE)
+      Tensor sB = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_B.data()), InterleavedSmemLayoutB{});        // (BLK_N,BLK_K,PIPE)
       
       Tensor gA0 = get<0>(all_presumld_inputs);
       Tensor gA1 = get<1>(all_presumld_inputs);
@@ -1117,7 +1137,6 @@ struct CollectiveStrassenMma<
       const uint presumComputeIterationsAB = (StrassenMiGroup::hasM0() && sub_m_idx == 0) ? presumComputeIterationsA : presumComputeIterationsB;
 
       using BarrierType = typename MainloopPipeline::ProducerBarrierType;
-      bool store_order_barrier_advanced = false;
       auto issue_presum_loads = [&] (int presum_load_iter, int presum_write_stage, BarrierType* presum_tma_barrier) {
         if (sub_m_idx == 0 && validTB_A && StrassenMiGroup::hasM0() &&
             StrassenMiGroup::AllPresums::computeAnyAPresum() && presum_load_iter < presumComputeIterationsA) {
@@ -1197,26 +1216,6 @@ struct CollectiveStrassenMma<
         }
       };
 
-      // Complete the presum stages that do not overlap epilogue storage. The
-      // main loop issues the next stage's A/B loads before waiting on epilogue.
-      if (ComputesPresum && store_order_barrier != nullptr && k_tile_count >= PresumStages - 2) {
-        CUTLASS_PRAGMA_UNROLL
-        for (int prologue_iter = 0; prologue_iter < PresumStages - 2; ++prologue_iter) {
-          pipeline.producer_acquire(smem_pipe_write);
-          BarrierType* tma_barrier = pipeline.producer_get_barrier(smem_pipe_write);
-          int write_stage = smem_pipe_write.index();
-
-          copy(tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
-          copy(tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter + raw_sub_m_offset_b), tBsB(_,_,_,write_stage));
-          issue_presum_loads(presum_k_iter, write_stage, tma_barrier);
-
-          ++k_tile_iter;
-          ++presum_k_iter;
-          ++smem_pipe_write;
-          --k_tile_count;
-        }
-      }
-
       // Mainloop
       CUTLASS_PRAGMA_NO_UNROLL
       for ( ; k_tile_count > 0; --k_tile_count) {
@@ -1283,23 +1282,12 @@ struct CollectiveStrassenMma<
         copy(tma_load_a.with(*tma_barrier, mcast_mask_a), tAgA(_,_,_,*k_tile_iter), tAsA(_,_,_,write_stage));
         copy(tma_load_b.with(*tma_barrier, mcast_mask_b), tBgB(_,_,_,*k_tile_iter + raw_sub_m_offset_b), tBsB(_,_,_,write_stage));
 
-        if (ComputesPresum && store_order_barrier != nullptr && presum_k_iter == PresumStages - 2) {
-          store_order_barrier->wait();
-          store_order_barrier->advance();
-          store_order_barrier_advanced = true;
-        }
-
         issue_presum_loads(presum_k_iter, write_stage, tma_barrier);
 
         ++k_tile_iter;
         ++presum_k_iter;
         // Advance smem_pipe_write
         ++smem_pipe_write;
-      }
-
-      if (store_order_barrier != nullptr && !store_order_barrier_advanced) {
-        store_order_barrier->wait();
-        store_order_barrier->advance();
       }
 
       if (ComputesPresum) cute::tma_store_wait<0>();
@@ -1772,8 +1760,8 @@ struct CollectiveStrassenMma<
     auto [M,N,K,L] = problem_shape;
     auto [halfM, halfN, halfK, halfL] = half_problem_shape;
 
-    Tensor sA = make_tensor(make_smem_ptr(shared_tensors.smem_A.data()), SmemLayoutA{});          // (BLK_M,BLK_K,PIPE)
-    Tensor sB = make_tensor(make_smem_ptr(shared_tensors.smem_B.data()), SmemLayoutB{});          // (BLK_N,BLK_K,PIPE)
+    Tensor sA = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_A.data()), InterleavedSmemLayoutA{});          // (BLK_M,BLK_K,PIPE)
+    Tensor sB = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_B.data()), InterleavedSmemLayoutB{});          // (BLK_N,BLK_K,PIPE)
 
     const uint presumComputeIterationsA = (kPresumComputeIterationsA * (1 << mainloop_params.get_presum_tile_log_multiplier_a())) >> mainloop_params.get_presum_tile_log_divider_a();
     const uint presumComputeIterationsB = (kPresumComputeIterationsB * (1 << mainloop_params.get_presum_tile_log_multiplier_b())) >> mainloop_params.get_presum_tile_log_divider_b();

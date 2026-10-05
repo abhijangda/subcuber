@@ -1,7 +1,10 @@
-#define MY_PRINTF(...) ;//printf(__VA_ARGS__)
+#define MY_PRINTF(...) ;
+
+#define L2_SCHED_TMA_REDUCE_ADD
 
 #include "cutlass/cutlass.h"
 #include "cute/tensor.hpp"
+#include "cutlass/layout/strassen_layout.hpp"
 #include "cutlass/tensor_ref.h"
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
 #include "cutlass/epilogue/thread/linear_combination.h"
@@ -22,7 +25,6 @@ constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;
 using         ElementB    = cutlass::half_t;
 using         LayoutB     = cutlass::layout::RowMajor;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;
-using         ElementC    = void;
 using         ElementD    = cutlass::half_t;
 using         LayoutC     = cutlass::layout::RowMajor;
 constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;
@@ -30,66 +32,76 @@ using ElementAccumulator  = float;
 using ArchTag             = cutlass::arch::Sm90;
 using OperatorClass       = cutlass::arch::OpClassTensorOp;
 using ProblemShape        = Shape<int,int,int>;
-using TileShape           = Shape<_128,_256,_64>;
+using TileShapeM0         = Shape<_128,_256,_64>;
+using TileShapeM2To6      = Shape<_128,_128,_64>;
 using ClusterShape        = Shape<_2,_1,_1>;
 const uint StageCountTypeM0 = 4;
-const uint StageCountTypeM2M6 = 4;
-using KernelSchedule = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
-using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecializedCooperative;
+const uint StageCountTypeM2M6 = 6;
+using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
+using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
+using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;
+using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecialized;
 
 using AllPresumsM0 = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+                                PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,
                                    PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable>;
 
-template<int StageCountTypeM0>
-using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM0,
+using StrassenGroupsM0 = StrassenLevel1Groups<StrassenPresum<2, 0, TileShapeM0, AllPresumsM0>,
+                                              StrassenLevel1MiGroup<2, 0, TileShapeM0, ClusterShape, StageCountTypeM0,
+                                                                    RWMTypes<>,
+                                                                    RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>>,
+                                                                    AllPresumsM0, 0, 0>>;
+
+template<int Level1Idx>
+using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, AllPresumsM0>,
+                                            StrassenLevel1MiGroup<1, Level1Idx, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,
+                                                                  RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,
                                                                            CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,
                                                                   AllPresumsM0, 0, 0, 1>,
-                                            StrassenLevel1M1Group<1, 0, TileShape, ClusterShape, StageCountTypeM0,
+                                            StrassenLevel1M1Group<1, Level1Idx, TileShapeM0, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,
                                                                   AllPresumsM0>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1MiGroup<1, Level1Idx, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>,
-                                                                           CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>>,
+                                                                  RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim>>>,
+                                                                           CUW<3, LayoutFinal, LayoutNone, Expr<Plus<3>>>,
                                                                            CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>>>,
                                                                   AllPresumsM1To6, 0, 2, 3, 6>,
-                                            StrassenLevel1M3Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M3Group<1, Level1Idx, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<2, LayoutNone, LayoutInterim1D, Expr<Plus<3>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,
                                                                   AllPresumsM1To6>,
-                                            StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1MiGroup<1, Level1Idx, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>,
-                                                                           CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,
+                                                                  RWCTypes<CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>, Expr<Plus<3, MemGlobal, LayoutFinal>>>,
+                                                                           CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutFinal>>>>,
                                                                   AllPresumsM1To6, 0, 4, 5>,
-                                            StrassenLevel1M5Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M5Group<1, Level1Idx, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>,
                                                                                                                                Plus<0, MemGlobal, LayoutInterim1D>>>>,
                                                                   AllPresumsM1To6>,
-                                            StrassenLevel1M6Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
+                                            StrassenLevel1M6Group<1, Level1Idx, TileShapeM2To6, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>,
                                                                   AllPresumsM1To6>>;
 
-using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
-                                                       ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>,
-                                                                                                                 FusedMiGroup<7, 4>>>;
+using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0, EpilogueScheduleM0, false, FusedMiGroup<7, 0>>,
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>,
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>>;
 
-template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
-using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups<StageCountTypeM0>,
+template<typename Groups, typename ElementL2Postsum, typename PresumTileShapeA, typename PresumTileShapeB,
+         typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
+using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<Groups,
                                                                        ScheduleStrassenGroups1,
                                                                        ProblemShape,
                                                                        ArchTag, OperatorClass,
                                                                        ElementA, LayoutA, cutlass::layout::OriginalLayout,
                                                                        ElementB, LayoutB, cutlass::layout::OriginalLayout,
-                                                                       ElementC, LayoutC, cutlass::layout::OriginalLayout,
+                                                                       ElementL2Postsum, LayoutC, cutlass::layout::OriginalLayout,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
@@ -97,18 +109,31 @@ using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenG
                                                                        AlignmentA, AlignmentB, AlignmentC,
                                                                        ElementD>;
 
-template<typename StrassenKernels>
-using StrassenGemmUniversalAdapter = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenKernels>;
+template<typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
+using StrassenGemmLevel2UniversalAdapter = cutlass::gemm::device::StrassenGemmLevel2UniversalAdapter<
+    StrassenGemmKernels<StrassenGroupsM0, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<StrassenGroups<1>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<StrassenGroups<2>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<StrassenGroups<3>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<StrassenGroups<4>, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<StrassenGroups<5>, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<StrassenGroups<6>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    true>;
 
 template <typename StrassenGemmKernel_>
-class HopperF16InterleavedPresumCooperativeMaxFusionBase {
+class HopperF16InterleavedPresumLevel2CooperativePingpongMaxFusionTmaReduceBase {
 public:
   using StrassenGemmKernel = StrassenGemmKernel_;
-  using GemmKernel = typename StrassenGemmKernel::GemmKernel;
+  using GemmKernel = typename StrassenGemmKernel::ChildStrassenGemmM0::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
 
   static cutlass::Status can_implement(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter = nullptr) {
+    if (get<0>(args.problem_shape) % (4 * size<0>(TileShapeM0{})) != 0 ||
+        get<1>(args.problem_shape) % (4 * size<1>(TileShapeM0{})) != 0 ||
+        get<2>(args.problem_shape) % (4 * size<2>(TileShapeM0{})) != 0) {
+      return cutlass::Status::kErrorInvalidProblem;
+    }
     return StrassenGemmKernel::can_implement(args);
   }
 
@@ -151,6 +176,4 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16InterleavedPresumCooperativeMaxFusion_2x256_2x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernels<4, Shape<_2,_256>, Shape<_2,_256>>>>;
-using HopperF16InterleavedPresumCooperativeMaxFusion_2x256_2x256_Opt_0000 = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernels<4, Shape<_2,_256>, Shape<_2,_256>, cutlass::gemm::device::PresumOpt<0,0,0,0>>>>;
-using HopperF16InterleavedPresumCooperativeMaxFusion_4x256_4x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernels<4, Shape<_4,_256>, Shape<_4,_256>>>>;
+using HopperF16InterleavedPresumLevel2CooperativePingpongMaxFusionTmaReduce_2x256_2x256_OptNo = HopperF16InterleavedPresumLevel2CooperativePingpongMaxFusionTmaReduceBase<StrassenGemmLevel2UniversalAdapter<Shape<_2,_256>, Shape<_2,_256>>>;
