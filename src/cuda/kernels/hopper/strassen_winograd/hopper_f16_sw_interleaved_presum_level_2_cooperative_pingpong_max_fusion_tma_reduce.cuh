@@ -1,5 +1,7 @@
 #define MY_PRINTF(...) ;
 
+#define L2_SCHED_TMA_REDUCE_ADD
+
 #include "cutlass/cutlass.h"
 #include "cute/tensor.hpp"
 #include "cutlass/layout/strassen_layout.hpp"

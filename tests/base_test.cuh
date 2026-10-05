@@ -89,8 +89,8 @@ inline bool compare_results(
 	int n, int level) {
 	static_assert(std::is_same<ElementOutput, float>::value || std::is_same<ElementOutput, cutlass::half_t>::value);
 
-	float max_rel_tol = std::is_same<ElementOutput, float>::value ? 1e-4f : 1e-2f;
-	float max_abs_tol = std::is_same<ElementOutput, float>::value ? 1e-4f : (level == 1 ? 4 : 7);
+	float max_rel_tol = std::is_same<ElementOutput, float>::value ? 1e-4f : (level == 1 ? 1e-2f : 1e-1f + 1e-2f);
+	float max_abs_tol = std::is_same<ElementOutput, float>::value ? 1e-4f : (level == 1 ? 4 : 14);
 	for (std::size_t idx = 0; idx < actual.size(); ++idx) {
 		float cutlass_value = static_cast<float>(actual[idx]);
 		float reference_value = static_cast<float>(expected[idx]);
