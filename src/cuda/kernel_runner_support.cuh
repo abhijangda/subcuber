@@ -358,7 +358,7 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
   cudaError_t err = cudaSuccess;
 
-  int swizzles[7] = {2, 2, 1, 1, 1, 1, 1};
+  int swizzles[7] = {4, 4, 2, 2, 2, 2, 2};
   Gemm gemm;
   status = gemm.initialize(args, swizzles, workspace.get());
   if (status != cutlass::Status::kSuccess) {
@@ -535,7 +535,7 @@ int kernel_runner_run_moe_cutlass3(KernelRunnerBuffers buffers, int m, int n, in
   size_t workspace_size = Gemm::get_workspace_size(args);
   cutlass::device_memory::allocation<unsigned char> workspace(workspace_size);
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
-  int swizzles[7] = {2, 2, 1, 1, 1, 1, 1};
+  int swizzles[7] = {4, 4, 2, 2, 2, 2, 2};
   Gemm gemm;
   status = gemm.initialize(args, swizzles, workspace.get());
   if (status != cutlass::Status::kSuccess) {
@@ -626,7 +626,7 @@ int kernel_runner_run_gemm_cutlass3(KernelRunnerBuffers buffers, int m, int n, i
       hw_info);
 
   args.scheduler.raster_order = RasterOrderOptions::AlongN;
-  args.scheduler.max_swizzle_size = 1;
+  args.scheduler.max_swizzle_size = 4;
 
   cutlass::Status status = Gemm::can_implement(args);
   if (status != cutlass::Status::kSuccess) {
@@ -797,7 +797,7 @@ int kernel_runner_run_grouped_cutlass3(KernelRunnerBuffers buffers, int m, int n
   if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
   cutlass::device_memory::allocation<unsigned char> workspace(Gemm::get_workspace_size(args));
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
-  int swizzles[7] = {2, 2, 1, 1, 1, 1, 1};
+  int swizzles[7] = {4, 4, 2, 2, 2, 2, 2};
   Gemm gemm;
   status = gemm.initialize(args, swizzles, workspace.get());
   if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
@@ -925,7 +925,7 @@ int kernel_runner_run_grouped_gemm_cutlass3(KernelRunnerBuffers buffers, int m, 
       {{1.0f, 0.0f}, ptr_c.get(), stride_c.get(), ptr_d.get(), stride_d.get()},
       hw_info);
   args.scheduler.raster_order = decltype(args.scheduler.raster_order)::AlongN;
-  args.scheduler.max_swizzle_size = 1;
+  args.scheduler.max_swizzle_size = 4;
 
   cutlass::Status status = Gemm::can_implement(args);
   if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);

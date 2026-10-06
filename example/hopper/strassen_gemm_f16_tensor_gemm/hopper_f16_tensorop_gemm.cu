@@ -103,15 +103,15 @@ using TensorOpElem = cutlass::bfloat16_t;
 // A matrix configuration
 using         ElementA    = TensorOpElem;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-using         SubMatLayoutA = cutlass::layout::StrassenLayout;
-// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
+// using         SubMatLayoutA = cutlass::layout::StrassenLayout;
+using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = TensorOpElem;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
-using         SubMatLayoutB = cutlass::layout::StrassenLayout;
-// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
+// using         SubMatLayoutB = cutlass::layout::StrassenLayout;
+using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
@@ -170,7 +170,7 @@ using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
 using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
 #endif
 
-using PresumOpts = cutlass::gemm::device::PresumOpt<>;//<0,0,0,0>;
+using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
 //StageCount = 6 is a little slower than this with swizzle = 8.
 //TODO: Stages 5 produces wrong results for C2
 
@@ -184,7 +184,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 1 //TMA Reduce
+#if 0 //TMA Reduce
 #if defined(COOPERATIVE)
   static_assert(StageCountTypeM4M5 == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
 #endif

@@ -45,8 +45,8 @@ using CooperativePingpongStrassenGroups = StrassenLevel1Groups<StrassenPresum<1,
                                                                   AllPresumsM1To6>>;
 
 using CooperativePingpongScheduleStrassenGroups = ScheduleStrassenGroups<ParallelMiGroups<CooperativePingpongKernelScheduleM0, CooperativePingpongEpilogueScheduleM0, false, FusedMiGroup<7, 0>>,
-                                                                         ParallelMiGroups<CooperativePingpongKernelScheduleM2To6, CooperativePingpongEpilogueScheduleM2To6, false, FusedMiGroup<7, 2>,
-                                                                                                                                                                               FusedMiGroup<7, 4>>>;
+                                                                         ParallelMiGroups<CooperativePingpongKernelScheduleM2To6, CooperativePingpongEpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>,
+                                                                         ParallelMiGroups<CooperativePingpongKernelScheduleM2To6, CooperativePingpongEpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>>;
 
 template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using CooperativePingpongStrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<CooperativePingpongStrassenGroups<StageCountTypeM0>,

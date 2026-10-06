@@ -43,7 +43,7 @@ using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;
 using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecialized;
 
 using AllPresumsM0 = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
+                                PresumCompute, PresumCompute, PresumCompute, PresumCompute>;//PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,
                                    PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable>;
 

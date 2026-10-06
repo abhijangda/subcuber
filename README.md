@@ -102,6 +102,12 @@ Supported values:
 --strassen_level=0|1|2|all
 ```
 
+Optional `--sleep_seconds=N` sets a nonnegative integer delay in seconds between
+candidate benchmarks and split-K trials. Use `--sleep_seconds=0` to disable the delay
+or `--sleep_seconds=1` for one second. When omitted, the delay is 5 seconds for `f32`
+and 10 seconds for `f16`/`f64`. It does not apply between warmup or timed iterations,
+or after the final benchmark.
+
 Optional filtering:
 
 ```bash

@@ -46,7 +46,7 @@ template<int StageCountTypeM0>
 using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,
+                                                                  RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,
                                                                            CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,
                                                                   AllPresumsM0, 0, 0, 1>,
                                             StrassenLevel1M1Group<1, 0, TileShape, ClusterShape, StageCountTypeM0,
@@ -55,8 +55,8 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>,
-                                                                           CUW<2, LayoutInterim1D, LayoutNone, Expr<Plus<3>>>,
+                                                                  RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim>>>,
+                                                                           CUW<2, LayoutInterim, LayoutNone, Expr<Plus<3>>>,
                                                                            CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>>>,
                                                                   AllPresumsM1To6, 0, 2, 3, 6>,
                                             StrassenLevel1M3Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
@@ -65,8 +65,8 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM1To6>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>,
-                                                                           CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,
+                                                                  RWCTypes<CUW<3, LayoutFinal, LayoutNone, Expr<Plus<4>>, Expr<Plus<2, MemGlobal, LayoutInterim>>>,
+                                                                           CUW<1, LayoutFinal, LayoutNone, Expr<Plus<5>>, Expr<Plus<1, MemGlobal, LayoutInterim>>>>,
                                                                   AllPresumsM1To6, 0, 4, 5>,
                                             StrassenLevel1M5Group<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
@@ -79,8 +79,8 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllP
                                                                   AllPresumsM1To6>>;
 
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 0>>,
-                                                       ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>,
-                                                                                                                 FusedMiGroup<7, 4>>>;
+                                                       ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
+                                                       ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>>;
 
 template<int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenGroups<StageCountTypeM0>,

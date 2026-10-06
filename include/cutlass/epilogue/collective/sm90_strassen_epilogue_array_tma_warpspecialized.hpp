@@ -193,7 +193,7 @@ private:
   static const bool IsFusedM2M3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
   static const bool IsFusedM4M5 = StrassenMiGroup::hasM4() && StrassenMiGroup::hasM5();
 
-  constexpr static bool support_smem_reuse = is_source_supported && is_destination_supported && StagesD <= StagesC
+  constexpr static bool support_smem_reuse = is_destination_supported && StagesD <= StagesC
                                             && cosize(take<0,2>(SmemLayoutC{})) == cosize(take<0,2>(SmemLayoutD{}));
   static_assert(not (ReuseSmemC && not support_smem_reuse), "Smem reuse requirements not met");
 

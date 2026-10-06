@@ -4,7 +4,7 @@ template<int StageCountTypeM0>
 using StrassenGroupsTmaReduce = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM0,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<1, LayoutInterim1D, LayoutNone, Expr<Plus<0>>>,//C1 = M0
+                                                                  RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                            CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
                                                                   AllPresumsM0, 0, 0, 1>,
                                             StrassenLevel1M1Group<1, 0, TileShape, ClusterShape, StageCountTypeM0,
@@ -14,7 +14,7 @@ using StrassenGroupsTmaReduce = StrassenLevel1Groups<StrassenPresum<1, 0, TileSh
                                                                   AllPresumsM0>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape, StageCountTypeM2M6,
                                                                   RWMTypes<>,
-                                                                  RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>> >, //C1 = Sh = C1+M2 ; Reg = C1
+                                                                  RWCTypes<CUW<1, LayoutFinal, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim>> >, //C1 = Sh = C1+M2 ; Reg = C1
                                                                            CUW<3, LayoutFinal, LayoutNone, Expr<Plus<3>>/*, Expr<Plus<1, MemShared, LayoutInterim1D>>*/ >, //C2 = C1Sh+M3
                                                                            CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>> >,
                                                                   AllPresumsM1To6, 0, 2, 3, 6>,

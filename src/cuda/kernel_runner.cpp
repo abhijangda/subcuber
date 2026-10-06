@@ -364,7 +364,8 @@ static bool has_flag(int argc, char **argv, const char *name) {
 }
 
 static void usage(char const *program) {
-  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX] [--disable_split_k]\n";
+  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX] [--disable_split_k] [--sleep_seconds=N]\n";
+  std::cerr << "  --sleep_seconds=N: delay between benchmarks in seconds (default: 5 for f32, 10 for f16/f64; 0 disables).\n";
 }
 
 static bool tunes_split_k(KernelEntry const &kernel) {
@@ -387,7 +388,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
                   std::string const &dtype, std::string const &arch,
                   std::string const &strassen_level_label,
                   int iterations, int warmup, int num_streams, int expert_count,
-                  bool disable_split_k) {
+                    bool disable_split_k, int sleep_seconds) {
   bool has_grouped_moe = std::any_of(
       candidates.begin(), candidates.end(),
       [](KernelEntry const &kernel) { return kernel.grouped_moe; });
@@ -459,7 +460,8 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
   std::cout << "Running " << candidates.size() << " candidate kernels for m=" << m
             << " n=" << n << " k=" << k << " dtype=" << dtype
             << " gpu_arch=" << arch << " strassen_level=" << strassen_level_label
-            << " streams=" << num_streams << " experts=" << expert_count << "\n";
+            << " streams=" << num_streams << " experts=" << expert_count
+            << " sleep_seconds=" << sleep_seconds << "\n";
   std::cout << std::left << std::setw(52) << "kernel" << std::right
             << std::setw(10) << "split/group" << std::setw(14) << "avg_ms"
             << std::setw(16) << "gflops" << "\n";
@@ -486,8 +488,8 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
               num_streams, kernel.grouped_moe ? expert_count : split_k, &avg_ms);
       last_rc = rc;
       bool has_more_benchmarks = split_k < last_split_k || &kernel != &candidates.back();
-      if (has_more_benchmarks) {
-        std::this_thread::sleep_for(std::chrono::seconds((dtype != "f32") ? 10 : 5));
+      if (has_more_benchmarks && sleep_seconds > 0) {
+        std::this_thread::sleep_for(std::chrono::seconds(sleep_seconds));
       }
       if (rc != 0 || !std::isfinite(avg_ms)) {
         if (!tune_split_k) {
@@ -605,6 +607,11 @@ int main(int argc, char **argv) {
   }
 
   std::string dtype = normalize_dtype(dtype_arg);
+  int sleep_seconds = dtype == "f32" ? 5 : 10;
+  std::string sleep_seconds_arg;
+  if (parse_arg(argc, argv, "sleep_seconds", sleep_seconds_arg) || has_flag(argc, argv, "sleep_seconds")) {
+    valid_args = get_required_int_arg(argc, argv, "sleep_seconds", sleep_seconds) && valid_args;
+  }
   std::string arch = normalize_arch(arch_arg);
   std::string strassen_level_label = lower(strassen_level_arg);
   bool all_strassen_levels = strassen_level_label == "all";
@@ -631,7 +638,7 @@ int main(int argc, char **argv) {
   }
 
   if (!valid_args || m <= 0 || n <= 0 || k <= 0 || expert_count <= 0 ||
-      iterations <= 0 || warmup < 0 ||
+    iterations <= 0 || warmup < 0 || sleep_seconds < 0 ||
       streams <= 0 || streams > max_streams || (dtype != "f32" && dtype != "f16" && dtype != "f64") ||
       (arch != "volta" && arch != "ampere" && arch != "hopper" && arch != "blackwell") ||
       (!all_strassen_levels && strassen_level != 0 && strassen_level != 1 && strassen_level != 2)) {
@@ -662,12 +669,12 @@ int main(int argc, char **argv) {
 
   if (dtype == "f32") {
     return run_benchmark<float>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                iterations, warmup, streams, expert_count, disable_split_k);
+                                iterations, warmup, streams, expert_count, disable_split_k, sleep_seconds);
   }
   if (dtype == "f64") {
     return run_benchmark<double>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                 iterations, warmup, streams, expert_count, disable_split_k);
+                                 iterations, warmup, streams, expert_count, disable_split_k, sleep_seconds);
   }
   return run_benchmark<cutlass::half_t>(candidates, m, n, k, dtype, arch, strassen_level_label,
-                                        iterations, warmup, streams, expert_count, disable_split_k);
+                                        iterations, warmup, streams, expert_count, disable_split_k, sleep_seconds);
 }
