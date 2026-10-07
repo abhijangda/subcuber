@@ -65,6 +65,31 @@ inline cudaError_t kernel_runner_create_streams(cudaStream_t *streams, int num_s
   return cudaSuccess;
 }
 
+template <typename Kernel>
+constexpr bool kernel_runner_kernel_uses_uniform_swizzles() {
+  if constexpr (requires {
+                  typename Kernel::SubmatrixLayoutA;
+                  typename Kernel::SubmatrixLayoutB;
+                }) {
+    return cute::is_same_v<typename Kernel::SubmatrixLayoutA,
+                           cutlass::layout::StrassenLayout> &&
+           cute::is_same_v<typename Kernel::SubmatrixLayoutB,
+                           cutlass::layout::StrassenLayout>;
+  } else {
+    return requires { typename Kernel::ChildStrassenGemmM0; };
+  }
+}
+
+template <typename Gemm>
+constexpr bool kernel_runner_uses_uniform_swizzles() {
+  if constexpr (requires { typename Gemm::StrassenGemmKernel; }) {
+    return kernel_runner_kernel_uses_uniform_swizzles<
+        typename Gemm::StrassenGemmKernel>();
+  } else {
+    return kernel_runner_kernel_uses_uniform_swizzles<Gemm>();
+  }
+}
+
 inline void kernel_runner_destroy_streams(cudaStream_t *streams, int num_streams) {
   for (int i = 0; i < num_streams; ++i) {
     cudaStreamDestroy(streams[i]);
@@ -171,11 +196,7 @@ int kernel_runner_tune_swizzle_array(Arguments &args, int warmup_iterations, int
   kernel_runner_reset_last_swizzle();
   constexpr int candidates[] = {1, 2, 4};
   constexpr int candidate_count = sizeof(candidates) / sizeof(candidates[0]);
-  constexpr bool uniform_swizzles =
-    cute::is_same_v<typename Gemm::StrassenGemmKernel::SubmatrixLayoutA,
-            cutlass::layout::StrassenLayout> &&
-    cute::is_same_v<typename Gemm::StrassenGemmKernel::SubmatrixLayoutB,
-            cutlass::layout::StrassenLayout>;
+  constexpr bool uniform_swizzles = kernel_runner_uses_uniform_swizzles<Gemm>();
   float runtimes[candidate_count] = {};
   int best_index = -1;
   int last_error = kernel_runner_status_to_error(cutlass::Status::kErrorInvalidProblem);
