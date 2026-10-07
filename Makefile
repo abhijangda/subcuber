@@ -120,6 +120,8 @@ HOPPER_V3_SRCS := \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce.cu
 
+HOPPER_B_PRESUM_KERNEL_SRCS := $(patsubst $(CUDA_SRC_DIR)/%,%,$(wildcard $(CUDA_SRC_DIR)/kernels/hopper/b_presum_kernel/*.cu))
+
 VOLTA_V2_SRCS := \
 	kernels/volta/strassen_winograd/volta_f32_sw_tile.cu \
 	kernels/volta/strassen_winograd/volta_f32_sw_interleaved_presum.cu \
@@ -129,9 +131,9 @@ VOLTA_V2_SRCS := \
 
 VOLTA_KERNEL_SRCS := $(VOLTA_CUBIC_SRCS) $(VOLTA_V2_SRCS)
 AMPERE_KERNEL_SRCS := $(AMPERE_CUBIC_SRCS) $(AMPERE_V2_SRCS)
-HOPPER_KERNEL_SRCS := $(HOPPER_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS)
+HOPPER_KERNEL_SRCS := $(HOPPER_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS) $(HOPPER_B_PRESUM_KERNEL_SRCS)
 BLACKWELL_KERNEL_SRCS := $(BLACKWELL_CUBIC_SRCS) $(BLACKWELL_V2_SRCS)
-KERNEL_SRCS := $(AMPERE_V2_SRCS) $(AMPERE_CUBIC_SRCS) $(HOPPER_CUBIC_SRCS) $(BLACKWELL_CUBIC_SRCS) $(BLACKWELL_V2_SRCS) $(VOLTA_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS) $(VOLTA_V2_SRCS)
+KERNEL_SRCS := $(AMPERE_V2_SRCS) $(AMPERE_CUBIC_SRCS) $(HOPPER_CUBIC_SRCS) $(BLACKWELL_CUBIC_SRCS) $(BLACKWELL_V2_SRCS) $(VOLTA_CUBIC_SRCS) $(HOPPER_V2_SRCS) $(HOPPER_V3_SRCS) $(HOPPER_B_PRESUM_KERNEL_SRCS) $(VOLTA_V2_SRCS)
 
 RUNNER_OBJS := $(addprefix $(BUILD_DIR)/,$(RUNNER_SRC:.cpp=.o))
 KERNEL_OBJS := $(addprefix $(BUILD_DIR)/,$(KERNEL_SRCS:.cu=.o))
@@ -207,13 +209,15 @@ $(NO_CUDA_DECL_BUILD_DIR)/%.o: $(CUDA_SRC_DIR)/%.cpp $(CUDA_SRC_DIR)/kernel_runn
 
 $(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce.o: PRESUM_LEVEL_2_SPLIT_COMPILE = 1
 
+$(BUILD_DIR)/kernels/hopper/b_presum_kernel/hopper_f16_sw_a_presum_interleaved_b_presum_kernel_level_2_cooperative_pingpong_max_fusion_tma_reduce.o: SPLIT_COMPILE = 1
+
 $(BUILD_DIR)/kernels/%.o: $(CUDA_SRC_DIR)/kernels/%.cu $(CUDA_SRC_DIR)/kernel_runner_support.cuh
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCC_FLAGS) $(SPLIT_COMPILE_FLAGS) $(INCLUDES) \
 	  $(if $(findstring /blackwell/,$<),$(BLACKWELL_GENCODE),$(if $(findstring /hopper/,$<),$(HOPPER_GENCODE),$(if $(findstring /volta/,$<),$(VOLTA_GENCODE),$(AMPERE_GENCODE)))) \
 	    $(if $(findstring /hopper/cubic/hopper_f16_cutlass_,$<),$(V3_FLAGS), \
 	    $(if $(findstring /cubic/,$<),$(CUBIC_FLAGS), \
-	  $(if $(or $(findstring hopper_f16_sw_interleaved_presum,$<),$(findstring hopper_f16_moe_sw_interleaved_presum,$<),$(findstring blackwell_f32_sw_interleaved_presum,$<)),$(V3_FLAGS), \
+	  $(if $(or $(findstring hopper_f16_sw_interleaved_presum,$<),$(findstring hopper_f16_moe_sw_interleaved_presum,$<),$(findstring /hopper/b_presum_kernel/,$<),$(findstring blackwell_f32_sw_interleaved_presum,$<)),$(V3_FLAGS), \
 	    $(if $(findstring _sw_tile,$<),$(TILE_FLAGS), \
 	    $(if $(findstring _fused_presum.cu,$<),$(FUSED_FLAGS), \
 	    $(if $(findstring _kernel_presum.cu,$<),$(KERNEL_PRESUM_FLAGS),$(PRESUM_FLAGS))))))) \

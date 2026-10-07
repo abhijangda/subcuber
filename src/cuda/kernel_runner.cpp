@@ -122,6 +122,9 @@ DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_0000);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no);
 DECLARE_KERNEL_RUN_FN(run_hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no);
+#define HOPPER_B_PRESUM_KERNEL(name, level, grouped) DECLARE_KERNEL_RUN_FN(run_##name);
+#include "cuda/kernels/hopper/b_presum_kernel/kernels.inc"
+#undef HOPPER_B_PRESUM_KERNEL
 #endif
 #ifdef STRASSEN_ENABLE_BLACKWELL
 DECLARE_KERNEL_RUN_FN(run_blackwell_f64_cutlass_32x64);
@@ -155,6 +158,7 @@ struct KernelEntry {
   int strassen_level;
   KernelRunFn run;
   bool grouped_moe = false;
+  bool b_presum_kernel = false;
 };
 
 static const KernelEntry kKernels[] = {
@@ -281,6 +285,9 @@ static const KernelEntry kKernels[] = {
     {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no},
     {"hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no", "hopper", "f16", 1, run_hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_4x256_4x256_opt_no},
     {"hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no", "hopper", "f16", 2, run_hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_2x256_2x256_opt_no},
+  #define HOPPER_B_PRESUM_KERNEL(name, level, grouped) {#name, "hopper", "f16", level, run_##name, grouped, true},
+  #include "cuda/kernels/hopper/b_presum_kernel/kernels.inc"
+  #undef HOPPER_B_PRESUM_KERNEL
   #endif
   #ifdef STRASSEN_ENABLE_VOLTA
     {"volta_f32_cutlass_128x128", "volta", "f32", 0, run_volta_f32_cutlass_128x128},
@@ -364,8 +371,9 @@ static bool has_flag(int argc, char **argv, const char *name) {
 }
 
 static void usage(char const *program) {
-  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX] [--disable_split_k] [--sleep_seconds=N]\n";
+  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX] [--disable_split_k] [--sleep_seconds=N] [--b_presum=interleaved|kernel]\n";
   std::cerr << "  --sleep_seconds=N: delay between benchmarks in seconds (default: 5 for f32, 10 for f16/f64; 0 disables).\n";
+  std::cerr << "  --b_presum=kernel: select non-grouped Hopper f16 global B-presum variants with Strassen-layout A/B inputs; incompatible with --experts/--groups (default: interleaved).\n";
 }
 
 static bool tunes_split_k(KernelEntry const &kernel) {
@@ -381,6 +389,15 @@ static bool tunes_split_k(KernelEntry const &kernel) {
 static bool allows_split_k_greater_than_one(int m, int n) {
   constexpr int64_t kSplitKOutputElementLimit = int64_t(4) * 1024 * 4 * 1024;
   return int64_t(m) * int64_t(n) <= kSplitKOutputElementLimit;
+}
+
+static std::string schedule_label(int split_k, int group_count,
+                                  std::string const &swizzle) {
+  auto value_or_dash = [](int value) {
+    return value > 0 ? std::to_string(value) : std::string("-");
+  };
+  return value_or_dash(split_k) + "/" + value_or_dash(group_count) + "/" +
+         (swizzle.empty() ? "-" : swizzle);
 }
 
 template <typename Element>
@@ -449,9 +466,11 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
   if (stream_err != cudaSuccess) {
     return static_cast<int>(stream_err);
   }
+  kernel_runner_set_swizzle_sleep_seconds(sleep_seconds);
 
   std::string best_name;
   int best_split_k = 1;
+  int best_swizzle = 0;
   float best_ms = std::numeric_limits<float>::infinity();
   double best_gflops = 0.0;
   int runnable = 0;
@@ -463,7 +482,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
             << " streams=" << num_streams << " experts=" << expert_count
             << " sleep_seconds=" << sleep_seconds << "\n";
   std::cout << std::left << std::setw(52) << "kernel" << std::right
-            << std::setw(10) << "split/group" << std::setw(14) << "avg_ms"
+            << std::setw(22) << "split/group/swizzle" << std::setw(14) << "avg_ms"
             << std::setw(16) << "gflops" << "\n";
 
   for (KernelEntry const &kernel : candidates) {
@@ -473,6 +492,8 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
     float kernel_best_ms = std::numeric_limits<float>::infinity();
     double kernel_best_gflops = 0.0;
     int kernel_best_split_k = 0;
+    int kernel_best_swizzle = 0;
+    std::string kernel_best_swizzle_label;
     int last_rc = 0;
 
     for (int split_k = first_split_k; split_k <= last_split_k; ++split_k) {
@@ -484,8 +505,11 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
       }
 
       float avg_ms = 0.0f;
+      kernel_runner_reset_last_swizzle();
       int rc = kernel.run(buffers, m, n, k, warmup, iterations, runner_streams,
               num_streams, kernel.grouped_moe ? expert_count : split_k, &avg_ms);
+      int swizzle = kernel_runner_last_swizzle();
+      std::string swizzle_label = kernel_runner_last_swizzle_label();
       last_rc = rc;
       bool has_more_benchmarks = split_k < last_split_k || &kernel != &candidates.back();
       if (has_more_benchmarks && sleep_seconds > 0) {
@@ -494,7 +518,9 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
       if (rc != 0 || !std::isfinite(avg_ms)) {
         if (!tune_split_k) {
           std::cout << std::left << std::setw(52) << kernel.name << std::right
-                    << std::setw(10) << (kernel.grouped_moe ? expert_count : split_k)
+                    << std::setw(22) << schedule_label(
+                           kernel.grouped_moe ? 0 : split_k,
+                           kernel.grouped_moe ? expert_count : 0, swizzle_label)
                     << std::setw(14) << "skipped"
                     << std::setw(16) << rc << "\n";
         }
@@ -507,7 +533,9 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
       if (!tune_split_k) {
         ++runnable;
         std::cout << std::left << std::setw(52) << kernel.name << std::right
-                  << std::setw(10) << (kernel.grouped_moe ? expert_count : split_k)
+                  << std::setw(22) << schedule_label(
+                         kernel.grouped_moe ? 0 : split_k,
+                         kernel.grouped_moe ? expert_count : 0, swizzle_label)
                   << std::setw(14) << std::fixed << std::setprecision(4) << avg_ms
                   << std::setw(16) << std::fixed << std::setprecision(2) << gflops << "\n";
       }
@@ -516,20 +544,23 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
         kernel_best_ms = avg_ms;
         kernel_best_gflops = gflops;
         kernel_best_split_k = split_k;
+        kernel_best_swizzle = swizzle;
+        kernel_best_swizzle_label = swizzle_label;
       }
     }
 
     if (tune_split_k) {
       if (kernel_best_split_k == 0) {
         std::cout << std::left << std::setw(52) << kernel.name << std::right
-                  << std::setw(10) << "-" << std::setw(14) << "skipped"
+                  << std::setw(22) << "-/-/-" << std::setw(14) << "skipped"
                   << std::setw(16) << last_rc << "\n";
         continue;
       }
 
       ++runnable;
       std::cout << std::left << std::setw(52) << kernel.name << std::right
-                << std::setw(10) << kernel_best_split_k
+            << std::setw(22) << schedule_label(
+              kernel_best_split_k, 0, kernel_best_swizzle_label)
                 << std::setw(14) << std::fixed << std::setprecision(4) << kernel_best_ms
                 << std::setw(16) << std::fixed << std::setprecision(2) << kernel_best_gflops << "\n";
     }
@@ -537,6 +568,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
     if (kernel_best_split_k != 0 && kernel_best_ms < best_ms) {
       best_ms = kernel_best_ms;
       best_split_k = kernel_best_split_k;
+      best_swizzle = kernel_best_swizzle;
       best_gflops = kernel_best_gflops;
       best_name = kernel.name;
       best_is_grouped_moe = kernel.grouped_moe;
@@ -552,6 +584,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
   std::cout << "Best kernel: " << best_name
             << (best_is_grouped_moe ? " experts=" : " split_k=")
             << (best_is_grouped_moe ? expert_count : best_split_k)
+            << (best_swizzle > 0 ? " swizzle=" + std::to_string(best_swizzle) : "")
             << " avg_ms=" << std::fixed << std::setprecision(4)
             << best_ms << " gflops=" << std::fixed << std::setprecision(2) << best_gflops << "\n";
   kernel_runner_destroy_streams(runner_streams, num_streams);
@@ -577,6 +610,7 @@ int main(int argc, char **argv) {
   std::string arch_arg;
   std::string strassen_level_arg;
   std::string kernel_regex_arg;
+  std::string b_presum = "interleaved";
 
   bool valid_args = true;
   valid_args = get_required_int_arg(argc, argv, "m", m) && valid_args;
@@ -591,6 +625,9 @@ int main(int argc, char **argv) {
   valid_args = get_required_string_arg(argc, argv, "dtype", dtype_arg) && valid_args;
   valid_args = get_required_string_arg(argc, argv, "gpu_arch", arch_arg) && valid_args;
   bool has_kernel_regex = parse_arg(argc, argv, "kernel_regex", kernel_regex_arg);
+  if (parse_arg(argc, argv, "b_presum", b_presum) || has_flag(argc, argv, "b_presum")) {
+    valid_args = get_required_string_arg(argc, argv, "b_presum", b_presum) && valid_args;
+  }
   bool disable_split_k = has_flag(argc, argv, "disable_split_k") ||
                          has_flag(argc, argv, "disable-split-k");
   std::string expert_count_arg;
@@ -641,6 +678,8 @@ int main(int argc, char **argv) {
     iterations <= 0 || warmup < 0 || sleep_seconds < 0 ||
       streams <= 0 || streams > max_streams || (dtype != "f32" && dtype != "f16" && dtype != "f64") ||
       (arch != "volta" && arch != "ampere" && arch != "hopper" && arch != "blackwell") ||
+      (b_presum != "interleaved" && b_presum != "kernel") ||
+      (b_presum == "kernel" && (arch != "hopper" || dtype != "f16" || has_expert_count)) ||
       (!all_strassen_levels && strassen_level != 0 && strassen_level != 1 && strassen_level != 2)) {
     usage(argv[0]);
     return 1;
@@ -650,6 +689,9 @@ int main(int argc, char **argv) {
   for (KernelEntry const &kernel : kKernels) {
     if (kernel.dtype == dtype && kernel.arch == arch &&
         (all_strassen_levels || kernel.strassen_level == strassen_level) &&
+        (!kernel.b_presum_kernel || b_presum == "kernel") &&
+        (b_presum != "kernel" || (!kernel.grouped_moe &&
+          (kernel.strassen_level == 0 || kernel.b_presum_kernel))) &&
         (!kernel.grouped_moe || has_expert_count) &&
         (!has_expert_count || expert_count == 1 || kernel.grouped_moe) &&
         (!has_kernel_regex || std::regex_search(kernel.name, kernel_regex))) {
@@ -659,7 +701,7 @@ int main(int argc, char **argv) {
 
   if (candidates.empty()) {
     std::cerr << "No kernels registered for dtype=" << dtype << " gpu_arch=" << arch
-              << " strassen_level=" << strassen_level_label;
+              << " strassen_level=" << strassen_level_label << " b_presum=" << b_presum;
     if (has_kernel_regex) {
       std::cerr << " kernel_regex=" << kernel_regex_arg;
     }

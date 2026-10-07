@@ -1332,7 +1332,7 @@ public:
   static constexpr uint NumMisWithGLLoads() {
     uint num_mis_with_gl_loads = 0;
 
-    #pragma unroll (numMs())
+        #pragma unroll (numMs() > 0 ? numMs() : 1)
     for (int fused_mi = 0; fused_mi < numMs(); fused_mi++) {
       #pragma unroll 4
       for (int c = 0; c < 4; c++) {
@@ -1370,7 +1370,7 @@ public:
   static constexpr uint MaxNumGlobalLoadsPerMi() {
     uint max_num_gl_loads = 0;
 
-    #pragma unroll (numMs())
+    #pragma unroll (numMs() > 0 ? numMs() : 1)
     for (int fused_mi = 0; fused_mi < numMs(); fused_mi++) {
       uint num_gl_loads = 0;
 

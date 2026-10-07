@@ -1,14 +1,18 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <thread>
 
 #include <cuda_runtime.h>
 
 #include "cutlass/cutlass.h"
 #include "cutlass/kernel_hardware_info.h"
 #include "cutlass/gemm/gemm.h"
+#include "cutlass/layout/strassen_layout.hpp"
 #include "cutlass/numeric_types.h"
 #include "cutlass/util/device_memory.h"
 #include "cutlass/util/packed_stride.hpp"
@@ -21,6 +25,32 @@ struct KernelRunnerBuffers {
 };
 
 constexpr int kKernelRunnerMaxStreams = 49;
+inline thread_local int kKernelRunnerLastSwizzle = 0;
+inline thread_local std::string kKernelRunnerLastSwizzleLabel;
+inline thread_local int kKernelRunnerSwizzleSleepSeconds = 0;
+
+inline void kernel_runner_reset_last_swizzle() {
+  kKernelRunnerLastSwizzle = 0;
+  kKernelRunnerLastSwizzleLabel.clear();
+}
+
+inline int kernel_runner_last_swizzle() {
+  return kKernelRunnerLastSwizzle;
+}
+
+inline std::string const &kernel_runner_last_swizzle_label() {
+  return kKernelRunnerLastSwizzleLabel;
+}
+
+inline void kernel_runner_set_swizzle_sleep_seconds(int sleep_seconds) {
+  kKernelRunnerSwizzleSleepSeconds = std::max(0, sleep_seconds);
+}
+
+inline void kernel_runner_sleep_before_swizzle_candidate(int candidate_index) {
+  if (candidate_index > 0 && kKernelRunnerSwizzleSleepSeconds > 0) {
+    std::this_thread::sleep_for(std::chrono::seconds(kKernelRunnerSwizzleSleepSeconds));
+  }
+}
 
 inline cudaError_t kernel_runner_create_streams(cudaStream_t *streams, int num_streams) {
   for (int i = 0; i < num_streams; ++i) {
@@ -43,6 +73,200 @@ inline void kernel_runner_destroy_streams(cudaStream_t *streams, int num_streams
 
 inline int kernel_runner_status_to_error(cutlass::Status status) {
   return status == cutlass::Status::kSuccess ? 0 : static_cast<int>(status);
+}
+
+template <typename Gemm, typename Arguments>
+int kernel_runner_tune_swizzle(Arguments &args, int warmup_iterations, int iterations,
+                               cudaStream_t *streams, int num_streams, float *avg_ms) {
+  kernel_runner_reset_last_swizzle();
+  constexpr int swizzles[] = {1, 2, 4};
+  constexpr int swizzle_count = sizeof(swizzles) / sizeof(swizzles[0]);
+  float runtimes[swizzle_count] = {};
+  int best_index = -1;
+  int last_error = kernel_runner_status_to_error(cutlass::Status::kErrorInvalidProblem);
+  cudaStream_t timing_stream = streams == nullptr || num_streams == 0 ? nullptr : streams[0];
+
+  for (int index = 0; index < swizzle_count; ++index) {
+    kernel_runner_sleep_before_swizzle_candidate(index);
+    args.scheduler.max_swizzle_size = swizzles[index];
+    cutlass::Status status = Gemm::can_implement(args);
+    if (status != cutlass::Status::kSuccess) {
+      last_error = kernel_runner_status_to_error(status);
+      continue;
+    }
+
+    cutlass::device_memory::allocation<unsigned char> workspace(Gemm::get_workspace_size(args));
+    Gemm gemm;
+    status = gemm.initialize(args, workspace.get(), timing_stream);
+    if (status != cutlass::Status::kSuccess) {
+      last_error = kernel_runner_status_to_error(status);
+      continue;
+    }
+
+    for (int iteration = 0; iteration < warmup_iterations; ++iteration) {
+      status = gemm.run(streams, num_streams);
+      if (status != cutlass::Status::kSuccess) {
+        last_error = kernel_runner_status_to_error(status);
+        break;
+      }
+    }
+    if (status != cutlass::Status::kSuccess) {
+      continue;
+    }
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+      return static_cast<int>(err);
+    }
+
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+    err = cudaEventCreate(&start);
+    if (err == cudaSuccess) err = cudaEventCreate(&stop);
+    if (err == cudaSuccess) err = cudaEventRecord(start, timing_stream);
+    if (err == cudaSuccess) {
+      for (int iteration = 0; iteration < iterations; ++iteration) {
+        status = gemm.run(streams, num_streams);
+        if (status != cutlass::Status::kSuccess) {
+          last_error = kernel_runner_status_to_error(status);
+          break;
+        }
+      }
+    }
+    if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
+      err = cudaEventRecord(stop, timing_stream);
+    }
+    if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
+      err = cudaEventSynchronize(stop);
+    }
+    if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
+      float elapsed_ms = 0.0f;
+      err = cudaEventElapsedTime(&elapsed_ms, start, stop);
+      runtimes[index] = elapsed_ms / float(iterations);
+    }
+    if (start != nullptr) cudaEventDestroy(start);
+    if (stop != nullptr) cudaEventDestroy(stop);
+    if (err != cudaSuccess) {
+      return static_cast<int>(err);
+    }
+    if (status != cutlass::Status::kSuccess) {
+      continue;
+    }
+    if (best_index < 0 || runtimes[index] < runtimes[best_index]) {
+      best_index = index;
+    }
+  }
+
+  if (best_index < 0) {
+    return last_error;
+  }
+  kKernelRunnerLastSwizzle = swizzles[best_index];
+  kKernelRunnerLastSwizzleLabel = std::to_string(swizzles[best_index]);
+  *avg_ms = runtimes[best_index];
+  return 0;
+}
+
+template <typename Gemm, typename Arguments>
+int kernel_runner_tune_swizzle_array(Arguments &args, int warmup_iterations, int iterations,
+                                     cudaStream_t *streams, int num_streams, float *avg_ms) {
+  kernel_runner_reset_last_swizzle();
+  constexpr int candidates[] = {1, 2, 4};
+  constexpr int candidate_count = sizeof(candidates) / sizeof(candidates[0]);
+  constexpr bool uniform_swizzles =
+    cute::is_same_v<typename Gemm::StrassenGemmKernel::SubmatrixLayoutA,
+            cutlass::layout::StrassenLayout> &&
+    cute::is_same_v<typename Gemm::StrassenGemmKernel::SubmatrixLayoutB,
+            cutlass::layout::StrassenLayout>;
+  float runtimes[candidate_count] = {};
+  int best_index = -1;
+  int last_error = kernel_runner_status_to_error(cutlass::Status::kErrorInvalidProblem);
+  cudaStream_t timing_stream = streams == nullptr || num_streams == 0 ? nullptr : streams[0];
+
+  for (int index = 0; index < candidate_count; ++index) {
+    kernel_runner_sleep_before_swizzle_candidate(index);
+    int child_swizzle = uniform_swizzles ? candidates[index] : std::max(1, candidates[index] / 2);
+    int swizzles[7] = {
+        candidates[index], candidates[index], child_swizzle, child_swizzle,
+        child_swizzle, child_swizzle, child_swizzle};
+    cutlass::Status status = Gemm::can_implement(args);
+    if (status != cutlass::Status::kSuccess) {
+      last_error = kernel_runner_status_to_error(status);
+      continue;
+    }
+
+    cutlass::device_memory::allocation<unsigned char> workspace(Gemm::get_workspace_size(args));
+    Gemm gemm;
+    status = gemm.initialize(args, swizzles, workspace.get());
+    if (status != cutlass::Status::kSuccess) {
+      last_error = kernel_runner_status_to_error(status);
+      continue;
+    }
+
+    for (int iteration = 0; iteration < warmup_iterations; ++iteration) {
+      status = gemm.run(streams, num_streams);
+      if (status != cutlass::Status::kSuccess) {
+        last_error = kernel_runner_status_to_error(status);
+        break;
+      }
+    }
+    if (status != cutlass::Status::kSuccess) {
+      continue;
+    }
+    cudaError_t err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+      return static_cast<int>(err);
+    }
+
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+    err = cudaEventCreate(&start);
+    if (err == cudaSuccess) err = cudaEventCreate(&stop);
+    if (err == cudaSuccess) err = cudaEventRecord(start, timing_stream);
+    if (err == cudaSuccess) {
+      for (int iteration = 0; iteration < iterations; ++iteration) {
+        status = gemm.run(streams, num_streams);
+        if (status != cutlass::Status::kSuccess) {
+          last_error = kernel_runner_status_to_error(status);
+          break;
+        }
+      }
+    }
+    if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
+      err = cudaEventRecord(stop, timing_stream);
+    }
+    if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
+      err = cudaEventSynchronize(stop);
+    }
+    if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
+      float elapsed_ms = 0.0f;
+      err = cudaEventElapsedTime(&elapsed_ms, start, stop);
+      runtimes[index] = elapsed_ms / float(iterations);
+    }
+    if (start != nullptr) cudaEventDestroy(start);
+    if (stop != nullptr) cudaEventDestroy(stop);
+    if (err != cudaSuccess) {
+      return static_cast<int>(err);
+    }
+    if (status != cutlass::Status::kSuccess) {
+      continue;
+    }
+    if (best_index < 0 || runtimes[index] < runtimes[best_index]) {
+      best_index = index;
+    }
+  }
+
+  if (best_index < 0) {
+    return last_error;
+  }
+  kKernelRunnerLastSwizzle = candidates[best_index];
+  int child_swizzle = uniform_swizzles ? candidates[best_index] :
+                                         std::max(1, candidates[best_index] / 2);
+  kKernelRunnerLastSwizzleLabel.clear();
+  for (int index = 0; index < 7; ++index) {
+    if (index > 0) kKernelRunnerLastSwizzleLabel += ',';
+    kKernelRunnerLastSwizzleLabel += std::to_string(index < 2 ? candidates[best_index] : child_swizzle);
+  }
+  *avg_ms = runtimes[best_index];
+  return 0;
 }
 
 template <typename Gemm>
@@ -346,101 +570,9 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
       hw_info);
 
   args.scheduler.raster_order = RasterOrderOptions::AlongN;
-
-  cutlass::Status status = Gemm::can_implement(args);
-  if (status != cutlass::Status::kSuccess) {
-    return kernel_runner_status_to_error(status);
-  }
-
-  size_t workspace_size = Gemm::get_workspace_size(args);
-  cutlass::device_memory::allocation<unsigned char> workspace(workspace_size);
-
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
-  cudaError_t err = cudaSuccess;
-
-  int swizzles[7] = {4, 4, 2, 2, 2, 2, 2};
-  Gemm gemm;
-  status = gemm.initialize(args, swizzles, workspace.get());
-  if (status != cutlass::Status::kSuccess) {
-    return kernel_runner_status_to_error(status);
-  }
-
-  for (int i = 0; i < warmup_iterations; ++i) {
-    status = gemm.run(streams, num_streams);
-    if (num_streams > 1) {
-      err = cudaDeviceSynchronize();
-      if (err != cudaSuccess) {
-        return static_cast<int>(err);
-      }
-    }
-    if (status != cutlass::Status::kSuccess) {
-      return kernel_runner_status_to_error(status);
-    }
-  }
-  err = cudaDeviceSynchronize();
-  if (err != cudaSuccess) {
-    return static_cast<int>(err);
-  }
-
-  cudaEvent_t start, stop;
-  err = cudaEventCreate(&start);
-  if (err != cudaSuccess) {
-    return static_cast<int>(err);
-  }
-  err = cudaEventCreate(&stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    return static_cast<int>(err);
-  }
-
-  err = cudaEventRecord(start);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    return static_cast<int>(err);
-  }
-
-  for (int i = 0; i < iterations; ++i) {
-    status = gemm.run(streams, num_streams);
-    if (num_streams > 1) {
-      err = cudaDeviceSynchronize();
-      if (err != cudaSuccess) {
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-        return static_cast<int>(err);
-      }
-    }
-    if (status != cutlass::Status::kSuccess) {
-      cudaEventDestroy(start);
-      cudaEventDestroy(stop);
-      return kernel_runner_status_to_error(status);
-    }
-  }
-
-  err = cudaEventRecord(stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    return static_cast<int>(err);
-  }
-  err = cudaEventSynchronize(stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    return static_cast<int>(err);
-  }
-  float elapsed_ms = 0.0f;
-  err = cudaEventElapsedTime(&elapsed_ms, start, stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    return static_cast<int>(err);
-  }
-  *avg_ms = elapsed_ms / float(iterations);
-
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
-  return 0;
+  return kernel_runner_tune_swizzle_array<Gemm>(
+      args, warmup_iterations, iterations, streams, num_streams, avg_ms);
 }
 
 template <typename Gemm>
@@ -526,61 +658,9 @@ int kernel_runner_run_moe_cutlass3(KernelRunnerBuffers buffers, int m, int n, in
        stride_d.get(), nullptr, batch_d.get()},
       hw_info);
   args.scheduler.raster_order = decltype(args.scheduler.raster_order)::AlongN;
-
-  cutlass::Status status = Gemm::can_implement(args);
-  if (status != cutlass::Status::kSuccess) {
-    return kernel_runner_status_to_error(status);
-  }
-
-  size_t workspace_size = Gemm::get_workspace_size(args);
-  cutlass::device_memory::allocation<unsigned char> workspace(workspace_size);
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
-  int swizzles[7] = {4, 4, 2, 2, 2, 2, 2};
-  Gemm gemm;
-  status = gemm.initialize(args, swizzles, workspace.get());
-  if (status != cutlass::Status::kSuccess) {
-    return kernel_runner_status_to_error(status);
-  }
-
-  for (int i = 0; i < warmup_iterations; ++i) {
-    status = gemm.run(streams, num_streams);
-    if (num_streams > 1) {
-      err = cudaDeviceSynchronize();
-      if (err != cudaSuccess) return static_cast<int>(err);
-    }
-    if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-  }
-  err = cudaDeviceSynchronize();
-  if (err != cudaSuccess) return static_cast<int>(err);
-
-  cudaEvent_t start, stop;
-  err = cudaEventCreate(&start);
-  if (err != cudaSuccess) return static_cast<int>(err);
-  err = cudaEventCreate(&stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    return static_cast<int>(err);
-  }
-  err = cudaEventRecord(start);
-  if (err == cudaSuccess) {
-    for (int i = 0; i < iterations; ++i) {
-      status = gemm.run(streams, num_streams);
-      if (num_streams > 1) err = cudaDeviceSynchronize();
-      if (err != cudaSuccess || status != cutlass::Status::kSuccess) break;
-    }
-  }
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) err = cudaEventRecord(stop);
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) err = cudaEventSynchronize(stop);
-  float elapsed_ms = 0.0f;
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
-    err = cudaEventElapsedTime(&elapsed_ms, start, stop);
-  }
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
-  if (err != cudaSuccess) return static_cast<int>(err);
-  if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-  *avg_ms = elapsed_ms / float(iterations);
-  return 0;
+  return kernel_runner_tune_swizzle_array<Gemm>(
+      args, warmup_iterations, iterations, streams, num_streams, avg_ms);
 }
 
 template <typename Gemm>
@@ -626,87 +706,9 @@ int kernel_runner_run_gemm_cutlass3(KernelRunnerBuffers buffers, int m, int n, i
       hw_info);
 
   args.scheduler.raster_order = RasterOrderOptions::AlongN;
-  args.scheduler.max_swizzle_size = 4;
-
-  cutlass::Status status = Gemm::can_implement(args);
-  if (status != cutlass::Status::kSuccess) {
-    return kernel_runner_status_to_error(status);
-  }
-
-  size_t workspace_size = Gemm::get_workspace_size(args);
-  cutlass::device_memory::allocation<unsigned char> workspace(workspace_size);
-
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
-  cudaError_t err = cudaSuccess;
-
-  Gemm gemm;
-  status = gemm.initialize(args, workspace.get(), streams[0]);
-  if (status != cutlass::Status::kSuccess) {
-    return kernel_runner_status_to_error(status);
-  }
-
-  for (int i = 0; i < warmup_iterations; ++i) {
-    status = gemm.run(streams, num_streams);
-    if (status != cutlass::Status::kSuccess) {
-      return kernel_runner_status_to_error(status);
-    }
-  }
-  err = cudaDeviceSynchronize();
-  if (err != cudaSuccess) {
-    return static_cast<int>(err);
-  }
-
-  cudaEvent_t start, stop;
-  err = cudaEventCreate(&start);
-  if (err != cudaSuccess) {
-    return static_cast<int>(err);
-  }
-  err = cudaEventCreate(&stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    return static_cast<int>(err);
-  }
-
-  err = cudaEventRecord(start);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    return static_cast<int>(err);
-  }
-
-  for (int i = 0; i < iterations; ++i) {
-    status = gemm.run(streams, num_streams);
-    if (status != cutlass::Status::kSuccess) {
-      cudaEventDestroy(start);
-      cudaEventDestroy(stop);
-      return kernel_runner_status_to_error(status);
-    }
-  }
-
-  err = cudaEventRecord(stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    return static_cast<int>(err);
-  }
-  err = cudaEventSynchronize(stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    return static_cast<int>(err);
-  }
-  float elapsed_ms = 0.0f;
-  err = cudaEventElapsedTime(&elapsed_ms, start, stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    return static_cast<int>(err);
-  }
-  *avg_ms = elapsed_ms / float(iterations);
-
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
-  return 0;
+  return kernel_runner_tune_swizzle<Gemm>(
+      args, warmup_iterations, iterations, streams, num_streams, avg_ms);
 }
 
 template <typename Gemm>
@@ -792,53 +794,9 @@ int kernel_runner_run_grouped_cutlass3(KernelRunnerBuffers buffers, int m, int n
       {{1.0f, 0.0f}, ptr_c.get(), stride_c.get(), ptr_d.get(), stride_d.get()},
       hw_info);
   args.scheduler.raster_order = decltype(args.scheduler.raster_order)::AlongN;
-
-  cutlass::Status status = Gemm::can_implement(args);
-  if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-  cutlass::device_memory::allocation<unsigned char> workspace(Gemm::get_workspace_size(args));
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
-  int swizzles[7] = {4, 4, 2, 2, 2, 2, 2};
-  Gemm gemm;
-  status = gemm.initialize(args, swizzles, workspace.get());
-  if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-
-  for (int i = 0; i < warmup_iterations; ++i) {
-    status = gemm.run(streams, num_streams);
-    if (num_streams > 1) err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) return static_cast<int>(err);
-    if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-  }
-  err = cudaDeviceSynchronize();
-  if (err != cudaSuccess) return static_cast<int>(err);
-
-  cudaEvent_t start, stop;
-  err = cudaEventCreate(&start);
-  if (err != cudaSuccess) return static_cast<int>(err);
-  err = cudaEventCreate(&stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    return static_cast<int>(err);
-  }
-  err = cudaEventRecord(start);
-  if (err == cudaSuccess) {
-    for (int i = 0; i < iterations; ++i) {
-      status = gemm.run(streams, num_streams);
-      if (num_streams > 1) err = cudaDeviceSynchronize();
-      if (err != cudaSuccess || status != cutlass::Status::kSuccess) break;
-    }
-  }
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) err = cudaEventRecord(stop);
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) err = cudaEventSynchronize(stop);
-  float elapsed_ms = 0.0f;
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
-    err = cudaEventElapsedTime(&elapsed_ms, start, stop);
-  }
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
-  if (err != cudaSuccess) return static_cast<int>(err);
-  if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-  *avg_ms = elapsed_ms / float(iterations);
-  return 0;
+  return kernel_runner_tune_swizzle_array<Gemm>(
+      args, warmup_iterations, iterations, streams, num_streams, avg_ms);
 }
 
 template <typename Gemm>
@@ -925,50 +883,9 @@ int kernel_runner_run_grouped_gemm_cutlass3(KernelRunnerBuffers buffers, int m, 
       {{1.0f, 0.0f}, ptr_c.get(), stride_c.get(), ptr_d.get(), stride_d.get()},
       hw_info);
   args.scheduler.raster_order = decltype(args.scheduler.raster_order)::AlongN;
-  args.scheduler.max_swizzle_size = 4;
-
-  cutlass::Status status = Gemm::can_implement(args);
-  if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-  cutlass::device_memory::allocation<unsigned char> workspace(Gemm::get_workspace_size(args));
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
-  Gemm gemm;
-  status = gemm.initialize(args, workspace.get(), streams[0]);
-  if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-
-  for (int i = 0; i < warmup_iterations; ++i) {
-    status = gemm.run(streams, num_streams);
-    if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-  }
-  err = cudaDeviceSynchronize();
-  if (err != cudaSuccess) return static_cast<int>(err);
-
-  cudaEvent_t start, stop;
-  err = cudaEventCreate(&start);
-  if (err != cudaSuccess) return static_cast<int>(err);
-  err = cudaEventCreate(&stop);
-  if (err != cudaSuccess) {
-    cudaEventDestroy(start);
-    return static_cast<int>(err);
-  }
-  err = cudaEventRecord(start);
-  if (err == cudaSuccess) {
-    for (int i = 0; i < iterations; ++i) {
-      status = gemm.run(streams, num_streams);
-      if (status != cutlass::Status::kSuccess) break;
-    }
-  }
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) err = cudaEventRecord(stop);
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) err = cudaEventSynchronize(stop);
-  float elapsed_ms = 0.0f;
-  if (err == cudaSuccess && status == cutlass::Status::kSuccess) {
-    err = cudaEventElapsedTime(&elapsed_ms, start, stop);
-  }
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
-  if (err != cudaSuccess) return static_cast<int>(err);
-  if (status != cutlass::Status::kSuccess) return kernel_runner_status_to_error(status);
-  *avg_ms = elapsed_ms / float(iterations);
-  return 0;
+  return kernel_runner_tune_swizzle<Gemm>(
+      args, warmup_iterations, iterations, streams, num_streams, avg_ms);
 }
 
 #define STRASSEN_RUNNER_EXPORT_CUTLASS2(function_name, gemm_type) \

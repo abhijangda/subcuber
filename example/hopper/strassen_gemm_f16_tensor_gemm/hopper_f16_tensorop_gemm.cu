@@ -103,15 +103,15 @@ using TensorOpElem = cutlass::bfloat16_t;
 // A matrix configuration
 using         ElementA    = TensorOpElem;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-// using         SubMatLayoutA = cutlass::layout::StrassenLayout;
-using         SubMatLayoutA = cutlass::layout::OriginalLayout;
+using         SubMatLayoutA = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = TensorOpElem;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
-// using         SubMatLayoutB = cutlass::layout::StrassenLayout;
-using         SubMatLayoutB = cutlass::layout::OriginalLayout;
+using         SubMatLayoutB = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
@@ -230,12 +230,12 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, Al
                                                                   AllPresumsM1To6>
                                             >;
 using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0, EpilogueScheduleM0, false, FusedMiGroup<7, 0>>,
-                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
-                                                                                                                          //  FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>, //TODO: Change this to true
+                                                                                                                           FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
+                                                      //  ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;

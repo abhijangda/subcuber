@@ -47,8 +47,13 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
   
   int block_idx = threadblock_tile_offset.m() + threadblock_tile_offset.n() * gridDim.x;
   uint thread_idx = threadIdx.x;
+#if defined(CUTLASS_API_v2)
   const int presum_multiplier_a = 1 << params.get_presum_log_tile_multiplier_a();
   const int presum_multiplier_b = 1 << params.get_presum_log_tile_multiplier_b();
+#elif defined(CUTLASS_API_v3)
+  const int presum_multiplier_a = 1 << GemmKernel0::Mma::get_presum_log_multiplier(K, N);
+  const int presum_multiplier_b = 1 << GemmKernel0::Mma::get_presum_log_multiplier(K, M);
+#endif
 
   auto a1_coord = IsStrassenLayout ? MatrixCoord(1*halfM, 0) : MatrixCoord(0, halfK);
   auto a2_coord = IsStrassenLayout ? MatrixCoord(2*halfM, 0) : MatrixCoord(halfM, 0);

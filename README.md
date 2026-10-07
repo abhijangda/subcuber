@@ -108,6 +108,25 @@ or `--sleep_seconds=1` for one second. When omitted, the delay is 5 seconds for 
 and 10 seconds for `f16`/`f64`. It does not apply between warmup or timed iterations,
 or after the final benchmark.
 
+For non-grouped Hopper FP16 GEMM, `--b_presum=kernel` selects the variants in
+`src/cuda/kernels/hopper/b_presum_kernel/`. These keep A presums interleaved,
+and compute B presums in a separate global kernel. Level-1 variants use Strassen
+layout for both A and B inputs. Input packing is performed before timing. The existing adapter
+caches global presums after its first two launches, so B-presum cost may fall
+within warmup rather than the timed iterations. The names replace `sw_interleaved_presum` with
+`sw_a_presum_interleaved_b_presum_kernel`, retaining their configuration suffixes.
+The default `--b_presum=interleaved` preserves the existing kernels and names.
+Non-grouped GEMM baselines remain available in either mode. This option is
+incompatible with `--experts` and `--groups`; MoE and grouped kernels are unchanged.
+
+At M=N=16384, K=8192, the 19 level-1 max-fusion variants pass full-output cuBLAS
+comparison using the existing FP16 test tolerances. Low-fusion variants are
+excluded from `--b_presum=kernel`. Level 2 offers `2x256_2x256_opt_no` and
+`4x256_4x256_opt_no` with the same schedule and current input-layout settings.
+The level-2 `4x256_4x256_opt_no` variant builds and runs at this size; numerical
+correctness has not been validated. Use `--strassen_level=1` for the variants
+validated against cuBLAS.
+
 Optional filtering:
 
 ```bash

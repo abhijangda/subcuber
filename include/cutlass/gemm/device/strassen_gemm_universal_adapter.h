@@ -196,7 +196,9 @@ template<typename StrassenGroups_, typename ScheduleStrassenGroups_,
           int AlignmentD = 128 / cutlass::sizeof_bits<ElementD_>::value>
 class StrassenGemmKernels {
 public:
-        using ElementD = ElementD_;
+  using ElementD = ElementD_;
+  using SubmatrixLayoutA = SubMatLayoutA;
+  using SubmatrixLayoutB = SubMatLayoutB;
   using StrassenGroups = StrassenGroups_;
   using ScheduleStrassenGroups = ScheduleStrassenGroups_;
   using PresumOpt = typename std::conditional<std::is_same<PresumOpt_, void>::value, cutlass::gemm::device::PresumOpt<>, PresumOpt_>::type;
@@ -281,6 +283,8 @@ class StrassenGemmUniversalAdapter<
 {
 public:
   using ScheduleStrassenGroups = typename StrassenGemmKernels::ScheduleStrassenGroups;
+  using SubmatrixLayoutA = typename StrassenGemmKernels::SubmatrixLayoutA;
+  using SubmatrixLayoutB = typename StrassenGemmKernels::SubmatrixLayoutB;
   using GemmKernelM0 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM0>;
   using GemmKernelM1 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM1>;
   using GemmKernelM2 = GetUnderlyingKernel_t<typename StrassenGemmKernels::GemmKernelM2>;

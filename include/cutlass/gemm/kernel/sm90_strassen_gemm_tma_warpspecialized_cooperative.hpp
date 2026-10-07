@@ -933,7 +933,7 @@ public:
         CollectiveEpilogue collective_epilogue(params.epilogue, epilogue_tensors);
 
         while (work_tile_info.is_valid()) {
-          #pragma unroll (StrassenMiGroup::numMs())
+          #pragma unroll (StrassenMiGroup::numMs() > 0 ? StrassenMiGroup::numMs() : 1)
           for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
             /**Only for ReuseMainloopEpilogueStorage **/
             auto epilogue_mainloop_state = mainloop_pipe_consumer_state;
