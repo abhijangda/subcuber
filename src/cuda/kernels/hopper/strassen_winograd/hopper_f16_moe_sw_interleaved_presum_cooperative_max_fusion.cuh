@@ -10,17 +10,22 @@ using MoeCooperativeScheduleStrassenGroups = ScheduleStrassenGroups<
     ParallelMiGroups<MoeCooperativeKernelSchedule, MoeCooperativeEpilogueSchedule, false, FusedMiGroup<7, 2>>,
     ParallelMiGroups<MoeCooperativeKernelSchedule, MoeCooperativeEpilogueSchedule, false, FusedMiGroup<7, 4>>>;
 
-template<int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
-using MoeCooperativeStrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<
-    StrassenGroups<StageCount>, MoeCooperativeScheduleStrassenGroups, MoeProblemShape,
+template <typename ClusterShape_, int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
+using MoeCooperativeStrassenGemmKernelsForCluster = cutlass::gemm::device::StrassenGemmKernels<
+    StrassenGroupsForCluster<ClusterShape_, StageCount>, MoeCooperativeScheduleStrassenGroups, MoeProblemShape,
     ArchTag, OperatorClass,
     ElementA, LayoutA *, cutlass::layout::OriginalLayout,
     ElementB, LayoutB *, cutlass::layout::OriginalLayout,
     ElementC, LayoutC *, cutlass::layout::OriginalLayout, ElementAccumulator,
-    ClusterShape, cute::Int<StageCount>, PresumTileShapeA, PresumTileShapeB,
+    ClusterShape_, cute::Int<StageCount>, PresumTileShapeA, PresumTileShapeB,
     cutlass::gemm::device::PresumOpt<0,0,0,0>,
     AlignmentA, AlignmentB, AlignmentC, ElementD>;
+template <int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
+using MoeCooperativeStrassenGemmKernels = MoeCooperativeStrassenGemmKernelsForCluster<ClusterShape, StageCount, PresumTileShapeA, PresumTileShapeB>;
 
-using HopperF16MoeInterleavedPresumCooperativeMaxFusion_2x256 =
+template <typename ClusterShape_>
+using HopperF16MoeInterleavedPresumCooperativeMaxFusion_2x256ForCluster =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<
-        MoeCooperativeStrassenGemmKernels<4, Shape<_2,_256>, Shape<_2,_256>>>;
+        MoeCooperativeStrassenGemmKernelsForCluster<ClusterShape_, 4, Shape<_2,_256>, Shape<_2,_256>>>;
+using HopperF16MoeInterleavedPresumCooperativeMaxFusion_2x256 = HopperF16MoeInterleavedPresumCooperativeMaxFusion_2x256ForCluster<ClusterShape>;
+using HopperF16MoeInterleavedPresumCooperativeMaxFusion_2x256_1x2 = HopperF16MoeInterleavedPresumCooperativeMaxFusion_2x256ForCluster<Shape<_1,_2,_1>>;

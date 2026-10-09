@@ -11,7 +11,8 @@
 
 using namespace cute;
 
-class HopperF16GroupedCutlass128x256Cooperative {
+template <typename ClusterShape_>
+class HopperF16GroupedCutlass128x256CooperativeT {
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 public:
   using ProblemShape = cutlass::gemm::GroupProblemShape<Shape<int,int,int>>;
@@ -27,7 +28,7 @@ public:
   static constexpr int AlignmentC = 128 / cutlass::sizeof_bits<ElementD>::value;
   using ElementAccumulator = float;
   using TileShape = Shape<_128,_256,_64>;
-  using ClusterShape = Shape<_2,_1,_1>;
+  using ClusterShape = ClusterShape_;
   using StageCountType = _4;
   using KernelSchedule = cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperative;
   using EpilogueSchedule = cutlass::epilogue::PtrArrayTmaWarpSpecializedCooperative;
@@ -56,3 +57,5 @@ private:
   CutlassGemm gemm_;
 #endif
 };
+using HopperF16GroupedCutlass128x256Cooperative = HopperF16GroupedCutlass128x256CooperativeT<Shape<_2,_1,_1>>;
+using HopperF16GroupedCutlass128x256Cooperative_1x2 = HopperF16GroupedCutlass128x256CooperativeT<Shape<_1,_2,_1>>;

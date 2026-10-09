@@ -465,6 +465,20 @@ public:
           const int presum_b_log_tile_multiplier = PresumOpt::FixedPresumTileMultilplierLogB != UINT32_MAX ?
                                                       PresumOpt::FixedPresumTileMultilplierLogB :
                                                       GemmKernelM0::Mma::get_presum_log_multiplier(k, m);
+          if constexpr (requires { GemmKernelM0::Mma::get_presum_log_divider(k, n); }) {
+            const int presum_a_log_tile_divider = PresumOpt::FixedPresumTileDividerLogA != UINT32_MAX ?
+                                                     PresumOpt::FixedPresumTileDividerLogA :
+                                                     GemmKernelM0::Mma::get_presum_log_divider(k, n);
+            const int presum_b_log_tile_divider = PresumOpt::FixedPresumTileDividerLogB != UINT32_MAX ?
+                                                     PresumOpt::FixedPresumTileDividerLogB :
+                                                     GemmKernelM0::Mma::get_presum_log_divider(k, m);
+            const int64_t presum_a_coverage = (int64_t(n) << presum_a_log_tile_multiplier) >> presum_a_log_tile_divider;
+            const int64_t presum_b_coverage = (int64_t(m) << presum_b_log_tile_multiplier) >> presum_b_log_tile_divider;
+            if ((has_A_presums && presum_a_coverage < k) ||
+                (has_B_presums && presum_b_coverage < k)) {
+              return Status::kErrorInvalidProblem;
+            }
+          }
           const int total_presum_iterations = std::max(GemmKernelM0::Mma::kPresumComputeIterationsA*has_A_presums*(1<<presum_a_log_tile_multiplier),
                                                        GemmKernelM0::Mma::kPresumComputeIterationsB*has_B_presums*(1<<presum_b_log_tile_multiplier));
           int required_k = total_presum_iterations * size<2>(typename GemmKernelM0::Mma::TileShape{});

@@ -6,9 +6,11 @@
 #include <cstdlib>
 #include <string>
 #include <thread>
+#include <type_traits>
 
 #include <cuda_runtime.h>
 
+#include "cutlass/arch/arch.h"
 #include "cutlass/cutlass.h"
 #include "cutlass/kernel_hardware_info.h"
 #include "cutlass/gemm/gemm.h"
@@ -542,6 +544,18 @@ int kernel_runner_run_gemm_cutlass2(KernelRunnerBuffers buffers, int m, int n, i
   return 0;
 }
 
+template <typename Kernel>
+constexpr auto kernel_runner_raster_order() {
+  using RasterOrderOptions = typename Kernel::TileScheduler::RasterOrderOptions;
+  if constexpr (std::is_same_v<typename Kernel::ArchTag, cutlass::arch::Sm90> &&
+                cute::size<0>(typename Kernel::ClusterShape{}) == 1 &&
+                cute::size<1>(typename Kernel::ClusterShape{}) == 2) {
+    return RasterOrderOptions::AlongM;
+  } else {
+    return RasterOrderOptions::AlongN;
+  }
+}
+
 template <typename Gemm>
 int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
                                int warmup_iterations, int iterations,
@@ -590,7 +604,7 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
         reinterpret_cast<ElementD *>(buffers.d), stride_d},
       hw_info);
 
-  args.scheduler.raster_order = RasterOrderOptions::AlongN;
+  args.scheduler.raster_order = kernel_runner_raster_order<Kernel>();
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
   return kernel_runner_tune_swizzle_array<Gemm>(
       args, warmup_iterations, iterations, streams, num_streams, avg_ms);
@@ -678,7 +692,7 @@ int kernel_runner_run_moe_cutlass3(KernelRunnerBuffers buffers, int m, int n, in
       {{1.0f, 0.0f}, nullptr, nullptr, reinterpret_cast<ElementD *>(buffers.d),
        stride_d.get(), nullptr, batch_d.get()},
       hw_info);
-  args.scheduler.raster_order = decltype(args.scheduler.raster_order)::AlongN;
+  args.scheduler.raster_order = kernel_runner_raster_order<Kernel>();
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
   return kernel_runner_tune_swizzle_array<Gemm>(
       args, warmup_iterations, iterations, streams, num_streams, avg_ms);
@@ -726,7 +740,7 @@ int kernel_runner_run_gemm_cutlass3(KernelRunnerBuffers buffers, int m, int n, i
        reinterpret_cast<ElementD *>(buffers.d), stride_d},
       hw_info);
 
-  args.scheduler.raster_order = RasterOrderOptions::AlongN;
+  args.scheduler.raster_order = kernel_runner_raster_order<Kernel>();
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
   return kernel_runner_tune_swizzle<Gemm>(
       args, warmup_iterations, iterations, streams, num_streams, avg_ms);
@@ -814,7 +828,7 @@ int kernel_runner_run_grouped_cutlass3(KernelRunnerBuffers buffers, int m, int n
       {ptr_a.get(), stride_a.get(), ptr_b.get(), stride_b.get()},
       {{1.0f, 0.0f}, ptr_c.get(), stride_c.get(), ptr_d.get(), stride_d.get()},
       hw_info);
-  args.scheduler.raster_order = decltype(args.scheduler.raster_order)::AlongN;
+  args.scheduler.raster_order = kernel_runner_raster_order<Kernel>();
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
   return kernel_runner_tune_swizzle_array<Gemm>(
       args, warmup_iterations, iterations, streams, num_streams, avg_ms);
@@ -903,7 +917,7 @@ int kernel_runner_run_grouped_gemm_cutlass3(KernelRunnerBuffers buffers, int m, 
       {ptr_a.get(), stride_a.get(), ptr_b.get(), stride_b.get()},
       {{1.0f, 0.0f}, ptr_c.get(), stride_c.get(), ptr_d.get(), stride_d.get()},
       hw_info);
-  args.scheduler.raster_order = decltype(args.scheduler.raster_order)::AlongN;
+  args.scheduler.raster_order = kernel_runner_raster_order<Kernel>();
   num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
   return kernel_runner_tune_swizzle<Gemm>(
       args, warmup_iterations, iterations, streams, num_streams, avg_ms);

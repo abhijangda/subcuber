@@ -26,7 +26,8 @@ using namespace cute;
 
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 
-class HopperF16Cutlass128x128Pingpong {
+template <typename ClusterShape_>
+class HopperF16Cutlass128x128PingpongT {
 public:
   /////////////////////////////////////////////////////////////////////////////////////////////////
   /// GEMM kernel configurations
@@ -54,7 +55,7 @@ public:
   using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
 
   using TileShape           = Shape<_128,_128,_64>;                           // Threadblock-level tile size
-  using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
+  using ClusterShape        = ClusterShape_;
   using StageCountType = _6 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
   using KernelSchedule =     cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
   using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized;
@@ -128,5 +129,9 @@ public:
 private:
   CutlassGemm gemm_;
 
-  #endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 };
+
+using HopperF16Cutlass128x128Pingpong = HopperF16Cutlass128x128PingpongT<Shape<_2,_1,_1>>;
+using HopperF16Cutlass128x128Pingpong_1x2 = HopperF16Cutlass128x128PingpongT<Shape<_1,_2,_1>>;
+
+#endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)

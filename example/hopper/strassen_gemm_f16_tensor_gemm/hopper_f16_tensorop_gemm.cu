@@ -170,7 +170,7 @@ using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
 using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecializedCooperative;
 #endif
 
-using PresumOpts = cutlass::gemm::device::PresumOpt<0,0,0,0>;
+using PresumOpts = cutlass::gemm::device::PresumOpt<>;//0,0,0,0>;
 //StageCount = 6 is a little slower than this with swizzle = 8.
 //TODO: Stages 5 produces wrong results for C2
 
@@ -178,13 +178,13 @@ using AllPresumsKernel = AllPresums<>;
 // using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
 //                PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
 using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                   PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+                                   PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 0 //TMA Reduce
+#if 1 //TMA Reduce
 #if defined(COOPERATIVE)
   static_assert(StageCountTypeM4M5 == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
 #endif
@@ -809,9 +809,9 @@ bool verify(const Options &options) {
       }
     }
     // if (r > 0 || c > 4112) 
-    // if (!passed) break;
+    if (!passed) break;
   }
-  // if (!passed) break;
+  if (!passed) break;
   }
 
   return passed;

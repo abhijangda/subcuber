@@ -23,20 +23,25 @@ using MoeCooperativePingpongTmaReduceSchedule = ScheduleStrassenGroups<
                      MoePingpongTmaReduceEpilogueSchedule,
                      false, FusedMiGroup<7, 4>>>;
 
-using MoeCooperativePingpongTmaReduceStrassenKernels =
+template <typename ClusterShape_>
+using MoeCooperativePingpongTmaReduceStrassenKernelsForCluster =
     cutlass::gemm::device::StrassenGemmKernels<
-        CooperativePingpongStrassenGroupsTmaReduce<4>,
+        CooperativePingpongStrassenGroupsTmaReduceForCluster<ClusterShape_, 4>,
         MoeCooperativePingpongTmaReduceSchedule,
         MoeCooperativePingpongTmaReduceProblemShape,
         ArchTag, OperatorClass,
         ElementA, LayoutA *, cutlass::layout::OriginalLayout,
         ElementB, LayoutB *, cutlass::layout::OriginalLayout,
         ElementC, LayoutC *, cutlass::layout::OriginalLayout,
-        ElementAccumulator, ClusterShape, cute::Int<4>,
+        ElementAccumulator, ClusterShape_, cute::Int<4>,
         Shape<_2,_256>, Shape<_2,_256>,
         cutlass::gemm::device::PresumOpt<0,0,0,0>,
         AlignmentA, AlignmentB, AlignmentC, ElementD>;
+using MoeCooperativePingpongTmaReduceStrassenKernels = MoeCooperativePingpongTmaReduceStrassenKernelsForCluster<ClusterShape>;
 
-using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusionTmaReduce_2x256 =
+template <typename ClusterShape_>
+using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusionTmaReduce_2x256ForCluster =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<
-        MoeCooperativePingpongTmaReduceStrassenKernels>;
+        MoeCooperativePingpongTmaReduceStrassenKernelsForCluster<ClusterShape_>>;
+using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusionTmaReduce_2x256 = HopperF16MoeInterleavedPresumCooperativePingpongMaxFusionTmaReduce_2x256ForCluster<ClusterShape>;
+using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusionTmaReduce_2x256_1x2 = HopperF16MoeInterleavedPresumCooperativePingpongMaxFusionTmaReduce_2x256ForCluster<Shape<_1,_2,_1>>;

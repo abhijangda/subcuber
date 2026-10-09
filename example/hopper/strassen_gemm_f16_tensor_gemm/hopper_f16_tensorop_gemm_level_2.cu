@@ -153,8 +153,8 @@ const uint StageCountTypeM5_M0 = 5;
 const uint StageCountTypeM5_M4M5 = 5;
 #endif
 
-using PresumTileShapeA    = Shape<_2, _128>;
-using PresumTileShapeB    = Shape<_2, _128>;
+using PresumTileShapeA    = Shape<_4, _128>;
+using PresumTileShapeB    = Shape<_4, _128>;
 using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueScheduleM0 = cutlass::epilogue::TmaWarpSpecialized;
 using KernelScheduleM2To6 = KernelScheduleM0;

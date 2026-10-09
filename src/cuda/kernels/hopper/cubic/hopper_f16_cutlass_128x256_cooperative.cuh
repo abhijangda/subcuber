@@ -26,7 +26,8 @@
 
 using namespace cute;
 
-class HopperF16Cutlass128x256Cooperative {
+template <typename ClusterShape_>
+class HopperF16Cutlass128x256CooperativeT {
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 public:
 
@@ -56,7 +57,7 @@ using ArchTag             = cutlass::arch::Sm90;                            // T
 using OperatorClass       = cutlass::arch::OpClassTensorOp;                 // Operator class tag
 
 using TileShape           = Shape<_128,_256,_64>;                           // Threadblock-level tile size
-using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
+using ClusterShape = ClusterShape_;                                // Shape of the threadblocks in a cluster
 using StageCountType = _4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 using KernelSchedule =     cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecializedCooperative;
@@ -133,3 +134,6 @@ CutlassGemm gemm_;
 
 #endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 };
+
+using HopperF16Cutlass128x256Cooperative = HopperF16Cutlass128x256CooperativeT<Shape<_2,_1,_1>>;
+using HopperF16Cutlass128x256Cooperative_1x2 = HopperF16Cutlass128x256CooperativeT<Shape<_1,_2,_1>>;
