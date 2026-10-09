@@ -48,9 +48,9 @@ using ScheduleStrassenGroupsTmaReduce = ScheduleStrassenGroups<ParallelMiGroups<
                                                                /*ParallelMiGroups<KernelSchedule, EpilogueSchedule, false,*/ FusedMiGroup<7, 4>>
                                                               >;
 
-template <typename ClusterShape_, int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
+template <typename ClusterShape_, int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 using StrassenGemmKernelsTmaReduceForCluster = cutlass::gemm::device::StrassenGemmKernels<StrassenGroupsTmaReduceForCluster<ClusterShape_, StageCountTypeM0>,
-                                                                       ScheduleStrassenGroupsTmaReduce,
+                                                                       Schedule,
                                                                        ProblemShape,
                                                                        ArchTag, OperatorClass,
                                                                        ElementA, LayoutA, cutlass::layout::StrassenLayout,
@@ -65,15 +65,15 @@ using StrassenGemmKernelsTmaReduceForCluster = cutlass::gemm::device::StrassenGe
 template <int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using StrassenGemmKernelsTmaReduce = StrassenGemmKernelsTmaReduceForCluster<ClusterShape, StageCountTypeM0, PresumTileShapeA, PresumTileShapeB, PresumOpts>;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoKernelForCluster = StrassenGemmUniversalAdapter<
-                                                                           StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 6, Shape<_2,_128>, Shape<_2, _128>>>;
+                                                                           StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 6, Shape<_2,_128>, Shape<_2, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoKernelForCluster<ClusterShape>;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 class HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoT {
 public:
-  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoKernelForCluster<ClusterShape_>;
+  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoKernelForCluster<ClusterShape_, Schedule>;
   using GemmKernel = typename StrassenGemmKernel::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
@@ -99,18 +99,20 @@ private:
 };
 
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoT<ClusterShape>;
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoT<ClusterShape, ScheduleStrassenGroupsPar>;
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoT<Shape<_1,_2,_1>>;
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_OptNoT<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000KernelForCluster = StrassenGemmUniversalAdapter<
                                                                            StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 6, Shape<_2,_128>, Shape<_2, _128>,
-                                                                                                        cutlass::gemm::device::PresumOpt<0,0,0,0>>>;
+                                                                                                        cutlass::gemm::device::PresumOpt<0,0,0,0>, Schedule>>;
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000Kernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000KernelForCluster<ClusterShape>;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 class HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000T {
 public:
-  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000KernelForCluster<ClusterShape_>;
+  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000KernelForCluster<ClusterShape_, Schedule>;
   using GemmKernel = typename StrassenGemmKernel::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
@@ -136,17 +138,19 @@ private:
 };
 
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000T<ClusterShape>;
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000T<ClusterShape, ScheduleStrassenGroupsPar>;
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000T<Shape<_1,_2,_1>>;
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_2x128_2x128_Opt_0000T<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoKernelForCluster = StrassenGemmUniversalAdapter<
-                                                                           StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 6, Shape<_4,_128>, Shape<_4, _128>>>;
+                                                                           StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 6, Shape<_4,_128>, Shape<_4, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoKernelForCluster<ClusterShape>;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 class HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoT {
 public:
-  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoKernelForCluster<ClusterShape_>;
+  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoKernelForCluster<ClusterShape_, Schedule>;
   using GemmKernel = typename StrassenGemmKernel::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
@@ -172,17 +176,19 @@ private:
 };
 
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoT<ClusterShape>;
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoT<ClusterShape, ScheduleStrassenGroupsPar>;
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoT<Shape<_1,_2,_1>>;
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_4x128_4x128_OptNoT<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoKernelForCluster = StrassenGemmUniversalAdapter<
-                                                                           StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 5, Shape<_8,_128>, Shape<_8, _128>>>;
+                                                                           StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 5, Shape<_8,_128>, Shape<_8, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoKernelForCluster<ClusterShape>;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 class HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoT {
 public:
-  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoKernelForCluster<ClusterShape_>;
+  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoKernelForCluster<ClusterShape_, Schedule>;
   using GemmKernel = typename StrassenGemmKernel::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
@@ -208,4 +214,6 @@ private:
 };
 
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoT<ClusterShape>;
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoT<ClusterShape, ScheduleStrassenGroupsPar>;
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoT<Shape<_1,_2,_1>>;
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusionTmaReduce_8x128_8x128_OptNoT<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;

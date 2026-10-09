@@ -42,9 +42,9 @@ using ScheduleStrassenGroupsTmaReduce = ScheduleStrassenGroups<ParallelMiGroups<
                                                                ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 2>>,
                                                                ParallelMiGroups<KernelSchedule, EpilogueSchedule, false, FusedMiGroup<7, 4>>>;
 
-template <typename ClusterShape_, int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
+template <typename ClusterShape_, int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>, typename Schedule = ScheduleStrassenGroupsTmaReduce>
 using StrassenGemmKernelsTmaReduceForCluster = cutlass::gemm::device::StrassenGemmKernels<StrassenGroupsTmaReduceForCluster<ClusterShape_, StageCountTypeM0>,
-                                                                       ScheduleStrassenGroupsTmaReduce,
+                                                                       Schedule,
                                                                        ProblemShape,
                                                                        ArchTag, OperatorClass,
                                                                        ElementA, LayoutA, cutlass::layout::OriginalLayout,
@@ -59,19 +59,27 @@ using StrassenGemmKernelsTmaReduceForCluster = cutlass::gemm::device::StrassenGe
 template <int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using StrassenGemmKernelsTmaReduce = StrassenGemmKernelsTmaReduceForCluster<ClusterShape, StageCountTypeM0, PresumTileShapeA, PresumTileShapeB, PresumOpts>;
 
-template <typename ClusterShape_>
-using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNoForCluster = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 4, Shape<_2,_256>, Shape<_2,_256>>>>;
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNoForCluster = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 4, Shape<_2,_256>, Shape<_2,_256>, cutlass::gemm::device::PresumOpt<>, Schedule>>>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNoForCluster<ClusterShape>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNo_Par = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNoForCluster<ClusterShape, ScheduleStrassenGroupsPar>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNo_1x2 = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNoForCluster<Shape<_1,_2,_1>>;
-template <typename ClusterShape_>
-using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000ForCluster = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 4, Shape<_2,_256>, Shape<_2,_256>, cutlass::gemm::device::PresumOpt<0,0,0,0>>>>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNo_1x2_Par = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_OptNoForCluster<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000ForCluster = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 4, Shape<_2,_256>, Shape<_2,_256>, cutlass::gemm::device::PresumOpt<0,0,0,0>, Schedule>>>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000 = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000ForCluster<ClusterShape>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000_Par = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000ForCluster<ClusterShape, ScheduleStrassenGroupsPar>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000_1x2 = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000ForCluster<Shape<_1,_2,_1>>;
-template <typename ClusterShape_>
-using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNoForCluster = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 4, Shape<_4,_256>, Shape<_4,_256>>>>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000_1x2_Par = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_2x256_2x256_Opt_0000ForCluster<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNoForCluster = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 4, Shape<_4,_256>, Shape<_4,_256>, cutlass::gemm::device::PresumOpt<>, Schedule>>>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNoForCluster<ClusterShape>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNo_Par = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNoForCluster<ClusterShape, ScheduleStrassenGroupsPar>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNo_1x2 = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNoForCluster<Shape<_1,_2,_1>>;
-template <typename ClusterShape_>
-using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNoForCluster = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 4, Shape<_8,_256>, Shape<_8,_256>>>>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNo_1x2_Par = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_4x256_4x256_OptNoForCluster<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
+template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroupsTmaReduce>
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNoForCluster = HopperF16InterleavedPresumCooperativeMaxFusionBase<StrassenGemmUniversalAdapter<StrassenGemmKernelsTmaReduceForCluster<ClusterShape_, 4, Shape<_8,_256>, Shape<_8,_256>, cutlass::gemm::device::PresumOpt<>, Schedule>>>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNo = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNoForCluster<ClusterShape>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNo_Par = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNoForCluster<ClusterShape, ScheduleStrassenGroupsPar>;
 using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNo_1x2 = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNoForCluster<Shape<_1,_2,_1>>;
+using HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNo_1x2_Par = HopperF16InterleavedPresumCooperativeMaxFusionTmaReduce_8x256_8x256_OptNoForCluster<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;

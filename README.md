@@ -137,6 +137,16 @@ Optional filtering:
 	--kernel_regex='presum'
 ```
 
+Non-grouped Hopper fp16 level-1 cooperative and pingpong Strassen kernel names
+end in `_seq` or `_par`, including the `--b_presum=kernel` variants and both
+TMA-reduce and non-TMA-reduce variants. `_seq` preserves each kernel's existing
+schedule; `_par` places `FusedMiGroup<7, 0>`, `FusedMiGroup<7, 2>`, and
+`FusedMiGroup<7, 4>` in one `ParallelMiGroups`. Use `--kernel_regex='_par$'`
+to select the new schedule or `--kernel_regex='_seq$'` for the existing one.
+Level-2, grouped MoE, and cooperative-pingpong kernel names are unchanged.
+Build the runner-entry reference tests with
+`make -C tests test_hopper_f16_tensorop_strassen_winograd_schedules`.
+
 The Hopper fp16 level-2 cooperative-pingpong kernel uses the example's
 `L2_SCHED_TMA_REDUCE_ADD` schedule, with 2x256 A/B presum tiles and original
 row-major input layouts:
@@ -158,6 +168,15 @@ output. Run its full-output reference test separately:
 make -C tests test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce
 timeout 30s ./tests/test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce
 ```
+
+The all-cooperative level-2 TMA-reduce variants use 128x256x64 GEMM tiles with
+four stages and either 2x256 or 4x256 A/B presum tile parameters. They match
+the level-2 example's interleaved A presums and global B-presum kernels.
+For M=N=16384, K=8192, use
+`--kernel_regex='level_2_cooperative_max_fusion_tma_reduce_4x256_4x256_opt_no$'`:
+the 4x256 variant passes the reference test, while 2x256 is rejected by
+`can_implement` at this shape. Their reference-test build target is
+`make -C tests test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce`.
 
 The fp16 MoE grouped GEMM treats `m` as the number of routed token rows per
 expert, `k` as the input hidden size, and `n` as the output hidden size. Each

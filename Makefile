@@ -118,6 +118,7 @@ HOPPER_V3_SRCS := \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce.cu
 
 HOPPER_B_PRESUM_KERNEL_SRCS := $(patsubst $(CUDA_SRC_DIR)/%,%,$(wildcard $(CUDA_SRC_DIR)/kernels/hopper/b_presum_kernel/*.cu))
@@ -207,6 +208,7 @@ $(NO_CUDA_DECL_BUILD_DIR)/%.o: $(CUDA_SRC_DIR)/%.cpp $(CUDA_SRC_DIR)/kernel_runn
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXX_FLAGS) -DSTRASSEN_DISABLE_CUDA_DECLARATIONS $(CXX_INCLUDES) -MMD -MP -c $< -o $@
 
+$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce.o \
 $(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce.o: PRESUM_LEVEL_2_SPLIT_COMPILE = 1
 
 $(BUILD_DIR)/kernels/hopper/b_presum_kernel/hopper_f16_sw_a_presum_interleaved_b_presum_kernel_level_2_cooperative_pingpong_max_fusion_tma_reduce.o: SPLIT_COMPILE = 1

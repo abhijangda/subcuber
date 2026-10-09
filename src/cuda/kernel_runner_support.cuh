@@ -114,13 +114,13 @@ int kernel_runner_tune_swizzle(Arguments &args, int warmup_iterations, int itera
   cudaStream_t timing_stream = streams == nullptr || num_streams == 0 ? nullptr : streams[0];
 
   for (int index = 0; index < swizzle_count; ++index) {
-    kernel_runner_sleep_before_swizzle_candidate(index);
     args.scheduler.max_swizzle_size = swizzles[index];
     cutlass::Status status = Gemm::can_implement(args);
     if (status != cutlass::Status::kSuccess) {
       last_error = kernel_runner_status_to_error(status);
       continue;
     }
+    kernel_runner_sleep_before_swizzle_candidate(index);
 
     cutlass::device_memory::allocation<unsigned char> workspace(Gemm::get_workspace_size(args));
     Gemm gemm;
@@ -205,7 +205,6 @@ int kernel_runner_tune_swizzle_array(Arguments &args, int warmup_iterations, int
   cudaStream_t timing_stream = streams == nullptr || num_streams == 0 ? nullptr : streams[0];
 
   for (int index = 0; index < candidate_count; ++index) {
-    kernel_runner_sleep_before_swizzle_candidate(index);
     int child_swizzle = uniform_swizzles ? candidates[index] : std::max(1, candidates[index] / 2);
     int swizzles[7] = {
         candidates[index], candidates[index], child_swizzle, child_swizzle,
@@ -215,6 +214,7 @@ int kernel_runner_tune_swizzle_array(Arguments &args, int warmup_iterations, int
       last_error = kernel_runner_status_to_error(status);
       continue;
     }
+    kernel_runner_sleep_before_swizzle_candidate(index);
 
     cutlass::device_memory::allocation<unsigned char> workspace(Gemm::get_workspace_size(args));
     Gemm gemm;
