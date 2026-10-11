@@ -47,6 +47,7 @@ DECLARE_KERNEL_RUN_FN(run_cublas_grouped_moe_f16);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f32);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f16);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_bf16);
+DECLARE_KERNEL_RUN_FN(run_cublaslt_fp8_blockwise_128x128);
 DECLARE_KERNEL_RUN_FN(run_cublaslt_f64);
 
 #if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
@@ -253,6 +254,7 @@ static const KernelEntry kKernels[] = {
   {"cublaslt_f32", "hopper", "f32", 0, run_cublaslt_f32},
   {"cublaslt_f16", "hopper", "f16", 0, run_cublaslt_f16},
   {"cublaslt_bf16", "hopper", "bf16", 0, run_cublaslt_bf16},
+  {"cublaslt_fp8_blockwise_128x128", "hopper", "fp8", 0, run_cublaslt_fp8_blockwise_128x128},
   {"cublaslt_f64", "hopper", "f64", 0, run_cublaslt_f64},
 #endif
 #ifdef STRASSEN_ENABLE_BLACKWELL
@@ -451,6 +453,7 @@ static std::string normalize_dtype(std::string dtype) {
   if (dtype == "float" || dtype == "fp32" || dtype == "s") return "f32";
   if (dtype == "half" || dtype == "fp16" || dtype == "h") return "f16";
   if (dtype == "bfloat16" || dtype == "bfloat" || dtype == "bf16") return "bf16";
+  if (dtype == "fp8" || dtype == "e4m3" || dtype == "fp8_e4m3") return "fp8";
   if (dtype == "double" || dtype == "fp64" || dtype == "d") return "f64";
   return dtype;
 }
@@ -500,7 +503,7 @@ static bool has_flag(int argc, char **argv, const char *name) {
 }
 
 static void usage(char const *program) {
-  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|bf16|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX] [--disable_split_k] [--sleep_seconds=N] [--b_presum=interleaved|kernel]\n";
+  std::cerr << "Usage: " << program << " --m=<M> --n=<N> --k=<K> --dtype=f32|f16|bf16|fp8|f64 --gpu_arch=volta|ampere|hopper|blackwell --strassen_level=0|1|2|all --iterations=N --warmup=N --streams=N [--experts=N] [--kernel_regex=REGEX] [--disable_split_k] [--sleep_seconds=N] [--b_presum=interleaved|kernel]\n";
   std::cerr << "  --sleep_seconds=N: delay between benchmarks in seconds (default: 5 for f32, 10 for f16/f64; 0 disables).\n";
   std::cerr << "  --b_presum=kernel: select non-grouped Hopper f16 global B-presum variants with Strassen-layout A/B inputs; incompatible with --experts/--groups (default: interleaved).\n";
 }
@@ -529,7 +532,10 @@ static std::string schedule_label(int split_k, int group_count,
          (swizzle.empty() ? "-" : swizzle);
 }
 
-template <typename Element>
+template <typename InputElement, typename OutputElement = InputElement,
+          typename LayoutA = cutlass::layout::RowMajor,
+          typename LayoutB = cutlass::layout::RowMajor,
+          typename LayoutD = cutlass::layout::RowMajor>
 int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int k,
                   std::string const &dtype, std::string const &arch,
                   std::string const &strassen_level_label,
@@ -544,13 +550,25 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
 
   int input_rows = has_grouped_moe ? m * expert_count : m;
   cutlass::gemm::GemmCoord problem_size(m, n, k);
-  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_a({input_rows, k});
-  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_b(problem_size.kn());
-  cutlass::HostTensor<Element, cutlass::layout::RowMajor> tensor_d({input_rows, n});
+  cutlass::HostTensor<InputElement, LayoutA> tensor_a({input_rows, k});
+  cutlass::HostTensor<InputElement, LayoutB> tensor_b(problem_size.kn());
+  cutlass::HostTensor<OutputElement, LayoutD> tensor_d({input_rows, n});
 
-  int range_end = std::is_same<Element, cutlass::half_t>::value ? 4 : 16;
-  int range_start = std::is_same<Element, cutlass::half_t>::value ? -4 : -16;
-    if constexpr (std::is_same<Element, cutlass::half_t>::value) {
+  constexpr bool use_narrow_input_range =
+      std::is_same_v<InputElement, cutlass::half_t> ||
+      std::is_same_v<InputElement, cutlass::float_e4m3_t>;
+  int range_end = use_narrow_input_range ? 4 : 16;
+  int range_start = use_narrow_input_range ? -4 : -16;
+    if constexpr (std::is_same_v<InputElement, cutlass::float_e4m3_t>) {
+      cutlass::reference::host::BlockFillRandomUniform(
+          tensor_a.host_data(), tensor_a.capacity(), 2022, range_end,
+          range_start, 8);
+      cutlass::reference::host::BlockFillRandomUniform(
+          tensor_b.host_data(), tensor_b.capacity(), 2023, range_end,
+          range_start, 8);
+      tensor_a.sync_device();
+      tensor_b.sync_device();
+    } else if constexpr (std::is_same<InputElement, cutlass::half_t>::value) {
 #if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
       if (arch == "hopper") {
         int fill_status = fill_hopper_f16_runner_operand(
@@ -565,9 +583,9 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
       } else {
   #endif
         cutlass::reference::host::TensorFillRandomUniform(
-            tensor_a.host_view(), 1, Element(range_end), Element(range_start), 2);
+            tensor_a.host_view(), 1, InputElement(range_end), InputElement(range_start), 2);
         cutlass::reference::host::TensorFillRandomUniform(
-            tensor_b.host_view(), 1, Element(range_end), Element(range_start), 2);
+            tensor_b.host_view(), 1, InputElement(range_end), InputElement(range_start), 2);
         tensor_a.sync_device();
         tensor_b.sync_device();
   #if !defined(STRASSEN_DISABLE_CUDA_DECLARATIONS) && defined(STRASSEN_ENABLE_HOPPER)
@@ -575,14 +593,14 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
   #endif
     } else {
     cutlass::reference::host::TensorFillRandomUniform(
-      tensor_a.host_view(), 1, Element(range_end), Element(range_start), 2);
+      tensor_a.host_view(), 1, InputElement(range_end), InputElement(range_start), 2);
     cutlass::reference::host::TensorFillRandomUniform(
-      tensor_b.host_view(), 1, Element(range_end), Element(range_start), 2);
+      tensor_b.host_view(), 1, InputElement(range_end), InputElement(range_start), 2);
     tensor_a.sync_device();
     tensor_b.sync_device();
     }
   cudaError_t clear_err = cudaMemset(
-      tensor_d.device_data(), 0, tensor_d.capacity() * sizeof(Element));
+      tensor_d.device_data(), 0, tensor_d.capacity() * sizeof(OutputElement));
   if (clear_err != cudaSuccess) {
     return static_cast<int>(clear_err);
   }
@@ -627,7 +645,7 @@ int run_benchmark(std::vector<KernelEntry> const &candidates, int m, int n, int 
 
     for (int split_k = first_split_k; split_k <= last_split_k; ++split_k) {
       clear_err = cudaMemset(
-          tensor_d.device_data(), 0, tensor_d.capacity() * sizeof(Element));
+          tensor_d.device_data(), 0, tensor_d.capacity() * sizeof(OutputElement));
       if (clear_err != cudaSuccess) {
         last_rc = static_cast<int>(clear_err);
         continue;
@@ -806,7 +824,7 @@ int main(int argc, char **argv) {
   if (!valid_args || m <= 0 || n <= 0 || k <= 0 || expert_count <= 0 ||
     iterations <= 0 || warmup < 0 || sleep_seconds < 0 ||
       streams <= 0 || streams > max_streams ||
-      (dtype != "f32" && dtype != "f16" && dtype != "bf16" && dtype != "f64") ||
+      (dtype != "f32" && dtype != "f16" && dtype != "bf16" && dtype != "fp8" && dtype != "f64") ||
       (arch != "volta" && arch != "ampere" && arch != "hopper" && arch != "blackwell") ||
       (b_presum != "interleaved" && b_presum != "kernel") ||
       (b_presum == "kernel" && (arch != "hopper" || dtype != "f16" || has_expert_count)) ||
@@ -849,6 +867,14 @@ int main(int argc, char **argv) {
   }
   if (dtype == "bf16") {
     return run_benchmark<cutlass::bfloat16_t>(
+        candidates, m, n, k, dtype, arch, strassen_level_label, iterations,
+        warmup, streams, expert_count, disable_split_k, sleep_seconds);
+  }
+  if (dtype == "fp8") {
+    return run_benchmark<cutlass::float_e4m3_t, cutlass::bfloat16_t,
+               cutlass::layout::RowMajor,
+               cutlass::layout::ColumnMajor,
+               cutlass::layout::ColumnMajor>(
         candidates, m, n, k, dtype, arch, strassen_level_label, iterations,
         warmup, streams, expert_count, disable_split_k, sleep_seconds);
   }

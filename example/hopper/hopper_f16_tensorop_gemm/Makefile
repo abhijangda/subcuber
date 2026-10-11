@@ -26,6 +26,9 @@ hopper_f16_tensorop_gemm_pingpong: hopper_f16_tensorop_gemm.cu
 hopper_f16_tensorop_gemm_cooperative: hopper_f16_tensorop_gemm.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DCOOPERATIVE -DTENSOROP_ELEM_FP16
 
+hopper_fp8_blockwise_tensorop_gemm_cooperative: hopper_fp8_gemm_with_blockwise_scaling.cu
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) -Xcompiler=-fopenmp $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DCOOPERATIVE
+
 hopper_bf16_tensorop_gemm_pingpong: hopper_f16_tensorop_gemm.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DPINGPONG -DTENSOROP_ELEM_BF16
 

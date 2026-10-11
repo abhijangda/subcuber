@@ -1,11 +1,14 @@
 #include <algorithm>
 #include <cstddef>
+#include <type_traits>
+#include <vector>
 
 #include <cuda_runtime.h>
 #include <cublasLt.h>
 #include <cublas_v2.h>
 
 #include "cutlass/numeric_types.h"
+#include "cutlass/util/reference/host/tensor_fill.h"
 #include "cuda/kernel_runner_support.cuh"
 
 template <typename Element>
@@ -15,6 +18,7 @@ template <>
 struct CublasLtType<float> {
   using Scale = float;
   static constexpr cudaDataType_t data_type = CUDA_R_32F;
+  static constexpr cudaDataType_t output_type = CUDA_R_32F;
   static constexpr cudaDataType_t scale_type = CUDA_R_32F;
   static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
 };
@@ -23,6 +27,7 @@ template <>
 struct CublasLtType<double> {
   using Scale = double;
   static constexpr cudaDataType_t data_type = CUDA_R_64F;
+  static constexpr cudaDataType_t output_type = CUDA_R_64F;
   static constexpr cudaDataType_t scale_type = CUDA_R_64F;
   static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_64F;
 };
@@ -31,6 +36,7 @@ template <>
 struct CublasLtType<cutlass::half_t> {
   using Scale = float;
   static constexpr cudaDataType_t data_type = CUDA_R_16F;
+  static constexpr cudaDataType_t output_type = CUDA_R_16F;
   static constexpr cudaDataType_t scale_type = CUDA_R_32F;
   static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F_FAST_16F;
 };
@@ -39,6 +45,16 @@ template <>
 struct CublasLtType<cutlass::bfloat16_t> {
   using Scale = float;
   static constexpr cudaDataType_t data_type = CUDA_R_16BF;
+  static constexpr cudaDataType_t output_type = CUDA_R_16BF;
+  static constexpr cudaDataType_t scale_type = CUDA_R_32F;
+  static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
+};
+
+template <>
+struct CublasLtType<cutlass::float_e4m3_t> {
+  using Scale = float;
+  static constexpr cudaDataType_t data_type = CUDA_R_8F_E4M3;
+  static constexpr cudaDataType_t output_type = CUDA_R_16BF;
   static constexpr cudaDataType_t scale_type = CUDA_R_32F;
   static constexpr cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
 };
@@ -64,11 +80,15 @@ int run_cublaslt_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
   cudaEvent_t start = nullptr;
   cudaEvent_t stop = nullptr;
   void *workspace = nullptr;
+  float *scale_a = nullptr;
+  float *scale_b = nullptr;
   constexpr size_t kWorkspaceSize = 32ULL * 1024ULL * 1024ULL;
 
   auto cleanup = [&]() {
     if (start != nullptr) cudaEventDestroy(start);
     if (stop != nullptr) cudaEventDestroy(stop);
+    if (scale_b != nullptr) cudaFree(scale_b);
+    if (scale_a != nullptr) cudaFree(scale_a);
     if (workspace != nullptr) cudaFree(workspace);
     if (preference != nullptr) cublasLtMatmulPreferenceDestroy(preference);
     if (layout_d != nullptr) cublasLtMatrixLayoutDestroy(layout_d);
@@ -91,65 +111,137 @@ int run_cublaslt_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
     return cublaslt_status_to_error(cublas_status);
   }
 
-  cublasOperation_t op = CUBLAS_OP_N;
+    cublasOperation_t op_a = std::is_same_v<Element, cutlass::float_e4m3_t>
+                   ? CUBLAS_OP_T
+                   : CUBLAS_OP_N;
+    cublasOperation_t op_b = CUBLAS_OP_N;
   cublas_status = cublasLtMatmulDescSetAttribute(
-      matmul_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op, sizeof(op));
+      matmul_desc, CUBLASLT_MATMUL_DESC_TRANSA, &op_a, sizeof(op_a));
   if (cublas_status != CUBLAS_STATUS_SUCCESS) {
     cleanup();
     return cublaslt_status_to_error(cublas_status);
   }
   cublas_status = cublasLtMatmulDescSetAttribute(
-      matmul_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op, sizeof(op));
+      matmul_desc, CUBLASLT_MATMUL_DESC_TRANSB, &op_b, sizeof(op_b));
   if (cublas_status != CUBLAS_STATUS_SUCCESS) {
     cleanup();
     return cublaslt_status_to_error(cublas_status);
   }
 
-  cublas_status = cublasLtMatrixLayoutCreate(&layout_a, Type::data_type, m, k, k);
+  cudaError_t cuda_status = cudaSuccess;
+  if constexpr (std::is_same_v<Element, cutlass::float_e4m3_t>) {
+    cublasLtMatmulMatrixScale_t scale_mode_a =
+      CUBLASLT_MATMUL_MATRIX_SCALE_VEC128_32F;
+    cublasLtMatmulMatrixScale_t scale_mode_b =
+      CUBLASLT_MATMUL_MATRIX_SCALE_BLK128x128_32F;
+    cublas_status = cublasLtMatmulDescSetAttribute(
+      matmul_desc, CUBLASLT_MATMUL_DESC_A_SCALE_MODE, &scale_mode_a,
+      sizeof(scale_mode_a));
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      cleanup();
+      return cublaslt_status_to_error(cublas_status);
+    }
+    cublas_status = cublasLtMatmulDescSetAttribute(
+      matmul_desc, CUBLASLT_MATMUL_DESC_B_SCALE_MODE, &scale_mode_b,
+      sizeof(scale_mode_b));
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      cleanup();
+      return cublaslt_status_to_error(cublas_status);
+    }
+
+    size_t k_blocks = (size_t(k) + 127) / 128;
+    size_t n_blocks = (size_t(n) + 127) / 128;
+    size_t scale_a_count = size_t(m) * k_blocks;
+    size_t scale_b_inner = ((k_blocks + 3) / 4) * 4;
+    size_t scale_b_count = scale_b_inner * n_blocks;
+    std::vector<float> host_scale_a(scale_a_count);
+    std::vector<float> host_scale_b(scale_b_count);
+    cutlass::reference::host::BlockFillRandomUniform(
+        host_scale_a.data(), host_scale_a.size(), 2025, 4.0, -4.0);
+    cutlass::reference::host::BlockFillRandomUniform(
+        host_scale_b.data(), host_scale_b.size(), 2026, 4.0, -4.0);
+    cuda_status = cudaMalloc(&scale_a, scale_a_count * sizeof(float));
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaMalloc(&scale_b, scale_b_count * sizeof(float));
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaMemcpy(scale_a, host_scale_a.data(),
+                               scale_a_count * sizeof(float),
+                               cudaMemcpyHostToDevice);
+    }
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaMemcpy(scale_b, host_scale_b.data(),
+                               scale_b_count * sizeof(float),
+                               cudaMemcpyHostToDevice);
+    }
+    if (cuda_status != cudaSuccess) {
+      cleanup();
+      return static_cast<int>(cuda_status);
+    }
+    cublas_status = cublasLtMatmulDescSetAttribute(
+        matmul_desc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &scale_a,
+        sizeof(scale_a));
+    if (cublas_status == CUBLAS_STATUS_SUCCESS) {
+      cublas_status = cublasLtMatmulDescSetAttribute(
+          matmul_desc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &scale_b,
+          sizeof(scale_b));
+    }
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      cleanup();
+      return cublaslt_status_to_error(cublas_status);
+    }
+  }
+
+  int layout_a_rows = std::is_same_v<Element, cutlass::float_e4m3_t> ? k : m;
+  int layout_a_cols = std::is_same_v<Element, cutlass::float_e4m3_t> ? m : k;
+  int layout_a_ld = k;
+  int layout_b_ld = std::is_same_v<Element, cutlass::float_e4m3_t> ? k : n;
+  int layout_d_ld = std::is_same_v<Element, cutlass::float_e4m3_t> ? m : n;
+  cublas_status = cublasLtMatrixLayoutCreate(
+      &layout_a, Type::data_type, layout_a_rows, layout_a_cols, layout_a_ld);
   if (cublas_status != CUBLAS_STATUS_SUCCESS) {
     cleanup();
     return cublaslt_status_to_error(cublas_status);
   }
-  cublas_status = cublasLtMatrixLayoutCreate(&layout_b, Type::data_type, k, n, n);
+  cublas_status = cublasLtMatrixLayoutCreate(
+      &layout_b, Type::data_type, k, n, layout_b_ld);
   if (cublas_status != CUBLAS_STATUS_SUCCESS) {
     cleanup();
     return cublaslt_status_to_error(cublas_status);
   }
-  cublas_status = cublasLtMatrixLayoutCreate(&layout_c, Type::data_type, m, n, n);
+  cublas_status = cublasLtMatrixLayoutCreate(
+      &layout_c, Type::output_type, m, n, layout_d_ld);
   if (cublas_status != CUBLAS_STATUS_SUCCESS) {
     cleanup();
     return cublaslt_status_to_error(cublas_status);
   }
-  cublas_status = cublasLtMatrixLayoutCreate(&layout_d, Type::data_type, m, n, n);
+  cublas_status = cublasLtMatrixLayoutCreate(
+      &layout_d, Type::output_type, m, n, layout_d_ld);
   if (cublas_status != CUBLAS_STATUS_SUCCESS) {
     cleanup();
     return cublaslt_status_to_error(cublas_status);
   }
 
-  cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
-  cublas_status = cublasLtMatrixLayoutSetAttribute(
-      layout_a, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-    cleanup();
-    return cublaslt_status_to_error(cublas_status);
-  }
-  cublas_status = cublasLtMatrixLayoutSetAttribute(
-      layout_b, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-    cleanup();
-    return cublaslt_status_to_error(cublas_status);
-  }
-  cublas_status = cublasLtMatrixLayoutSetAttribute(
-      layout_c, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-    cleanup();
-    return cublaslt_status_to_error(cublas_status);
-  }
-  cublas_status = cublasLtMatrixLayoutSetAttribute(
-      layout_d, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-    cleanup();
-    return cublaslt_status_to_error(cublas_status);
+  if constexpr (!std::is_same_v<Element, cutlass::float_e4m3_t>) {
+    cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
+    cublas_status = cublasLtMatrixLayoutSetAttribute(
+        layout_a, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+    if (cublas_status == CUBLAS_STATUS_SUCCESS) {
+      cublas_status = cublasLtMatrixLayoutSetAttribute(
+          layout_b, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+    }
+    if (cublas_status == CUBLAS_STATUS_SUCCESS) {
+      cublas_status = cublasLtMatrixLayoutSetAttribute(
+          layout_c, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+    }
+    if (cublas_status == CUBLAS_STATUS_SUCCESS) {
+      cublas_status = cublasLtMatrixLayoutSetAttribute(
+          layout_d, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+    }
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+      cleanup();
+      return cublaslt_status_to_error(cublas_status);
+    }
   }
 
   cublas_status = cublasLtMatmulPreferenceCreate(&preference);
@@ -165,7 +257,7 @@ int run_cublaslt_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
     return cublaslt_status_to_error(cublas_status);
   }
 
-  cudaError_t cuda_status = cudaMalloc(&workspace, kWorkspaceSize);
+  cuda_status = cudaMalloc(&workspace, kWorkspaceSize);
   if (cuda_status != cudaSuccess) {
     cleanup();
     return static_cast<int>(cuda_status);
@@ -279,6 +371,15 @@ extern "C" int run_cublaslt_bf16(KernelRunnerBuffers buffers, int m, int n, int 
   return run_cublaslt_gemm<cutlass::bfloat16_t>(
     buffers, m, n, k, warmup_iterations, iterations, streams, num_streams,
     split_k_slices, avg_ms);
+}
+
+extern "C" int run_cublaslt_fp8_blockwise_128x128(
+    KernelRunnerBuffers buffers, int m, int n, int k, int warmup_iterations,
+    int iterations, cudaStream_t *streams, int num_streams, int split_k_slices,
+    float *avg_ms) {
+  return run_cublaslt_gemm<cutlass::float_e4m3_t>(
+      buffers, m, n, k, warmup_iterations, iterations, streams, num_streams,
+      split_k_slices, avg_ms);
 }
 
 extern "C" int run_cublaslt_f64(KernelRunnerBuffers buffers, int m, int n, int k,
