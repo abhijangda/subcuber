@@ -465,7 +465,7 @@ public:
   to_underlying_arguments(
       ProblemShape const& problem_shape,
       Arguments const& args,
-      ElementD* ptr_presum_load_A,
+      [[maybe_unused]] void* ptr_presum_load_A,
       ElementD* postsum_m,
       [[maybe_unused]] void* workspace) {
     // Optionally append 1s until problem shape is rank-4 in case its is only rank-3 (MNK)

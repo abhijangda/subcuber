@@ -48,6 +48,24 @@
 
 namespace cutlass::gemm::collective {
 
+namespace detail {
+
+template<int capacity_bytes, class ElementA, class ElementB, class ElementBlockScale,
+         class TileShapeMNK, int ScaleMsPerTile, int ScaleNsPerTile, int stages, int alignment = 128>
+constexpr int
+compute_stage_count_with_blockwise_scale(cute::Int<stages>) {
+  return stages;
+}
+
+template<int capacity_bytes, class ElementA, class ElementB, class ElementBlockScale,
+         class TileShapeMNK, int ScaleMsPerTile, int ScaleNsPerTile, int stages, int alignment = 128>
+constexpr int
+compute_stage_count_with_blockwise_scale(StageCount<stages>) {
+  return stages;
+}
+
+} // namespace detail
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // GMMA_TMA_WS_SS
@@ -1089,7 +1107,9 @@ template <
   class PresumTileShapeA_,
   class PresumTileShapeB_,
   class PresumOpt_,
-  class ProblemShape_
+  class ProblemShape_,
+  class SubMatLayoutA_,
+  class SubMatLayoutB_
 >
 struct CollectiveStrassenBuilder<
     StrassenMiGroup,
@@ -1116,7 +1136,9 @@ struct CollectiveStrassenBuilder<
        cute::is_same_v<KernelScheduleType, KernelTmaWarpSpecializedPingpongFP8BlockScaledAccum> or
        cute::is_same_v<KernelScheduleType, KernelPtrArrayTmaWarpSpecializedPingpongFP8BlockScaledAccum>) and
       not detail::is_use_rmem_A<ElementA, GmemLayoutPairA, ElementB, GmemLayoutPairB>()
-    >
+    >,
+    SubMatLayoutA_,
+    SubMatLayoutB_
 > {
   using GmemLayoutATag   = cute::remove_cvref_t<decltype(get<0>(GmemLayoutPairA{}))>;
   using GmemLayoutSFATag = cute::remove_cvref_t<decltype(get<1>(GmemLayoutPairA{}))>;
@@ -1194,24 +1216,43 @@ struct CollectiveStrassenBuilder<
   using SmemCopyAtomA = void;
   using SmemCopyAtomB = void;
 
-  // using CollectiveOp = CollectiveStrassenMma<
-  //     StrassenMiGroup,
-  //     DispatchPolicy,
-  //     TileShape_MNK,
-  //     ElementA,
-  //     cute::tuple<TagToStrideA_t<GmemLayoutATag>, TagToStrideA_t<GmemLayoutSFATag>>,
-  //     ElementB,
-  //     cute::tuple<TagToStrideB_t<GmemLayoutBTag>, TagToStrideB_t<GmemLayoutSFBTag>>,
-  //     TiledMma,
-  //     GmemTiledCopyA,
-  //     SmemLayoutAtomA,
-  //     SmemCopyAtomA,
-  //     cute::identity,
-  //     GmemTiledCopyB,
-  //     SmemLayoutAtomB,
-  //     SmemCopyAtomB,
-  //     cute::identity
-  //   >;
+  using PresumDispatchPolicy = MainloopSm90TmaGmmaWarpSpecializedBlockScalingFP8<
+      PipelineStages, Shape<_1,_1,_1>, KernelScheduleType>;
+  using PresumTileShapeA = cute::conditional_t<cute::is_void_v<PresumTileShapeA_>, Shape<_4,_128>, PresumTileShapeA_>;
+  using PresumTileShapeB = cute::conditional_t<cute::is_void_v<PresumTileShapeB_>, Shape<_4,_128>, PresumTileShapeB_>;
+  using PresumGmemTiledCopy = decltype(detail::sm90_cluster_shape_to_tma_atom(_1{}));
+
+  using CollectiveOp = CollectiveStrassenMma<
+      StrassenMiGroup,
+      DispatchPolicy,
+      TileShape_MNK,
+      ElementA,
+      cute::tuple<TagToStrideA_t<GmemLayoutATag>, TagToStrideA_t<GmemLayoutSFATag>>,
+      ElementB,
+      cute::tuple<TagToStrideB_t<GmemLayoutBTag>, TagToStrideB_t<GmemLayoutSFBTag>>,
+      TiledMma,
+      GmemTiledCopyA,
+      SmemLayoutAtomA,
+      SmemCopyAtomA,
+      cute::identity,
+      GmemTiledCopyB,
+      SmemLayoutAtomB,
+      SmemCopyAtomB,
+      cute::identity,
+      PresumDispatchPolicy,
+      PresumTileShapeA,
+      PresumGmemTiledCopy,
+      void,
+      void,
+      PresumTileShapeB,
+      PresumGmemTiledCopy,
+      void,
+      void,
+      PresumOpt_,
+      ProblemShape_,
+      SubMatLayoutA_,
+      SubMatLayoutB_
+    >;
 };
 
 /////////////////////////////////////////////////////////////////////////////////////////////////

@@ -61,10 +61,12 @@
 
 // 3.x
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
+#include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/device/strassen_decls.h"
 #include "cutlass/strassen_presum_global_kernel.h"
 #include "cutlass/layout/strassen_layout.hpp"
 
+#include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/epilogue/collective/collective_strassen_builder.hpp"
 #include "cutlass/gemm/collective/collective_strassen_gemm_builder.hpp"
 #include "cutlass/gemm/kernel/strassen_gemm_universal.hpp"
@@ -100,34 +102,6 @@ class StrassenGemmUniversalAdapter;
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////// CUTLASS 3.x API /////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
-
-namespace detail {
-
-// Work-around for some DispatchPolicy types not having a Stages member.
-// In that case, the Stages value is 0.  Most code should static_assert
-// that the number of stages is valid.
-
-// Whether DispatchPolicy::Stages is valid.
-// It should also be convertible to int, but if not, that will show up
-// as a build error when StrassenGemmUniversalAdapter attempts to assign it to kStages.
-template <class DispatchPolicy, class Enable = void>
-struct has_Stages : cute::false_type {};
-
-template <class DispatchPolicy>
-struct has_Stages<DispatchPolicy, cute::void_t<decltype(DispatchPolicy::Stages)>> : cute::true_type {};
-
-template<class DispatchPolicy>
-constexpr int stages_member(DispatchPolicy) {
-  if constexpr (has_Stages<DispatchPolicy>::value) {
-    return DispatchPolicy::Stages;
-  }
-  else {
-    return 0;
-  }
-}
-
-} // namespace detail
-
 
 template<typename Elem>
 static __global__ void presumcheck(uint R, uint C, Elem* presum) {
