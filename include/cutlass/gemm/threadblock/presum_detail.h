@@ -98,6 +98,7 @@ void cp_async_presum(void *smem_ptr, void const *global_ptr, bool pred_guard = t
 template<typename Element, uint BLOCK_DIM,
          typename MmaTileShape, typename VectorLoadType,
          bool isAorB,//TODO: Change this to layout. false for A and true for B
+         bool isRowOrColumnMajor, //true for Row and false for Column
          bool LinearIndexing>
 struct GlobalIterator {
   int row;
@@ -127,16 +128,31 @@ struct GlobalIterator {
                  bool isDest = false) : 
     extent(extent_), stride(stride_), tb_offset(tb_offset_), isDest(isDest), linear_block_idx(linear_block_idx), threadId(threadId)
   {
-    nextOffset0 = nextOffset0_.row() * stride + nextOffset0_.column();
-    nextOffset1 = nextOffset1_.row() * stride + nextOffset1_.column();
-    nextOffset2 = nextOffset2_.row() * stride + nextOffset2_.column();
-    nextOffset3 = nextOffset3_.row() * stride + nextOffset3_.column();
-    nextOffset4 = nextOffset4_.row() * stride + nextOffset4_.column();
+    if (isRowOrColumnMajor) {
+      //RowMajor
+      nextOffset0 = nextOffset0_.row() * stride + nextOffset0_.column();
+      nextOffset1 = nextOffset1_.row() * stride + nextOffset1_.column();
+      nextOffset2 = nextOffset2_.row() * stride + nextOffset2_.column();
+      nextOffset3 = nextOffset3_.row() * stride + nextOffset3_.column();
+      nextOffset4 = nextOffset4_.row() * stride + nextOffset4_.column();
+    } else {
+      //ColMajor
+      nextOffset0 = nextOffset0_.row() + nextOffset0_.column() * stride;
+      nextOffset1 = nextOffset1_.row() + nextOffset1_.column() * stride;
+      nextOffset2 = nextOffset2_.row() + nextOffset2_.column() * stride;
+      nextOffset3 = nextOffset3_.row() + nextOffset3_.column() * stride;
+      nextOffset4 = nextOffset4_.row() + nextOffset4_.column() * stride;
+    }
+
     pointer = pointer_;
 
     reset();
     //TODO: compare only columns for A and only rows for B
-    isValidTB = (!isAorB && tb_offset.column() < stride) || (isAorB && tb_offset.row() < extent.row());
+    if (isRowOrColumnMajor) {
+      isValidTB = (!isAorB && tb_offset.column() < stride) || (isAorB && tb_offset.row() < extent.row());
+    } else {
+      isValidTB = (!isAorB && tb_offset.row()    < stride) || (isAorB && tb_offset.column() < extent.row());
+    }
   }
 
   CUTLASS_DEVICE
@@ -145,7 +161,11 @@ struct GlobalIterator {
       col += VectorLoadElems * BLOCK_DIM;
     } else {
       if (BLOCK_DIM*VectorLoadElems >= MmaTileShape::kN) {
-        row += (BLOCK_DIM*VectorLoadElems)/MmaTileShape::kN;
+        if (isRowOrColumnMajor) {
+          row += (BLOCK_DIM*VectorLoadElems)/MmaTileShape::kN;
+        } else {
+          col += (BLOCK_DIM*VectorLoadElems)/MmaTileShape::kN;
+        }
         byte_pointer_ += (BLOCK_DIM*VectorLoadElems)/MmaTileShape::kN*sizeof(Element)*stride;
       } else {
         col += BLOCK_DIM*VectorLoadElems;
@@ -156,7 +176,11 @@ struct GlobalIterator {
   CUTLASS_DEVICE
   void set_iteration(int iter) {
     byte_pointer_ += iter*(BLOCK_DIM*VectorLoadElems)/MmaTileShape::kN*sizeof(Element)*stride;
-    row += iter*(BLOCK_DIM*VectorLoadElems)/MmaTileShape::kN;
+    if (isRowOrColumnMajor) {
+      row += iter*(BLOCK_DIM*VectorLoadElems)/MmaTileShape::kN;
+    } else {
+      col += iter*(BLOCK_DIM*VectorLoadElems)/MmaTileShape::kN;
+    }
   }
 
   CUTLASS_DEVICE
@@ -178,18 +202,28 @@ struct GlobalIterator {
     //   row = 0;
     // } else
     {
-      col = ((!isAorB)?tile:0)*MmaTileShape::kN + (threadId*VectorLoadElems) %  MmaTileShape::kN;
-      row = ((!isAorB)?0:tile)*MmaTileShape::kM + (threadId*VectorLoadElems) / MmaTileShape::kN;
-
-      byte_pointer_ = (char*)(pointer + (tb_offset.row() + row) * stride +
-                                         tb_offset.column() + col);
+      if (isRowOrColumnMajor) {
+        col = ((!isAorB)?tile:0)*MmaTileShape::kN + (threadId*VectorLoadElems) %  MmaTileShape::kN;
+        row = ((!isAorB)?0:tile)*MmaTileShape::kM + (threadId*VectorLoadElems) / MmaTileShape::kN;
+        byte_pointer_ = (char*)(pointer + (tb_offset.row() + row) * stride +
+                                            tb_offset.column() + col);
+      } else {
+        row = ((!isAorB)?tile:0)*MmaTileShape::kN + (threadId*VectorLoadElems) %  MmaTileShape::kN;
+        col = ((!isAorB)?0:tile)*MmaTileShape::kM + (threadId*VectorLoadElems) / MmaTileShape::kN;
+        byte_pointer_ = (char*)(pointer + (tb_offset.row() + row) +
+                                           (tb_offset.column() + col) * stride);
+      }
     }
   }
 
   CUTLASS_DEVICE
   bool valid() {
     if (LinearIndexing) return col < MmaTileShape::kM * MmaTileShape::kN;
-    return (!isAorB) ? (tb_offset.column() + col < stride) : (tb_offset.row() + row < extent.row());
+    if (isRowOrColumnMajor) {
+      return (!isAorB) ? (tb_offset.column() + col < stride) : (tb_offset.row() + row < extent.row());
+    } else {
+      return (!isAorB) ? (tb_offset.row() + row < stride) : (tb_offset.column() + col < extent.column());
+    }
   }
   
   CUTLASS_DEVICE

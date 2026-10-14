@@ -166,9 +166,9 @@ struct CollectiveStrassenMma<
   static constexpr int PresumStoreWarpSize = NumMMAThreads/4;
   static const int kPresumThreads = NumMMAThreads/4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<ElementA, kPresumThreads,  
-                                                             PresumShape, PresumStoreVecType, false, false>;
+                                                             PresumShape, PresumStoreVecType, false, true, false>;
   using PresumGlobalIteratorB = PresumDetail::GlobalIterator<ElementB, kPresumThreads, 
-                                                             PresumShape, PresumStoreVecType, true, false>;
+                                                             PresumShape, PresumStoreVecType, true, true, false>;
   // using PresumSharedIterator = PresumDetail::SharedIterator<ElementA, PresumVecType, NumThreads,
   //                                                           Base::SharedStorage::PresumBuffer::NumLoadsForPresum,
   //                                                           Base::SharedStorage::PresumBuffer::SingleStageSize,

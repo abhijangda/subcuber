@@ -54,6 +54,7 @@
       $ ./examples/48_hopper_warp_specialized_gemm/48_hopper_warp_specialized_gemm --m=2048 --n=2048 --k=2048 --rasterization=N --swizzle=2
 */
 
+#include <cmath>
 #include <iostream>
 #include <omp.h>
 
@@ -628,7 +629,7 @@ bool initialize_tensor(
   }
   if (!ones) {
     cutlass::reference::host::BlockFillRandomUniform(
-      view.data(), view.capacity(), seed, 2, -2, 0);
+      view.data(), view.capacity(), seed, 4, -4, 0);
   } else {
     cutlass::reference::host::TensorFill(view, Element(1.f));    
   }
@@ -647,8 +648,8 @@ bool initialize_scale_tensor(
 
     double scope_max, scope_min;
 
-    scope_min = -2;
-    scope_max = 2;
+    scope_min = -4;
+    scope_max = 4;
 
     cutlass::reference::host::BlockFillRandomUniform(
       view.data(), view.capacity(), seed, scope_max, scope_min);
@@ -688,8 +689,8 @@ void initialize(const Options &options) {
   cutlass::Distribution::Kind dist_scaleA = cutlass::Distribution::Uniform;
   cutlass::Distribution::Kind dist_scaleB = cutlass::Distribution::Uniform;
 
-  initialize_tensor(tensor_A.host_view(), dist_A, seed + 2022, true);
-  initialize_tensor(tensor_B.host_view(), dist_B, seed + 2023, true);
+  initialize_tensor(tensor_A.host_view(), dist_A, seed + 2022, false);
+  initialize_tensor(tensor_B.host_view(), dist_B, seed + 2023, false);
   initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, true);
   initialize_scale_tensor(blockscale_tensor_B.host_view(), dist_scaleB, seed + 2026, true);
   cutlass::reference::host::TensorFill(tensor_D.host_view());
@@ -794,8 +795,8 @@ bool verify(const Options &options) {
 
   tensor_D.sync_host();
 
-  constexpr float epsilon = 0.02f;
-  constexpr float non_zero_floor = 1.f;
+  constexpr float MAX_REL_ERR = 1e-2f;
+  constexpr float MAX_ABS_ERR = 0.f;
   bool passed_C0 = true;
   bool passed_C1 = true;
   bool passed_C2 = true;
@@ -806,10 +807,11 @@ bool verify(const Options &options) {
   for (int r = 0; r < options.m; r++) {
     for (int c = 0; c < options.n; c++) {
       auto coord = cutlass::make_Coord(r, c);
-      ElementD computed = computed_view.at(coord);
-      ElementD reference = reference_view.at(coord);
-      bool equal = cutlass::relatively_equal(
-        computed, reference, ElementD(epsilon), ElementD(non_zero_floor));
+      float computed = float(computed_view.at(coord));
+      float reference = float(reference_view.at(coord));
+      float abs_err = std::fabs(reference - computed);
+      float err = abs_err / std::fabs(reference + 1e-6);
+      bool equal = reference == computed || err <= MAX_REL_ERR || abs_err <= MAX_ABS_ERR;
 
       // C0
       if (r < options.m/2 && c < options.n/2 && !equal && passed_C0) {

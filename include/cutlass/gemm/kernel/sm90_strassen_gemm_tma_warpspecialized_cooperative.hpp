@@ -305,13 +305,23 @@ public:
     }
 
     CUTLASS_HOST_DEVICE
+    constexpr bool get_layout_B(int idx = 0) const {
+      if constexpr (cute::is_constant<1, decltype(get<0>(dB))>::value) {
+        return true; //true for RowMajor
+      }
+      else {
+        return false; //false for ColumnMajor
+      }
+    }
+
+    CUTLASS_HOST_DEVICE
     int get_stride_MA(int idx = 0) const {
       return get_problem_shape_k(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
     int get_stride_MB(int idx = 0) const {
-      return get_problem_shape_n(idx)/2;
+      return get_layout_B() ? get_problem_shape_n(idx)/2 : get_problem_shape_k(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE

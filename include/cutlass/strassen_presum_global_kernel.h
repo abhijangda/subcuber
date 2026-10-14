@@ -32,8 +32,9 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
   using PresumShapeA = typename GemmKernel0::Mma::PresumShapeA;
   using PresumShapeB = typename GemmKernel0::Mma::PresumShapeB;
 
-  using PresumGlobalIteratorA = threadblock::PresumDetail::GlobalIterator<ElementA, kThreadCount, PresumShapeA, PresumVecType, false, false>;
-  using PresumGlobalIteratorB = threadblock::PresumDetail::GlobalIterator<ElementB, kThreadCount, PresumShapeB, PresumVecType, true, false>;
+  constexpr bool is_B_row_or_col_major = params.get_layout_B();
+  using PresumGlobalIteratorA = threadblock::PresumDetail::GlobalIterator<ElementA, kThreadCount, PresumShapeA, PresumVecType, false, true, false>;
+  using PresumGlobalIteratorB = threadblock::PresumDetail::GlobalIterator<ElementB, kThreadCount, PresumShapeB, PresumVecType, true, is_B_row_or_col_major, false>;
 
   cutlass::gemm::GemmCoord threadblock_tile_offset = {(int)blockIdx.y, (int)blockIdx.x, 0};
 
@@ -84,11 +85,15 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
     block_idx, {0, 0}, thread_idx, {1*halfM, 0}, {2*halfM, 0}, {3*halfM, 0}
   );
 
+  auto bm1_coord = is_B_row_or_col_major ? MatrixCoord{1*halfK, 0} : MatrixCoord{0, 1*halfN};
+  auto bm2_coord = is_B_row_or_col_major ? MatrixCoord{2*halfK, 0} : MatrixCoord{0, 2*halfN};
+  auto bm3_coord = is_B_row_or_col_major ? MatrixCoord{3*halfK, 0} : MatrixCoord{0, 3*halfN};
+
   PresumGlobalIteratorB iter_PresumB_M(
     params.get_ptr_presum_B(problem_idx), params.get_stride_MB(problem_idx),
     {halfK, halfN},
     {threadblock_tile_offset.m() * PresumShapeB::kM * presum_multiplier_b, threadblock_tile_offset.n() * PresumShapeB::kN},
-    block_idx, {0, 0}, thread_idx, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}
+    block_idx, {0, 0}, thread_idx, bm1_coord, bm2_coord, bm3_coord
   );
 
   auto presumAComputeLoads = AllPresums::APresumComputeLoads(PresumGlobalKernel);

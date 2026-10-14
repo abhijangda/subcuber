@@ -152,9 +152,9 @@ struct CollectiveStrassenMma<
   static constexpr int PresumStoreWarpSize = NumMMAThreads/4;
   static const int kPresumThreads = NumMMAThreads;///4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<ElementA, kPresumThreads,  
-                                                             PresumShape, PresumStoreVecType, false, false>;
+                                                             PresumShape, PresumStoreVecType, false, true, false>;
   using PresumGlobalIteratorB = PresumDetail::GlobalIterator<ElementB, kPresumThreads, 
-                                                             PresumShape, PresumStoreVecType, true, false>;
+                                                             PresumShape, PresumStoreVecType, true, true, false>;
   static const uint kPresumComputeIterationsA = size<0>(TileShape{})/size<0>(PresumTileShapeA{});
   static const uint kPresumComputeIterationsB = size<0>(TileShape{})/size<0>(PresumTileShapeB{});
 
@@ -521,9 +521,9 @@ struct CollectiveStrassenMma<
   static constexpr int PresumStoreWarpSize = NumMMAThreads/4;
   static const int kPresumThreads = NumMMAThreads;///4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<ElementA, kPresumThreads,  
-                                                             PresumShape, PresumStoreVecType, false, false>;
+                                                             PresumShape, PresumStoreVecType, false, true, false>;
   using PresumGlobalIteratorB = PresumDetail::GlobalIterator<ElementB, kPresumThreads, 
-                                                             PresumShape, PresumStoreVecType, true, false>;
+                                                             PresumShape, PresumStoreVecType, true, true, false>;
   static const uint kPresumComputeIterationsA = size<0>(TileShape{})/size<0>(PresumTileShapeA{});
   static const uint kPresumComputeIterationsB = size<0>(TileShape{})/size<0>(PresumTileShapeB{});
 
