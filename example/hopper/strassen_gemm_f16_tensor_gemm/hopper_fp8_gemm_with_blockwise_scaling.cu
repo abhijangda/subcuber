@@ -151,9 +151,9 @@ using EpilogueScheduleM2To6 = EpilogueScheduleM0;
 using TileShapeM0           = Shape<_128,_128,_128>;                           // Threadblock-level tile size
 using TileShapeM2To6        = Shape<_128,_128,_128>;
 using ClusterShape        = Shape<_1,_2,_1>;                                // Shape of the threadblocks in a cluster
-const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 6 : 6;          // Stage count maximized based on the tile size
-const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 6 : 6;
-const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 6 : 6;
+const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 5 : 5;          // Stage count maximized based on the tile size
+const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 5 : 5;
+const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 5 : 5;
 using PresumTileShapeA    = Shape<_4, _128>;
 using PresumTileShapeB    = Shape<_4, _128>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum;       // Kernel to launch based on the default setting in the Collective Builder
@@ -185,10 +185,10 @@ using PresumOpts = cutlass::gemm::device::PresumOpt<>;//0,0,0,0>;
 //TODO: Stages 5 produces wrong results for C2
 
 using AllPresumsKernel = AllPresums<>;
-// using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
-//                PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
-using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                   PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
+               PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
+// using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
+                                  //  PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
@@ -622,12 +622,17 @@ template <class Element, class Layout>
 bool initialize_tensor(
   cutlass::TensorView<Element, Layout> view,
   cutlass::Distribution::Kind dist_kind,
-  uint64_t seed) {
+  uint64_t seed, bool ones = false) {
   if (dist_kind != cutlass::Distribution::Uniform) {
     throw std::runtime_error("Unsupported operand distribution.");
   }
-  cutlass::reference::host::BlockFillRandomUniform(
-    view.data(), view.capacity(), seed, 4, -4, 0);
+  if (!ones) {
+    cutlass::reference::host::BlockFillRandomUniform(
+      view.data(), view.capacity(), seed, 2, -2, 0);
+  } else {
+    cutlass::reference::host::TensorFill(view, Element(1.f));    
+  }
+
   return true;
 }
 
@@ -636,20 +641,20 @@ template <typename Element, typename Layout>
 bool initialize_scale_tensor(
   cutlass::TensorView<Element, Layout> view,
   cutlass::Distribution::Kind dist_kind,
-  uint64_t seed, bool ones = true) {
+  uint64_t seed, bool ones = false) {
 
   if (!ones) {
 
     double scope_max, scope_min;
 
-    scope_min = -4;
-    scope_max = 4;
+    scope_min = -2;
+    scope_max = 2;
 
     cutlass::reference::host::BlockFillRandomUniform(
       view.data(), view.capacity(), seed, scope_max, scope_min);
   }
   else if (ones) {
-    cutlass::reference::host::TensorFill(view, Element(1.0f));
+    cutlass::reference::host::TensorFill(view, Element(1.f/16.f));
   }
 
   return true;
@@ -683,10 +688,10 @@ void initialize(const Options &options) {
   cutlass::Distribution::Kind dist_scaleA = cutlass::Distribution::Uniform;
   cutlass::Distribution::Kind dist_scaleB = cutlass::Distribution::Uniform;
 
-  initialize_tensor(tensor_A.host_view(), dist_A, seed + 2022);
-  initialize_tensor(tensor_B.host_view(), dist_B, seed + 2023);
-  initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025);
-  initialize_scale_tensor(blockscale_tensor_B.host_view(), dist_scaleB, seed + 2026);
+  initialize_tensor(tensor_A.host_view(), dist_A, seed + 2022, true);
+  initialize_tensor(tensor_B.host_view(), dist_B, seed + 2023, true);
+  initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, true);
+  initialize_scale_tensor(blockscale_tensor_B.host_view(), dist_scaleB, seed + 2026, true);
   cutlass::reference::host::TensorFill(tensor_D.host_view());
 
 #if 0 // Dump blockscaled tensors
@@ -758,114 +763,90 @@ typename Gemm::Arguments args_from_options(const Options &options)
 }
 
 bool verify(const Options &options) {
-  return true;
-  /*
-  cutlass::DeviceAllocation<ElementA> block_reference_A;
-  cutlass::DeviceAllocation<ElementB> block_reference_B;
-  ElementA* reference_A = block_A.get();
-  ElementB* reference_B = block_B.get();
+  auto A = cute::make_tensor(tensor_A.host_data(),
+      cute::make_layout(cute::make_shape(options.m, options.k, options.l), stride_A));
+  auto B = cute::make_tensor(tensor_B.host_data(),
+      cute::make_layout(cute::make_shape(options.n, options.k, options.l), stride_B));
+  auto D = cute::make_tensor(tensor_ref_D.host_data(),
+      cute::make_layout(cute::make_shape(options.m, options.n, options.l), stride_D));
+  auto SFA = cute::make_tensor(blockscale_tensor_A.host_data(), layout_SFA);
+  auto SFB = cute::make_tensor(blockscale_tensor_B.host_data(), layout_SFB);
 
-  if constexpr (std::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout>) {
-    block_reference_A.reset(options.m * options.k);
-    unpack_strassen_layout<<<options.m, 256>>>(
-      block_A.get(), block_reference_A.get(), options.m, options.k);
-    reference_A = block_reference_A.get();
-  }
-  if constexpr (std::is_same_v<SubMatLayoutB, cutlass::layout::StrassenLayout>) {
-    block_reference_B.reset(options.k * options.n);
-    unpack_strassen_layout<<<options.k, 256>>>(
-      block_B.get(), block_reference_B.get(), options.k, options.n);
-    reference_B = block_reference_B.get();
-  }
+  cutlass::reference::host::GettBlockScalingMainloopParams<
+      ElementAccumulator, decltype(A), decltype(SFA), decltype(B), decltype(SFB)
+  > mainloop_params{A, SFA, B, SFB};
+  cutlass::reference::host::GettEpilogueParams<
+      float, float, ElementAccumulator, float, decltype(D), decltype(D)
+  > epilogue_params;
+  epilogue_params.D = D;
 
-  cutlass::TensorRef ref_A(reference_A, Gemm::LayoutA::packed({options.m, options.k}));
-  cutlass::TensorRef ref_B(reference_B, Gemm::LayoutB::packed({options.k, options.n}));
-  cutlass::TensorRef ref_C(block_C.get(), Gemm::LayoutC::packed({options.m, options.n}));
-  cutlass::TensorRef ref_D(block_ref_D.get(), Gemm::LayoutD::packed({options.m, options.n}));
+  int available_cpus = omp_get_num_procs();
+  int reference_threads = available_cpus > 1 ? available_cpus / 2 : 1;
+  int previous_threads = omp_get_max_threads();
+  int previous_dynamic = omp_get_dynamic();
+  omp_set_dynamic(0);
+  omp_set_num_threads(reference_threads);
+  std::cout << "  Host reference: " << reference_threads << " threads ("
+            << available_cpus << " available CPUs)" << std::endl;
+  cutlass::reference::host::Gemm3x(mainloop_params, epilogue_params);
+  omp_set_num_threads(previous_threads);
+  omp_set_dynamic(previous_dynamic);
 
-  //
-  // Compute reference output
-  //
+  tensor_D.sync_host();
 
-  // Create instantiation for device reference gemm kernel
-  DeviceGemmReference gemm_reference;
+  constexpr float epsilon = 0.02f;
+  constexpr float non_zero_floor = 1.f;
+  bool passed_C0 = true;
+  bool passed_C1 = true;
+  bool passed_C2 = true;
+  bool passed_C3 = true;
 
-  // Launch device reference gemm kernel
-  gemm_reference(
-    {options.m, options.n, options.k},
-    ElementAccumulator(options.alpha),
-    ref_A,
-    ref_B,
-    ElementAccumulator(options.beta),
-    ref_C,
-    ref_D);
-
-  // Wait for kernel to finish
-  CUDA_CHECK(cudaDeviceSynchronize());
-
-  // Check if output from CUTLASS kernel and reference kernel are equal or not
-  // bool passed = cutlass::reference::device::BlockCompareEqual(block_ref_D.get(), block_D.get(), block_D.size());
-  bool passed = true;
-
-  ElementD* host_ref_D = new ElementD[options.m*options.n];
-  CUDA_CHECK(cudaMemcpy(host_ref_D, block_ref_D.get(), options.m*options.n*sizeof(ElementD), cudaMemcpyDeviceToHost));
-  ElementD* host_D = new ElementD[options.m*options.n];
-  CUDA_CHECK(cudaMemcpy(host_D, block_D.get(), options.m*options.n*sizeof(ElementD), cudaMemcpyDeviceToHost));
-
-  float MAX_REL_ERR = 1e-2;
-#ifdef TENSOROP_ELEM_BF16
-  float MAX_ABS_ERR = 16;
-#elif defined(TENSOROP_ELEM_FP16)
-  float MAX_ABS_ERR = 5;
-#endif
-
+  auto computed_view = tensor_D.host_view();
+  auto reference_view = tensor_ref_D.host_view();
   for (int r = 0; r < options.m; r++) {
-  for (int c = 0; c < options.n; c++) {
-    auto idx = r*options.n + c;
-    TensorOpElem e1 = host_ref_D[idx];
-    TensorOpElem e2 = host_D[idx];
-    float err = fabs((float)e1 -(float)e2)/fabs((float)e1 + 1e-6);
-    float abs_err = fabs((float)e1 -(float)e2);
+    for (int c = 0; c < options.n; c++) {
+      auto coord = cutlass::make_Coord(r, c);
+      ElementD computed = computed_view.at(coord);
+      ElementD reference = reference_view.at(coord);
+      bool equal = cutlass::relatively_equal(
+        computed, reference, ElementD(epsilon), ElementD(non_zero_floor));
 
-    //C0
-    if (r < options.m/2 && c < options.n/2) {
-      if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
-        printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
-        passed = false;
+      // C0
+      if (r < options.m/2 && c < options.n/2 && !equal && passed_C0) {
+        printf("C0 mismatch at %d, %d: reference %f, computed %f\n",
+               r, c, float(reference), float(computed));
+        passed_C0 = false;
+      }
+
+      // C1
+      if (r < options.m/2 && c >= options.n/2 && !equal && passed_C1) {
+        printf("C1 mismatch at %d, %d: reference %f, computed %f\n",
+               r, c, float(reference), float(computed));
+        passed_C1 = false;
+      }
+
+      // C2
+      if (r >= options.m/2 && c < options.n/2 && !equal && passed_C2) {
+        printf("C2 mismatch at %d, %d: reference %f, computed %f\n",
+               r, c, float(reference), float(computed));
+        passed_C2 = false;
+      }
+
+      // C3
+      if (r >= options.m/2 && c >= options.n/2 && !equal && passed_C3) {
+        printf("C3 mismatch at %d, %d: reference %f, computed %f\n",
+               r, c, float(reference), float(computed));
+        passed_C3 = false;
       }
     }
-
-    //C1
-    if (r < options.m/2 && c >= options.n/2) {
-      if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
-        printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
-        passed = false;
-      }
-    }
-
-    //C2
-    if (r >= options.m/2 && c < options.n/2) {
-      if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
-        printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
-        passed = false;
-      }
-    }
-
-    //C3
-    if (r >= options.m/2 && c >= options.n/2) {
-      if (!((float)e1 == (float)e2 or err <= MAX_REL_ERR or abs_err <= MAX_ABS_ERR)) {
-        printf("389: %d, %d at ref: %f, computed: %f\n", r, c, (float)e1, (float)e2);
-        passed = false;
-      }
-    }
-    // if (r > 0 || c > 4112) 
-    if (!passed) break;
-  }
-  if (!passed) break;
   }
 
-  return passed;
-  */
+  std::cout << "  C0: " << (passed_C0 ? "Passed" : "Failed") << std::endl;
+  std::cout << "  C1: " << (passed_C1 ? "Passed" : "Failed") << std::endl;
+  std::cout << "  C2: " << (passed_C2 ? "Passed" : "Failed") << std::endl;
+  std::cout << "  C3: " << (passed_C3 ? "Passed" : "Failed") << std::endl;
+
+  return passed_C0 && passed_C1 && passed_C2 && passed_C3;
 }
 
 /// Execute a given example GEMM computation

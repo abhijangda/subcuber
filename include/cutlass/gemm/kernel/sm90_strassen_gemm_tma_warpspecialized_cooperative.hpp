@@ -296,7 +296,12 @@ public:
 
     CUTLASS_HOST_DEVICE
     int get_stride_B(int idx = 0) const {
-      return get<1>(dB);
+      if constexpr (cute::is_constant<1, decltype(get<0>(dB))>::value) {
+        return get<1>(dB);
+      }
+      else {
+        return get<0>(dB);
+      }
     }
 
     CUTLASS_HOST_DEVICE
@@ -890,24 +895,24 @@ public:
             auto l_coord = idx2crd(work_tile_info.L_idx, shape<4>(gB_nkl));
             auto blk_coord = make_coord(m_coord, n_coord, _, l_coord);
 
-            // Get the number of K tiles to compute for this work as well as the starting K tile offset of the work.
-            auto work_k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape_MNKL, blk_shape);
-            auto work_k_tile_start = TileScheduler::get_work_k_tile_start(work_tile_info);
-            auto k_tile_iter = cute::make_coord_iterator(idx2crd(work_k_tile_start, shape<3>(gA_mkl)), shape<3>(gA_mkl));
+            for (int load_sub_m_idx = 0; load_sub_m_idx < StrassenMiGroup::numMs(); ++load_sub_m_idx) {
+              auto load_k_tile_iter = cute::make_coord_iterator(shape<3>(gA_mkl));
+              load_k_tile_iter.coord += (is_fused && !CollectiveMainloop::IsStrassenLayout && load_sub_m_idx == 1) ? k_tile_count : 0;
 
-            collective_mainloop.load_auxiliary(
-              params.mainloop,
-              mainloop_pipeline,
-              mainloop_pipe_producer_state,
-              load_inputs,
-              blk_coord,
-              k_tile_iter, work_k_tile_count,
-              lane_idx,
-              block_rank_in_cluster,
-              shared_storage.tensors.mainloop
-            );
-            // Update starting pipeline state for the next tile
-            mainloop_pipe_producer_state.advance(work_k_tile_count);
+              collective_mainloop.load_auxiliary(
+                params.mainloop,
+                mainloop_pipeline,
+                mainloop_pipe_producer_state,
+                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? load_inputs :
+                  ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
+                blk_coord,
+                load_k_tile_iter, k_tile_count,
+                lane_idx,
+                block_rank_in_cluster,
+                shared_storage.tensors.mainloop
+              );
+              mainloop_pipe_producer_state.advance(k_tile_count);
+            }
 
             // Get next work tile
             auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(
