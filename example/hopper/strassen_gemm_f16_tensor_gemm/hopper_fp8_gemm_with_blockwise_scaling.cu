@@ -156,7 +156,7 @@ using EpilogueScheduleM2To6 = EpilogueScheduleM0;
 using TileShapeM0           = Shape<_128,_128,_128>;                           // Threadblock-level tile size
 using TileShapeM2To6        = Shape<_128,_128,_128>;
 using ClusterShape        = Shape<_1,_2,_1>;                                // Shape of the threadblocks in a cluster
-const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 5 : 5;          // Stage count maximized based on the tile size
+const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 6 : 6;          // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 5 : 5;
 const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 5 : 5;
 using PresumTileShapeA    = Shape<_4, _128>;
@@ -190,10 +190,10 @@ using PresumOpts = cutlass::gemm::device::PresumOpt<>;//0,0,0,0>;
 //TODO: Stages 5 produces wrong results for C2
 
 using AllPresumsKernel = AllPresums<>;
-using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
-               PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
-// using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                  //  PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+// using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
+              //  PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
+using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
+                                   PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
@@ -465,6 +465,7 @@ cutlass::HostTensor<ElementAccumulator, LayoutScalar> blockscale_tensor_A;
 cutlass::HostTensor<ElementAccumulator, LayoutScalar> blockscale_tensor_B;
 cutlass::HostTensor<typename Gemm::EpilogueOutputOp::ElementOutput, LayoutD> tensor_D;
 cutlass::HostTensor<typename Gemm::EpilogueOutputOp::ElementOutput, LayoutD> tensor_ref_D;
+std::array<std::vector<ElementA>, 4> reference_presum_A;
 
 #endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 
@@ -695,7 +696,7 @@ void initialize(const Options &options) {
 
   initialize_tensor(tensor_A.host_view(), dist_A, seed + 2022, false);
   initialize_tensor(tensor_B.host_view(), dist_B, seed + 2023, false);
-  initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, false);
+  initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, true);
   initialize_scale_tensor(blockscale_tensor_B.host_view(), dist_scaleB, seed + 2026, false);
   cutlass::reference::host::TensorFill(tensor_D.host_view());
 
@@ -792,12 +793,11 @@ void strassen_winograd_reference(const Options &options) {
   auto presum_stride_b = cutlass::make_cute_packed_stride(StrideB{}, {halfN,halfK,1});
   auto presum_layout_a = make_layout(make_shape(halfM,halfK,1), presum_stride_a);
   auto presum_layout_b = make_layout(make_shape(halfN,halfK,1), presum_stride_b);
-  std::array<std::vector<ElementA>,4> presum_a;
   std::array<std::vector<ElementB>,4> presum_b;
   std::array<std::vector<ElementBlockScale>,4> presum_scale_a;
   std::array<std::vector<ElementBlockScale>,4> presum_scale_b;
   for (int presum_idx = 0; presum_idx < 4; ++presum_idx) {
-    presum_a[presum_idx].resize(size_t(halfM)*halfK);
+    reference_presum_A[presum_idx].resize(size_t(halfM)*halfK);
     presum_b[presum_idx].resize(size_t(halfN)*halfK);
     presum_scale_a[presum_idx].resize(size(filter_zeros(presum_layout_sfa)));
     presum_scale_b[presum_idx].resize(size(filter_zeros(presum_layout_sfb)));
@@ -823,12 +823,11 @@ void strassen_winograd_reference(const Options &options) {
         }
       }
       for (int presum_idx = 0; presum_idx < 4; ++presum_idx) {
-        float scale = max_abs[presum_idx] > 0.0f ?
-          std::max(max_abs[presum_idx]/float(cutlass::platform::numeric_limits<ElementA>::max()), FLT_MIN) : 1.0f;
+        float scale = 1.0f;
         presum_scale_a[presum_idx][presum_layout_sfa(make_coord(row,block*ScaleK,0))] = scale;
         for (int element_idx = 0; element_idx < ScaleK; ++element_idx) {
           auto coord = make_coord(row,block*ScaleK+element_idx,0);
-          presum_a[presum_idx][presum_layout_a(coord)] = ElementA(values[presum_idx][element_idx]/scale);
+          reference_presum_A[presum_idx][presum_layout_a(coord)] = ElementA(values[presum_idx][element_idx]/scale);
         }
       }
     }
@@ -887,7 +886,7 @@ void strassen_winograd_reference(const Options &options) {
   auto SFB0 = make_tensor(SFB.data(), quadrant_layout_sfb);
   auto SFB2 = make_tensor(SFB.data()+layout_SFB(make_coord(0,halfK,0)), quadrant_layout_sfb);
   auto SFB3 = make_tensor(SFB.data()+layout_SFB(make_coord(halfN,halfK,0)), quadrant_layout_sfb);
-  auto input_presum_a = [&](int presum_idx) { return make_tensor(presum_a[presum_idx].data(), presum_layout_a); };
+  auto input_presum_a = [&](int presum_idx) { return make_tensor(reference_presum_A[presum_idx].data(), presum_layout_a); };
   auto input_presum_b = [&](int presum_idx) { return make_tensor(presum_b[presum_idx].data(), presum_layout_b); };
   auto scale_presum_a = [&](int presum_idx) { return make_tensor(presum_scale_a[presum_idx].data(), presum_layout_sfa); };
   auto scale_presum_b = [&](int presum_idx) { return make_tensor(presum_scale_b[presum_idx].data(), presum_layout_sfb); };
@@ -939,7 +938,50 @@ void strassen_winograd_reference(const Options &options) {
   }
 }
 
-bool verify(const Options &options) {
+bool verify_a_presums(const Options& options, ElementA const* device_presum_A) {
+  const int halfM = options.m / 2;
+  const int halfK = options.k / 2;
+  const size_t presum_elements = size_t(halfM) * halfK;
+  std::vector<ElementA> computed_presum_A(4 * presum_elements);
+  CUDA_CHECK(cudaMemcpy(computed_presum_A.data(), device_presum_A,
+                        computed_presum_A.size() * sizeof(ElementA), cudaMemcpyDeviceToHost));
+
+  struct PresumCheck {
+    char const* name;
+    int reference_idx;
+    APresums presum;
+  };
+  constexpr std::array<PresumCheck, 4> checks{{
+    {"A02", 2, APresums::A02},
+    {"S1", 0, APresums::S1},
+    {"S2", 1, APresums::S2},
+    {"A1S2", 3, APresums::A1S2},
+  }};
+
+  bool all_passed = true;
+  for (auto const& check : checks) {
+    int workspace_idx = AllPresumsM0::indexAPresum(check.presum);
+    bool passed = true;
+    for (size_t idx = 0; idx < presum_elements; ++idx) {
+      ElementA reference = reference_presum_A[check.reference_idx][idx];
+      ElementA computed = computed_presum_A[size_t(workspace_idx) * presum_elements + idx];
+      if (float(reference) != float(computed)) {
+        size_t row = idx / halfK;
+        size_t column = idx % halfK;
+        std::cout << "  A presum " << check.name << " mismatch at index " << idx
+                  << " (" << row << ", " << column << "): reference " << float(reference)
+                  << ", computed " << float(computed) << std::endl;
+        passed = false;
+        break;
+      }
+    }
+    std::cout << "  A presum " << check.name << ": " << (passed ? "Passed" : "Failed") << std::endl;
+    all_passed = all_passed && passed;
+  }
+  return all_passed;
+}
+
+bool verify(const Options &options, ElementA const* device_presum_A) {
   int available_cpus = omp_get_num_procs();
   int reference_threads = available_cpus > 1 ? available_cpus / 2 : 1;
   int previous_threads = omp_get_max_threads();
@@ -951,6 +993,8 @@ bool verify(const Options &options) {
   strassen_winograd_reference(options);
   omp_set_num_threads(previous_threads);
   omp_set_dynamic(previous_dynamic);
+
+  bool passed_A_presums = verify_a_presums(options, device_presum_A);
 
   tensor_D.sync_host();
 
@@ -1007,7 +1051,7 @@ bool verify(const Options &options) {
   std::cout << "  C2: " << (passed_C2 ? "Passed" : "Failed") << std::endl;
   std::cout << "  C3: " << (passed_C3 ? "Passed" : "Failed") << std::endl;
 
-  return passed_C0 && passed_C1 && passed_C2 && passed_C3;
+  return passed_A_presums && passed_C0 && passed_C1 && passed_C2 && passed_C3;
 }
 
 /// Execute a given example GEMM computation
@@ -1052,7 +1096,7 @@ int run(Options &options)
 
   if (options.reference_check) {
     CUDA_CHECK(cudaDeviceSynchronize());
-    result.passed = verify(options);
+    result.passed = verify(options, Gemm::get_presum_a_ptr(arguments, workspace.get()));
 
     std::cout << "  Disposition: " << (result.passed ? "Passed" : "Failed") << std::endl;
 

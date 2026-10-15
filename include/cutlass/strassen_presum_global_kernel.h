@@ -10,6 +10,16 @@ namespace cutlass {
 namespace gemm {
 namespace device {
 
+template <typename Element>
+CUTLASS_GLOBAL
+void KernelFill(Element* ptr, size_t count, Element value) {
+  for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+       idx < count;
+       idx += size_t(blockDim.x) * gridDim.x) {
+    ptr[idx] = value;
+  }
+}
+
 template <typename GemmKernel0>
 CUTLASS_GLOBAL
 __launch_bounds__(GemmKernel0::kThreadCount, 1)

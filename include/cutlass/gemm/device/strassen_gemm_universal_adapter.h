@@ -836,6 +836,18 @@ public:
       workspace_offset += get_presum_a_scale_workspace_size(args);
       presum_b_scale_workspace = (char*)workspace + workspace_offset;
       workspace_offset += get_presum_b_scale_workspace_size(args);
+
+      if constexpr (StrassenGroups::PresumGroup::AllPresums::APresumComputeLoads(PresumCompute).numAccess() > 0) {
+        using ElementBlockScale = typename GemmKernelM0::Mma::ElementBlockScale;
+        size_t scale_count = get_presum_a_scale_workspace_size(args) / sizeof(ElementBlockScale);
+        int block_count = int((scale_count + 255) / 256);
+        KernelFill<<<block_count, 256, 0, stream>>>(
+          static_cast<ElementBlockScale*>(presum_a_scale_workspace), scale_count, ElementBlockScale(1));
+        cudaError_t result = cudaGetLastError();
+        if (result != cudaSuccess) {
+          return Status::kErrorInternal;
+        }
+      }
     }
 
     int* sem_workspace = (int*)(((char*)workspace) + workspace_offset);
