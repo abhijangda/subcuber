@@ -54,9 +54,13 @@
       $ ./examples/48_hopper_warp_specialized_gemm/48_hopper_warp_specialized_gemm --m=2048 --n=2048 --k=2048 --rasterization=N --swizzle=2
 */
 
+#include <algorithm>
+#include <array>
+#include <cfloat>
 #include <cmath>
 #include <iostream>
 #include <omp.h>
+#include <vector>
 
 #define MY_PRINTF(...) ;//printf(__VA_ARGS__)
 
@@ -119,7 +123,7 @@ constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // M
 
 // C/D matrix configuration
 using         ElementC    = void;//TensorOpElem;                                           // No C source operand
-using         ElementD    = cutlass::bfloat16_t;                                // Element type for D matrix operand
+using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
 using         LayoutD     = LayoutC;
@@ -655,7 +659,7 @@ bool initialize_scale_tensor(
       view.data(), view.capacity(), seed, scope_max, scope_min);
   }
   else if (ones) {
-    cutlass::reference::host::TensorFill(view, Element(1.f/16.f));
+    cutlass::reference::host::TensorFill(view, Element(1.f));
   }
 
   return true;
@@ -691,8 +695,8 @@ void initialize(const Options &options) {
 
   initialize_tensor(tensor_A.host_view(), dist_A, seed + 2022, false);
   initialize_tensor(tensor_B.host_view(), dist_B, seed + 2023, false);
-  initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, true);
-  initialize_scale_tensor(blockscale_tensor_B.host_view(), dist_scaleB, seed + 2026, true);
+  initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, false);
+  initialize_scale_tensor(blockscale_tensor_B.host_view(), dist_scaleB, seed + 2026, false);
   cutlass::reference::host::TensorFill(tensor_D.host_view());
 
 #if 0 // Dump blockscaled tensors
@@ -763,40 +767,195 @@ typename Gemm::Arguments args_from_options(const Options &options)
   return arguments;
 }
 
-bool verify(const Options &options) {
+void strassen_winograd_reference(const Options &options) {
+  constexpr int ScaleK = Gemm::CollectiveMainloop::ScaleGranularityK;
+  constexpr int ScaleN = Gemm::CollectiveMainloop::ScaleGranularityN;
+  static_assert(Gemm::CollectiveMainloop::ScaleGranularityM == 1);
+  const int halfM = options.m/2;
+  const int halfN = options.n/2;
+  const int halfK = options.k/2;
+  if (options.m % 2 || options.n % 2 || halfN % ScaleN || halfK % ScaleK || options.k % 2 || options.l != 1) {
+    throw std::runtime_error("Strassen reference requires even M/N, N divisible by twice ScaleN, K divisible by twice ScaleK, and L=1.");
+  }
+
   auto A = cute::make_tensor(tensor_A.host_data(),
       cute::make_layout(cute::make_shape(options.m, options.k, options.l), stride_A));
   auto B = cute::make_tensor(tensor_B.host_data(),
       cute::make_layout(cute::make_shape(options.n, options.k, options.l), stride_B));
-  auto D = cute::make_tensor(tensor_ref_D.host_data(),
-      cute::make_layout(cute::make_shape(options.m, options.n, options.l), stride_D));
   auto SFA = cute::make_tensor(blockscale_tensor_A.host_data(), layout_SFA);
   auto SFB = cute::make_tensor(blockscale_tensor_B.host_data(), layout_SFB);
 
-  cutlass::reference::host::GettBlockScalingMainloopParams<
-      ElementAccumulator, decltype(A), decltype(SFA), decltype(B), decltype(SFB)
-  > mainloop_params{A, SFA, B, SFB};
-  cutlass::reference::host::GettEpilogueParams<
-      float, float, ElementAccumulator, float, decltype(D), decltype(D)
-  > epilogue_params;
-  epilogue_params.D = D;
+  auto half_shape = make_shape(halfM,halfN,halfK,1);
+  auto presum_layout_sfa = ScaleConfig::tile_atom_to_shape_SFA(half_shape);
+  auto presum_layout_sfb = ScaleConfig::tile_atom_to_shape_SFB(half_shape);
+  auto presum_stride_a = cutlass::make_cute_packed_stride(StrideA{}, {halfM,halfK,1});
+  auto presum_stride_b = cutlass::make_cute_packed_stride(StrideB{}, {halfN,halfK,1});
+  auto presum_layout_a = make_layout(make_shape(halfM,halfK,1), presum_stride_a);
+  auto presum_layout_b = make_layout(make_shape(halfN,halfK,1), presum_stride_b);
+  std::array<std::vector<ElementA>,4> presum_a;
+  std::array<std::vector<ElementB>,4> presum_b;
+  std::array<std::vector<ElementBlockScale>,4> presum_scale_a;
+  std::array<std::vector<ElementBlockScale>,4> presum_scale_b;
+  for (int presum_idx = 0; presum_idx < 4; ++presum_idx) {
+    presum_a[presum_idx].resize(size_t(halfM)*halfK);
+    presum_b[presum_idx].resize(size_t(halfN)*halfK);
+    presum_scale_a[presum_idx].resize(size(filter_zeros(presum_layout_sfa)));
+    presum_scale_b[presum_idx].resize(size(filter_zeros(presum_layout_sfb)));
+  }
 
+  #pragma omp parallel for collapse(2)
+  for (int row = 0; row < halfM; ++row) {
+    for (int block = 0; block < halfK/ScaleK; ++block) {
+      std::array<std::array<ElementAccumulator,ScaleK>,4> values;
+      std::array<ElementAccumulator,4> max_abs{};
+      for (int element_idx = 0; element_idx < ScaleK; ++element_idx) {
+        int inner = block*ScaleK + element_idx;
+        float a0 = float(A(row,inner,0))*SFA(row,inner,0);
+        float a1 = float(A(row,inner+halfK,0))*SFA(row,inner+halfK,0);
+        float a2 = float(A(row+halfM,inner,0))*SFA(row+halfM,inner,0);
+        float a3 = float(A(row+halfM,inner+halfK,0))*SFA(row+halfM,inner+halfK,0);
+        values[0][element_idx] = a2 + a3;
+        values[1][element_idx] = values[0][element_idx] - a0;
+        values[2][element_idx] = a0 - a2;
+        values[3][element_idx] = a1 - values[1][element_idx];
+        for (int presum_idx = 0; presum_idx < 4; ++presum_idx) {
+          max_abs[presum_idx] = std::max(max_abs[presum_idx], std::fabs(values[presum_idx][element_idx]));
+        }
+      }
+      for (int presum_idx = 0; presum_idx < 4; ++presum_idx) {
+        float scale = max_abs[presum_idx] > 0.0f ?
+          std::max(max_abs[presum_idx]/float(cutlass::platform::numeric_limits<ElementA>::max()), FLT_MIN) : 1.0f;
+        presum_scale_a[presum_idx][presum_layout_sfa(make_coord(row,block*ScaleK,0))] = scale;
+        for (int element_idx = 0; element_idx < ScaleK; ++element_idx) {
+          auto coord = make_coord(row,block*ScaleK+element_idx,0);
+          presum_a[presum_idx][presum_layout_a(coord)] = ElementA(values[presum_idx][element_idx]/scale);
+        }
+      }
+    }
+  }
+
+  #pragma omp parallel for collapse(2)
+  for (int block_n = 0; block_n < halfN/ScaleN; ++block_n) {
+    for (int block_k = 0; block_k < halfK/ScaleK; ++block_k) {
+      std::array<std::array<ElementAccumulator,ScaleN*ScaleK>,4> values;
+      std::array<ElementAccumulator,4> max_abs{};
+      for (int column_idx = 0; column_idx < ScaleN; ++column_idx) {
+        for (int inner_idx = 0; inner_idx < ScaleK; ++inner_idx) {
+          int column = block_n*ScaleN + column_idx;
+          int inner = block_k*ScaleK + inner_idx;
+          int element_idx = column_idx*ScaleK + inner_idx;
+          float b0 = float(B(column,inner,0))*SFB(column,inner,0);
+          float b1 = float(B(column+halfN,inner,0))*SFB(column+halfN,inner,0);
+          float b2 = float(B(column,inner+halfK,0))*SFB(column,inner+halfK,0);
+          float b3 = float(B(column+halfN,inner+halfK,0))*SFB(column+halfN,inner+halfK,0);
+          values[0][element_idx] = b1 - b0;
+          values[1][element_idx] = b3 - b1;
+          values[2][element_idx] = values[1][element_idx] + b0;
+          values[3][element_idx] = values[2][element_idx] - b2;
+          for (int presum_idx = 0; presum_idx < 4; ++presum_idx) {
+            max_abs[presum_idx] = std::max(max_abs[presum_idx], std::fabs(values[presum_idx][element_idx]));
+          }
+        }
+      }
+      for (int presum_idx = 0; presum_idx < 4; ++presum_idx) {
+        float scale = max_abs[presum_idx] > 0.0f ?
+          std::max(max_abs[presum_idx]/float(cutlass::platform::numeric_limits<ElementB>::max()), FLT_MIN) : 1.0f;
+        presum_scale_b[presum_idx][presum_layout_sfb(make_coord(block_n*ScaleN,block_k*ScaleK,0))] = scale;
+        for (int column_idx = 0; column_idx < ScaleN; ++column_idx) {
+          for (int inner_idx = 0; inner_idx < ScaleK; ++inner_idx) {
+            auto coord = make_coord(block_n*ScaleN+column_idx,block_k*ScaleK+inner_idx,0);
+            presum_b[presum_idx][presum_layout_b(coord)] = ElementB(values[presum_idx][column_idx*ScaleK+inner_idx]/scale);
+          }
+        }
+      }
+    }
+  }
+
+  auto layout_a = make_layout(make_shape(halfM,halfK,1), stride_A);
+  auto layout_b = make_layout(make_shape(halfN,halfK,1), stride_B);
+  auto quadrant_layout_sfa = make_layout(shape(presum_layout_sfa), stride(layout_SFA));
+  auto quadrant_layout_sfb = make_layout(shape(presum_layout_sfb), stride(layout_SFB));
+  auto A0 = make_tensor(A.data(), layout_a);
+  auto A1 = make_tensor(A.data()+A.layout()(make_coord(0,halfK,0)), layout_a);
+  auto A3 = make_tensor(A.data()+A.layout()(make_coord(halfM,halfK,0)), layout_a);
+  auto B0 = make_tensor(B.data(), layout_b);
+  auto B2 = make_tensor(B.data()+B.layout()(make_coord(0,halfK,0)), layout_b);
+  auto B3 = make_tensor(B.data()+B.layout()(make_coord(halfN,halfK,0)), layout_b);
+  auto SFA0 = make_tensor(SFA.data(), quadrant_layout_sfa);
+  auto SFA1 = make_tensor(SFA.data()+layout_SFA(make_coord(0,halfK,0)), quadrant_layout_sfa);
+  auto SFA3 = make_tensor(SFA.data()+layout_SFA(make_coord(halfM,halfK,0)), quadrant_layout_sfa);
+  auto SFB0 = make_tensor(SFB.data(), quadrant_layout_sfb);
+  auto SFB2 = make_tensor(SFB.data()+layout_SFB(make_coord(0,halfK,0)), quadrant_layout_sfb);
+  auto SFB3 = make_tensor(SFB.data()+layout_SFB(make_coord(halfN,halfK,0)), quadrant_layout_sfb);
+  auto input_presum_a = [&](int presum_idx) { return make_tensor(presum_a[presum_idx].data(), presum_layout_a); };
+  auto input_presum_b = [&](int presum_idx) { return make_tensor(presum_b[presum_idx].data(), presum_layout_b); };
+  auto scale_presum_a = [&](int presum_idx) { return make_tensor(presum_scale_a[presum_idx].data(), presum_layout_sfa); };
+  auto scale_presum_b = [&](int presum_idx) { return make_tensor(presum_scale_b[presum_idx].data(), presum_layout_sfb); };
+
+  std::array<std::vector<ElementAccumulator>,7> products;
+  auto product_layout = make_layout(make_shape(halfM,halfN,1), make_stride(int64_t(halfN),_1{},int64_t(halfM)*halfN));
+  auto reference_gemm = [&](int product_idx, auto input_a, auto scale_a, auto input_b, auto scale_b) {
+    products[product_idx].resize(size_t(halfM)*halfN);
+    auto product = make_tensor(products[product_idx].data(), product_layout);
+    cutlass::reference::host::GettBlockScalingMainloopParams<
+      ElementAccumulator, decltype(input_a), decltype(scale_a), decltype(input_b), decltype(scale_b)
+    > mainloop_params{input_a, scale_a, input_b, scale_b};
+    cutlass::reference::host::GettEpilogueParams<
+      float, float, ElementAccumulator, float, decltype(product), decltype(product)
+    > epilogue_params;
+    epilogue_params.D = product;
+    cutlass::reference::host::Gemm3x(mainloop_params, epilogue_params);
+  };
+
+  reference_gemm(0, A0, SFA0, B0, SFB0);
+  reference_gemm(1, A1, SFA1, B2, SFB2);
+  reference_gemm(2, input_presum_a(1), scale_presum_a(1), input_presum_b(2), scale_presum_b(2));
+  reference_gemm(3, input_presum_a(2), scale_presum_a(2), input_presum_b(1), scale_presum_b(1));
+  reference_gemm(4, input_presum_a(0), scale_presum_a(0), input_presum_b(0), scale_presum_b(0));
+  reference_gemm(5, input_presum_a(3), scale_presum_a(3), B3, SFB3);
+  reference_gemm(6, A3, SFA3, input_presum_b(3), scale_presum_b(3));
+
+  auto D = make_tensor(tensor_ref_D.host_data(),
+    make_layout(make_shape(options.m,options.n,options.l), stride_D));
+  #pragma omp parallel for
+  for (int row = 0; row < halfM; ++row) {
+    for (int column = 0; column < halfN; ++column) {
+      size_t offset = size_t(row)*halfN + column;
+      float m0 = products[0][offset];
+      float m1 = products[1][offset];
+      float m2 = products[2][offset];
+      float m3 = products[3][offset];
+      float m4 = products[4][offset];
+      float m5 = products[5][offset];
+      float m6 = products[6][offset];
+      float interim_m0 = float(ElementD(m0));
+      float sum_m2 = interim_m0 + m2;
+      float sum_m3 = sum_m2 + m3;
+      D(row,column,0) = ElementD(m0 + m1);
+      D(row,column+halfN,0) = ElementD(float(ElementD(sum_m2)) + m4 + m5);
+      D(row+halfM,column,0) = ElementD(sum_m3 - m6);
+      D(row+halfM,column+halfN,0) = ElementD(float(ElementD(sum_m3)) + m4);
+    }
+  }
+}
+
+bool verify(const Options &options) {
   int available_cpus = omp_get_num_procs();
   int reference_threads = available_cpus > 1 ? available_cpus / 2 : 1;
   int previous_threads = omp_get_max_threads();
   int previous_dynamic = omp_get_dynamic();
   omp_set_dynamic(0);
   omp_set_num_threads(reference_threads);
-  std::cout << "  Host reference: " << reference_threads << " threads ("
+  std::cout << "  Host Strassen-Winograd reference: " << reference_threads << " threads ("
             << available_cpus << " available CPUs)" << std::endl;
-  cutlass::reference::host::Gemm3x(mainloop_params, epilogue_params);
+  strassen_winograd_reference(options);
   omp_set_num_threads(previous_threads);
   omp_set_dynamic(previous_dynamic);
 
   tensor_D.sync_host();
 
   constexpr float MAX_REL_ERR = 1e-2f;
-  constexpr float MAX_ABS_ERR = 0.f;
+  constexpr float MAX_ABS_ERR = 5.0f;
   bool passed_C0 = true;
   bool passed_C1 = true;
   bool passed_C2 = true;

@@ -151,7 +151,8 @@ struct GlobalIterator {
     if (isRowOrColumnMajor) {
       isValidTB = (!isAorB && tb_offset.column() < stride) || (isAorB && tb_offset.row() < extent.row());
     } else {
-      isValidTB = (!isAorB && tb_offset.row()    < stride) || (isAorB && tb_offset.column() < extent.row());
+      isValidTB = (!isAorB && tb_offset.row()    < stride) ||
+          (isAorB && tb_offset.row() < extent.row() && tb_offset.column() < extent.column());
     }
   }
 

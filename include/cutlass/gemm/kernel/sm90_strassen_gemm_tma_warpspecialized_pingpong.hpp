@@ -374,6 +374,16 @@ public:
     }
 
     CUTLASS_HOST_DEVICE
+    constexpr bool get_layout_B(int idx = 0) const {
+      if constexpr (cute::is_constant<1, decltype(get<0>(dB))>::value) {
+        return true;
+      }
+      else {
+        return false;
+      }
+    }
+
+    CUTLASS_HOST_DEVICE
     int get_stride_MA(int idx = 0) const {
       return get_problem_shape_k(idx)/2;
     }

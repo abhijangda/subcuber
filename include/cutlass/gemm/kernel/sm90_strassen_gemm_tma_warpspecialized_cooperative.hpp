@@ -378,7 +378,8 @@ public:
   // Convert to underlying arguments. In this case, a simple copy for the aliased type.
   static
   Params
-  to_underlying_arguments(Arguments const& args, ElementA* presum_m_a, ElementB* presum_m_b, ElementD* postsum_m, void* workspace) {
+  to_underlying_arguments(Arguments const& args, ElementA* presum_m_a, ElementB* presum_m_b, ElementD* postsum_m, void* workspace,
+                         void* presum_a_scale_workspace = nullptr, void* presum_b_scale_workspace = nullptr) {
     CUTLASS_TRACE_HOST("to_underlying_arguments():");
 
     auto problem_shape = args.problem_shape;
@@ -434,10 +435,20 @@ public:
       half_problem_shape_MNKL, TileShape{}, ClusterShape{}, hw_info, args.scheduler, scheduler_workspace, NumEpilogueSubTiles
       );
 
+    auto mainloop_params = [&]() {
+      if constexpr (requires { args.mainloop.ptr_SFA; args.mainloop.ptr_SFB; }) {
+        using ElementBlockScale = typename CollectiveMainloop::ElementBlockScale;
+        return CollectiveMainloop::to_underlying_arguments(args.problem_shape, presum_m_a, presum_m_b, args.mainloop, mainloop_workspace,
+          static_cast<ElementBlockScale*>(presum_a_scale_workspace), static_cast<ElementBlockScale*>(presum_b_scale_workspace));
+      } else {
+        return CollectiveMainloop::to_underlying_arguments(args.problem_shape, presum_m_a, presum_m_b, args.mainloop, mainloop_workspace);
+      }
+    }();
+
     return {
       args.mode,
       problem_shape,
-      CollectiveMainloop::to_underlying_arguments(args.problem_shape, presum_m_a, presum_m_b, args.mainloop, mainloop_workspace),
+      mainloop_params,
       CollectiveEpilogue::to_underlying_arguments(args.problem_shape, args.epilogue, const_cast<ElementA*>(args.mainloop.ptr_A), postsum_m, epilogue_workspace),
       hw_info,
       scheduler,
@@ -892,6 +903,8 @@ public:
       }
       else if (producer_warp_role == ProducerWarpRole::MainloopAux) {
         if constexpr (IsMainloopAuxiliaryLoadNeeded) {
+          constexpr bool is_fused_auxiliary_k_load = is_fused && !CollectiveMainloop::IsStrassenLayout &&
+                                                      !requires { params.mainloop.ptr_SFB; };
           while (work_tile_info.is_valid()) {
             if (!TileScheduler::valid_warpgroup_in_work_tile(work_tile_info)) {
               auto [next_work_tile_info, increment_pipe] = scheduler.fetch_next_work(work_tile_info);
@@ -907,13 +920,13 @@ public:
 
             for (int load_sub_m_idx = 0; load_sub_m_idx < StrassenMiGroup::numMs(); ++load_sub_m_idx) {
               auto load_k_tile_iter = cute::make_coord_iterator(shape<3>(gA_mkl));
-              load_k_tile_iter.coord += (is_fused && !CollectiveMainloop::IsStrassenLayout && load_sub_m_idx == 1) ? k_tile_count : 0;
+              load_k_tile_iter.coord += (is_fused_auxiliary_k_load && load_sub_m_idx == 1) ? k_tile_count : 0;
 
               collective_mainloop.load_auxiliary(
                 params.mainloop,
                 mainloop_pipeline,
                 mainloop_pipe_producer_state,
-                ((is_fused && !CollectiveMainloop::IsStrassenLayout) || load_sub_m_idx == 0) ? load_inputs :
+                (is_fused_auxiliary_k_load || load_sub_m_idx == 0) ? load_inputs :
                   ((load_sub_m_idx == 1) ? load_inputs2 : load_inputs3),
                 blk_coord,
                 load_k_tile_iter, k_tile_count,

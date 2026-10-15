@@ -419,6 +419,14 @@ struct CollectiveStrassenMma<
     Arguments(const Other& other) : ptr_A(other.ptr_A), dA(other.dA), ptr_B(other.ptr_B), dB(other.dB),
                                    ptr_SFA(other.ptr_SFA), layout_SFA(other.layout_SFA), ptr_SFB(other.ptr_SFB), layout_SFB(other.layout_SFB)
     {}
+
+    constexpr uint get_scale_a_elems() const {
+      return ScaleGranularityK;
+    }
+
+    constexpr uint get_scale_b_elems() const {
+      return ScaleGranularityN * ScaleGranularityK;
+    }
   };
 
   // Device side kernel params
@@ -492,6 +500,8 @@ struct CollectiveStrassenMma<
       SM90_TMA_LOAD{},
       make_tensor(static_cast<ElementB const*>(nullptr), repeat_like(PresumStrideB{}, int32_t(0)), PresumStrideB{}),
       PresumSmemLayoutB__{}));
+    TMA_SFA tma_load_presum_sfa;
+    TMA_SFB tma_load_presum_sfb;
     TMA_PresumLoad_A tma_load_presumld_a{};
     TMA_PresumLoad_B tma_load_presumld_b{};
 
@@ -501,6 +511,8 @@ struct CollectiveStrassenMma<
     uint32_t presum_tile_log_multiplier_b_ = 0;
     uint32_t presum_tile_log_divider_a_ = 0;
     uint32_t presum_tile_log_divider_b_ = 0;
+    ElementBlockScale* ptr_presum_scale_A = nullptr;
+    ElementBlockScale* ptr_presum_scale_B = nullptr;
 
     CUTLASS_HOST_DEVICE
     uint32_t get_presum_tile_log_multiplier_a() const {
@@ -567,7 +579,8 @@ struct CollectiveStrassenMma<
 
   template <class ProblemShape>
   static constexpr Params
-  to_underlying_arguments(ProblemShape const& problem_shape, ElementA* ptr_presum_a, ElementB* ptr_presum_b, Arguments const& args, void* workspace) {
+  to_underlying_arguments(ProblemShape const& problem_shape, ElementA* ptr_presum_a, ElementB* ptr_presum_b, Arguments const& args, void* workspace,
+                         ElementBlockScale* ptr_presum_scale_a = nullptr, ElementBlockScale* ptr_presum_scale_b = nullptr) {
     (void) workspace;
 
     // Optionally append 1s until problem shape is rank-4 (MNKL), in case it is only rank-3 (MNK)
@@ -639,6 +652,10 @@ struct CollectiveStrassenMma<
       get<0>(presum_stride_b) = K/2;
     }
 
+    LayoutSFA presum_layout_sfa = ScaleConfig::tile_atom_to_shape_SFA(make_shape(4*M/2,N/2,K/2,L));
+    LayoutSFB presum_layout_sfb = ScaleConfig::tile_atom_to_shape_SFB(make_shape(M/2,N/2,4*K/2,L));
+    Tensor tensor_presum_sfa = make_tensor((ElementBlockScale const*)ptr_presum_scale_a, filter_zeros(presum_layout_sfa));
+    Tensor tensor_presum_sfb = make_tensor((ElementBlockScale const*)ptr_presum_scale_b, filter_zeros(presum_layout_sfb));
     Tensor tensor_presum_a = make_tensor(ptr_presum_A, make_layout(make_shape(4*M/2,K/2,L), presum_stride_a));
     Tensor tensor_presum_b = make_tensor(ptr_presum_B, make_layout(make_shape(4*N/2,K/2,L), presum_stride_b));
 
@@ -654,6 +671,25 @@ struct CollectiveStrassenMma<
         SmemLayoutB{}(_,_,cute::Int<0>{}),
         TileShape{},
         ClusterShape{});
+
+    typename Params::TMA_SFA tma_load_presum_sfa{};
+    if constexpr (IsTmaLoadSFA) {
+      tma_load_presum_sfa = make_tma_copy(
+          GmemTiledCopyScaleTMA{},
+          tensor_presum_sfa,
+          filter_zeros(SmemLayoutSFA{})(_,_,cute::Int<0>{}),
+          Shape<Int<ScaleMsPerTile>, Int<1>>{},
+          _1{});
+    }
+    typename Params::TMA_SFB tma_load_presum_sfb{};
+    if constexpr (IsTmaLoadSFB) {
+      tma_load_presum_sfb = make_tma_copy(
+          GmemTiledCopyScaleTMA{},
+          tensor_presum_sfb,
+          filter_zeros(SmemLayoutSFB{})(_,_,cute::Int<0>{}),
+          Shape<Int<ScaleNsPerTile>, Int<1>>{},
+          _1{});
+    }
 
     typename Params::TMA_PresumLoad_A tma_load_presumld_a = make_tma_copy(
       SM90_TMA_LOAD{},
@@ -682,13 +718,17 @@ struct CollectiveStrassenMma<
       args.layout_SFB,
       tma_load_presum_a,
       tma_load_presum_b,
+      tma_load_presum_sfa,
+      tma_load_presum_sfb,
       tma_load_presumld_a,
       tma_load_presumld_b,
       (ElementA*)ptr_presum_a, (ElementB*)ptr_presum_b,
       presum_tile_log_multiplier_a,
       presum_tile_log_multiplier_b,
       presum_tile_log_divider_a,
-      presum_tile_log_divider_b
+      presum_tile_log_divider_b,
+      ptr_presum_scale_a,
+      ptr_presum_scale_b
     };;
   }
 
@@ -919,12 +959,94 @@ struct CollectiveStrassenMma<
     Tensor gPresumB10 = local_tile(presum_B10, TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
     Tensor gPresumS3 = local_tile(presum_S3, TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
     Tensor gPresumS3B2 = local_tile(presum_S3B2, TileShape{}, make_coord(_,_,_), Step< X,_1,_1>{});
+
+    Tensor mSFA_mkl = get<2>(original_inputs);
+    Tensor mSFB_nkl = get<3>(original_inputs);
+    LayoutSFA presum_layout_sfa = ScaleConfig::tile_atom_to_shape_SFA(make_shape(4*halfM,halfN,halfK,int(L)));
+    LayoutSFB presum_layout_sfb = ScaleConfig::tile_atom_to_shape_SFB(make_shape(halfM,halfN,4*halfK,int(L)));
+    auto presum_mSFA_mkl = [&]() {
+      if constexpr (IsTmaLoadSFA) {
+        return mainloop_params.tma_load_presum_sfa.get_tma_tensor(shape(filter_zeros(presum_layout_sfa)));
+      }
+      else {
+        return make_tensor(make_gmem_ptr(static_cast<ElementBlockScale const*>(mainloop_params.ptr_presum_scale_A)), presum_layout_sfa);
+      }
+    }();
+    auto presum_mSFB_nkl = [&]() {
+      if constexpr (IsTmaLoadSFB) {
+        return mainloop_params.tma_load_presum_sfb.get_tma_tensor(shape(filter_zeros(presum_layout_sfb)));
+      }
+      else {
+        return make_tensor(make_gmem_ptr(static_cast<ElementBlockScale const*>(mainloop_params.ptr_presum_scale_B)), presum_layout_sfb);
+      }
+    }();
+
+    auto half_layout_sfa = ScaleConfig::tile_atom_to_shape_SFA(make_shape(halfM,halfN,halfK,int(halfL)));
+    auto half_layout_sfb = ScaleConfig::tile_atom_to_shape_SFB(make_shape(halfM,halfN,halfK,int(halfL)));
+    auto half_shape_sfa = [&]() {
+      if constexpr (IsTmaLoadSFA) return shape(filter_zeros(half_layout_sfa));
+      else return shape(half_layout_sfa);
+    }();
+    auto half_shape_sfb = [&]() {
+      if constexpr (IsTmaLoadSFB) return shape(filter_zeros(half_layout_sfb));
+      else return shape(half_layout_sfb);
+    }();
+    int halfScaleM = IsTmaLoadSFA ? halfM/ScaleGranularityM : halfM;
+    int halfScaleN = IsTmaLoadSFB ? halfN/ScaleGranularityN : halfN;
+    int halfScaleKA = IsTmaLoadSFA ? halfK/ScaleGranularityK : halfK;
+    int halfScaleKB = IsTmaLoadSFB ? halfK/ScaleGranularityK : halfK;
+
+    auto SFA00_data = mSFA_mkl.data() + mSFA_mkl.layout()(make_coord(0,0,0));
+    auto SFA01_data = mSFA_mkl.data() + mSFA_mkl.layout()(is_original_a ? make_coord(0,halfScaleKA,0) : make_coord(halfScaleM,0,0));
+    auto SFA10_data = mSFA_mkl.data() + mSFA_mkl.layout()(is_original_a ? make_coord(halfScaleM,0,0) : make_coord(2*halfScaleM,0,0));
+    auto SFA11_data = mSFA_mkl.data() + mSFA_mkl.layout()(is_original_a ? make_coord(halfScaleM,halfScaleKA,0) : make_coord(3*halfScaleM,0,0));
+
+    auto SFB00_data = mSFB_nkl.data() + mSFB_nkl.layout()(make_coord(0,0,0));
+    auto SFB01_data = mSFB_nkl.data() + mSFB_nkl.layout()(is_original_b ? make_coord(halfScaleN,0,0) : make_coord(0,halfScaleKB,0));
+    auto SFB10_data = mSFB_nkl.data() + mSFB_nkl.layout()(is_original_b ? make_coord(0,halfScaleKB,0) : make_coord(0,2*halfScaleKB,0));
+    auto SFB11_data = mSFB_nkl.data() + mSFB_nkl.layout()(is_original_b ? make_coord(halfScaleN,halfScaleKB,0) : make_coord(0,3*halfScaleKB,0));
+
+    auto presum_SFA02_ptr = presum_mSFA_mkl.data() + presum_mSFA_mkl.layout()(make_coord(StrassenMiGroup::AllPresums::indexAPresum(StrassenMiGroup::APresums::A02)*halfScaleM,0,0));
+    auto presum_SFS1_ptr = presum_mSFA_mkl.data() + presum_mSFA_mkl.layout()(make_coord(StrassenMiGroup::AllPresums::indexAPresum(StrassenMiGroup::APresums::S1)*halfScaleM,0,0));
+    auto presum_SFS2_ptr = presum_mSFA_mkl.data() + presum_mSFA_mkl.layout()(make_coord(StrassenMiGroup::AllPresums::indexAPresum(StrassenMiGroup::APresums::S2)*halfScaleM,0,0));
+    auto presum_SFA1S2_ptr = presum_mSFA_mkl.data() + presum_mSFA_mkl.layout()(make_coord(StrassenMiGroup::AllPresums::indexAPresum(StrassenMiGroup::APresums::A1S2)*halfScaleM,0,0));
+
+    auto presum_SFB31_ptr = presum_mSFB_nkl.data() + presum_mSFB_nkl.layout()(make_coord(0,StrassenMiGroup::AllPresums::indexBPresum(StrassenMiGroup::BPresums::B31)*halfScaleKB,0));
+    auto presum_SFB10_ptr = presum_mSFB_nkl.data() + presum_mSFB_nkl.layout()(make_coord(0,StrassenMiGroup::AllPresums::indexBPresum(StrassenMiGroup::BPresums::B10)*halfScaleKB,0));
+    auto presum_SFS3_ptr = presum_mSFB_nkl.data() + presum_mSFB_nkl.layout()(make_coord(0,StrassenMiGroup::AllPresums::indexBPresum(StrassenMiGroup::BPresums::S3)*halfScaleKB,0));
+    auto presum_SFS3B2_ptr = presum_mSFB_nkl.data() + presum_mSFB_nkl.layout()(make_coord(0,StrassenMiGroup::AllPresums::indexBPresum(StrassenMiGroup::BPresums::S3B2)*halfScaleKB,0));
+
+    auto layout_sfa = make_layout(half_shape_sfa, stride(mSFA_mkl.layout()));
+    auto layout_sfb = make_layout(half_shape_sfb, stride(mSFB_nkl.layout()));
+    auto layout_presum_sfa = make_layout(half_shape_sfa, stride(presum_mSFA_mkl.layout()));
+    auto layout_presum_sfb = make_layout(half_shape_sfb, stride(presum_mSFB_nkl.layout()));
+
+    Tensor mSFA00_mkl = make_tensor(SFA00_data, layout_sfa);
+    Tensor mSFA01_mkl = make_tensor(SFA01_data, layout_sfa);
+    Tensor mSFA10_mkl = make_tensor(SFA10_data, layout_sfa);
+    Tensor mSFA11_mkl = make_tensor(SFA11_data, layout_sfa);
+    Tensor mPresumSFA02 = make_tensor(presum_SFA02_ptr, layout_presum_sfa);
+    Tensor mPresumSFS1 = make_tensor(presum_SFS1_ptr, layout_presum_sfa);
+    Tensor mPresumSFS2 = make_tensor(presum_SFS2_ptr, layout_presum_sfa);
+    Tensor mPresumSFA1S2 = make_tensor(presum_SFA1S2_ptr, layout_presum_sfa);
+
+    Tensor mSFB00_nkl = make_tensor(SFB00_data, layout_sfb);
+    Tensor mSFB01_nkl = make_tensor(SFB01_data, layout_sfb);
+    Tensor mSFB10_nkl = make_tensor(SFB10_data, layout_sfb);
+    Tensor mSFB11_nkl = make_tensor(SFB11_data, layout_sfb);
+    Tensor mPresumSFB31 = make_tensor(presum_SFB31_ptr, layout_presum_sfb);
+    Tensor mPresumSFB10 = make_tensor(presum_SFB10_ptr, layout_presum_sfb);
+    Tensor mPresumSFS3 = make_tensor(presum_SFS3_ptr, layout_presum_sfb);
+    Tensor mPresumSFS3B2 = make_tensor(presum_SFS3B2_ptr, layout_presum_sfb);
     
     return cute::make_tuple(gA00_mkl, gA01_mkl, gA10_mkl, gA11_mkl,
                             gPresumA02, gPresumS1, gPresumS2, gPresumA1S2,
                             gB00_nkl, gB01_nkl, gB10_nkl, gB11_nkl,
                             gPresumB31, gPresumB10, gPresumS3, gPresumS3B2,
-                            get<2>(original_inputs), get<3>(original_inputs));
+                            mSFA00_mkl, mSFA01_mkl, mSFA10_mkl, mSFA11_mkl,
+                            mPresumSFA02, mPresumSFS1, mPresumSFS2, mPresumSFA1S2,
+                            mSFB00_nkl, mSFB01_nkl, mSFB10_nkl, mSFB11_nkl,
+                            mPresumSFB31, mPresumSFB10, mPresumSFS3, mPresumSFS3B2);
   }
 
   CUTLASS_DEVICE auto
@@ -963,16 +1085,20 @@ struct CollectiveStrassenMma<
   get_inputs(Tuple const& load_inputs, int sub_m_idx = 0) {
     auto load_inputs_a = take<0, 8  >(load_inputs);
     auto load_inputs_b = take<8, 8+8>(load_inputs);
+    auto load_inputs_sfa = take<16, 16+8>(load_inputs);
+    auto load_inputs_sfb = take<24, 24+8>(load_inputs);
 
     if ((StrassenMiGroup::hasM0() && !is_fused) || (is_fused && sub_m_idx == 0)) {
       return make_tuple(get<MmaStrassen::APresums::A0>(load_inputs_a),
                         get<MmaStrassen::BPresums::B0>(load_inputs_b),
-                        get<16>(load_inputs), get<17>(load_inputs));
+                        get<MmaStrassen::APresums::A0>(load_inputs_sfa),
+                        get<MmaStrassen::BPresums::B0>(load_inputs_sfb));
     }
     if ((StrassenMiGroup::hasM1() && !is_fused) || (is_fused && sub_m_idx == 1)) {
       return make_tuple(get<MmaStrassen::APresums::A1>(load_inputs_a),
                         get<MmaStrassen::BPresums::B2>(load_inputs_b),
-                        get<16>(load_inputs), get<17>(load_inputs));
+                        get<MmaStrassen::APresums::A1>(load_inputs_sfa),
+                        get<MmaStrassen::BPresums::B2>(load_inputs_sfb));
     }
 
     bool IsFusedM2M3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
@@ -980,31 +1106,36 @@ struct CollectiveStrassenMma<
     if ((StrassenMiGroup::hasM2() && !IsFusedM2M3) || (IsFusedM2M3 && sub_m_idx == 0)) {
        return make_tuple(get<MmaStrassen::APresums::S2>(load_inputs_a),
                          get<MmaStrassen::BPresums::S3>(load_inputs_b),
-                         get<16>(load_inputs), get<17>(load_inputs));
+                         get<MmaStrassen::APresums::S2>(load_inputs_sfa),
+                         get<MmaStrassen::BPresums::S3>(load_inputs_sfb));
     }
 
     if ((StrassenMiGroup::hasM3() && !IsFusedM2M3) || (IsFusedM2M3 && sub_m_idx == 1)) {
       return make_tuple(get<StrassenMiGroup::APresums::A02>(load_inputs_a),
                         get<StrassenMiGroup::BPresums::B31>(load_inputs_b),
-                        get<16>(load_inputs), get<17>(load_inputs));
+                        get<StrassenMiGroup::APresums::A02>(load_inputs_sfa),
+                        get<StrassenMiGroup::BPresums::B31>(load_inputs_sfb));
     }
     if ((StrassenMiGroup::hasM4() && !IsFusedM4M5) || (IsFusedM4M5 && sub_m_idx == 0)) {
       return make_tuple(get<StrassenMiGroup::APresums::S1>(load_inputs_a),
                         get<StrassenMiGroup::BPresums::B10>(load_inputs_b),
-                        get<16>(load_inputs), get<17>(load_inputs));
+                        get<StrassenMiGroup::APresums::S1>(load_inputs_sfa),
+                        get<StrassenMiGroup::BPresums::B10>(load_inputs_sfb));
     }
     if ((StrassenMiGroup::hasM5() && !IsFusedM4M5) || (IsFusedM4M5 && sub_m_idx == 1)) {
       return make_tuple(get<StrassenMiGroup::APresums::A1S2>(load_inputs_a),
                         get<StrassenMiGroup::BPresums::B3>(load_inputs_b),
-                        get<16>(load_inputs), get<17>(load_inputs));
+                        get<StrassenMiGroup::APresums::A1S2>(load_inputs_sfa),
+                        get<StrassenMiGroup::BPresums::B3>(load_inputs_sfb));
     }
     if ((StrassenMiGroup::hasM6() && !IsFusedM2M3M6) || (IsFusedM2M3M6 && sub_m_idx == 2)) {
       return make_tuple(get<StrassenMiGroup::APresums::A3>(load_inputs_a),
                         get<StrassenMiGroup::BPresums::S3B2>(load_inputs_b),
-                        get<16>(load_inputs), get<17>(load_inputs));
+                        get<StrassenMiGroup::APresums::A3>(load_inputs_sfa),
+                        get<StrassenMiGroup::BPresums::S3B2>(load_inputs_sfb));
     }
 
-    return make_tuple(get<0>(load_inputs_a), get<0>(load_inputs_b), get<16>(load_inputs), get<17>(load_inputs));
+    return make_tuple(get<0>(load_inputs_a), get<0>(load_inputs_b), get<0>(load_inputs_sfa), get<0>(load_inputs_sfb));
     // CUTE_GCC_UNREACHABLE;
   }
 
@@ -1122,6 +1253,9 @@ struct CollectiveStrassenMma<
                             mainloop_params.tma_load_b : 
                             mainloop_params.tma_load_presum_b));
 
+    auto& tma_load_sfa = use_presum_a ? mainloop_params.tma_load_presum_sfa : mainloop_params.tma_load_sfa;
+    auto& tma_load_sfb = use_presum_b ? mainloop_params.tma_load_presum_sfb : mainloop_params.tma_load_sfb;
+
     auto block_tma_a = tma_load_a.get_slice(cluster_local_block_id.y);
     auto block_tma_b = tma_load_b.get_slice(cluster_local_block_id.x);
 
@@ -1150,7 +1284,7 @@ struct CollectiveStrassenMma<
 
     auto [tAgA_SFA, tAsA_SFA] = [&]() {
       if constexpr (IsTmaLoadSFA) {
-        auto block_tma_sfa = mainloop_params.tma_load_sfa.get_slice(cluster_local_block_id.y);
+        auto block_tma_sfa = tma_load_sfa.get_slice(cluster_local_block_id.y);
         Tensor tAgA_SFA_ = block_tma_sfa.partition_S(gSFA);
         Tensor tAsA_SFA_ = block_tma_sfa.partition_D(sSFA);
         return cute::make_tuple(tAgA_SFA_, tAsA_SFA_);
@@ -1161,7 +1295,7 @@ struct CollectiveStrassenMma<
     }();
     auto [tBgB_SFB, tBsB_SFB] = [&]() {
       if constexpr (IsTmaLoadSFB) {
-        auto block_tma_sfb = mainloop_params.tma_load_sfb.get_slice(cluster_local_block_id.y);
+        auto block_tma_sfb = tma_load_sfb.get_slice(cluster_local_block_id.y);
         Tensor tBgB_SFB_ = block_tma_sfb.partition_S(gSFB);
         Tensor tBsB_SFB_ = block_tma_sfb.partition_D(sSFB);
         return cute::make_tuple(tBgB_SFB_, tBsB_SFB_);
@@ -1211,12 +1345,12 @@ struct CollectiveStrassenMma<
       // Copy scale tensors from global memory to shared memory
       if constexpr (IsTmaLoadSFA) {
         if (lane_predicate) {
-          copy(mainloop_params.tma_load_sfa.with(*tma_barrier, mcast_mask_sf), tAgA_SFA(_,_,_,*k_tile_iter), tAsA_SFA(_,_,_,write_stage));
+          copy(tma_load_sfa.with(*tma_barrier, mcast_mask_sf), tAgA_SFA(_,_,_,*k_tile_iter), tAsA_SFA(_,_,_,write_stage));
         }
       }
       if constexpr (IsTmaLoadSFB) {
         if (lane_predicate) {
-          copy(mainloop_params.tma_load_sfb.with(*tma_barrier, mcast_mask_sf), tBgB_SFB(_,_,_,*k_tile_iter), tBsB_SFB(_,_,_,write_stage));
+          copy(tma_load_sfb.with(*tma_barrier, mcast_mask_sf), tBgB_SFB(_,_,_,*k_tile_iter), tBsB_SFB(_,_,_,write_stage));
         }
       }
       ++k_tile_iter;
@@ -1251,8 +1385,8 @@ struct CollectiveStrassenMma<
     Tensor mSFA_mkl = get<2>(load_inputs);
     Tensor mSFB_nkl = get<3>(load_inputs);
 
-    Tensor iSFA_mkl = make_identity_tensor(shape(mainloop_params.layout_SFA));                                // (m,k,l)
-    Tensor iSFB_nkl = make_identity_tensor(shape(mainloop_params.layout_SFB));                                // (n,k,l)
+    Tensor iSFA_mkl = make_identity_tensor(shape(mSFA_mkl));                                // (m,k,l)
+    Tensor iSFB_nkl = make_identity_tensor(shape(mSFB_nkl));                                // (n,k,l)
 
     Tensor gSFA_mkl = local_tile(mSFA_mkl, TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});     // (BLK_M,BLK_K,m,k,l)
     Tensor cSFA_mkl = local_tile(iSFA_mkl, TileShape{}, make_coord(_,_,_), Step<_1, X,_1>{});     // (BLK_M,BLK_K,m,k,l)
@@ -1282,8 +1416,8 @@ struct CollectiveStrassenMma<
     Tensor tSFApSFA = make_tensor<bool>(shape(filter_zeros(tSFAsSFA(_,_,_,_0{}))));                 // (CPY,CPY_M,CPY_K)
     Tensor tSFBpSFB = make_tensor<bool>(shape(filter_zeros(tSFBsSFB(_,_,_,_0{}))));                 // (CPY,CPY_N,CPY_K)
 
-    auto SFA_shape = shape(mainloop_params.layout_SFA);
-    auto SFB_shape = shape(mainloop_params.layout_SFB);
+    auto SFA_shape = shape(mSFA_mkl);
+    auto SFB_shape = shape(mSFB_nkl);
 
     // Mainloop
     CUTLASS_PRAGMA_NO_UNROLL

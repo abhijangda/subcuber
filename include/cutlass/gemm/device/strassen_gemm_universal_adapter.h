@@ -501,6 +501,18 @@ public:
     }
   }
 
+  static size_t get_presum_a_scale_workspace_size(Arguments const &args) {
+    if constexpr (requires { args.mainloop.ptr_SFA; }) {
+      size_t presum_a_size = get_presum_a_workspace_size(args);
+      presum_a_size = presum_a_size * (sizeof(typename GemmKernelM0::Mma::ElementBlockScale)/sizeof(ElementA));
+      presum_a_size = presum_a_size/args.mainloop.get_scale_a_elems();
+      return presum_a_size;
+    }
+    else {
+      return 0;
+    }
+  }
+
   static std::vector<size_t> get_presum_a_batch_indices(Arguments const &args) {
     auto workspace_size = [](auto const &problem_shape) {
       return StrassenGroups::Group0::AllPresums::numAPresumYes() * sizeof(ElementA) *
@@ -527,6 +539,18 @@ public:
     }
     else {
       return vec;
+    }
+  }
+
+  static size_t get_presum_b_scale_workspace_size(Arguments const &args) {
+    if constexpr (requires { args.mainloop.ptr_SFB; }) {
+      size_t presum_b_size = get_presum_b_workspace_size(args);
+      presum_b_size = presum_b_size * sizeof(typename GemmKernelM0::Mma::ElementBlockScale)/sizeof(ElementB);
+      presum_b_size = presum_b_size/args.mainloop.get_scale_b_elems();
+      return presum_b_size;
+    }
+    else {
+      return 0;
     }
   }
 
@@ -625,7 +649,9 @@ public:
     }
 
     workspace_bytes += get_presum_a_workspace_size(args) + get_grouped_gemm_index_size(args) +
+                       get_presum_a_scale_workspace_size(args) + /*grouped_gemm? */
                        get_presum_b_workspace_size(args) + get_grouped_gemm_index_size(args) +
+                       get_presum_b_scale_workspace_size(args) +
                        get_postsum_m_workspace_size(args) + get_grouped_gemm_index_size(args) +
                        GemmKernelM0::get_workspace_size(args) + GemmKernelM1::get_workspace_size(args) + 
                        GemmKernelM2::get_workspace_size(args) + GemmKernelM3::get_workspace_size(args) +
@@ -803,6 +829,15 @@ public:
     uint64_t* postsum_m_batch_indices = (uint64_t*)((char*)workspace + workspace_offset);
     workspace_offset += get_grouped_gemm_index_size(args);
 
+    void* presum_a_scale_workspace = nullptr;
+    void* presum_b_scale_workspace = nullptr;
+    if constexpr (requires { args.mainloop.ptr_SFA; args.mainloop.ptr_SFB; }) {
+      presum_a_scale_workspace = (char*)workspace + workspace_offset;
+      workspace_offset += get_presum_a_scale_workspace_size(args);
+      presum_b_scale_workspace = (char*)workspace + workspace_offset;
+      workspace_offset += get_presum_b_scale_workspace_size(args);
+    }
+
     int* sem_workspace = (int*)(((char*)workspace) + workspace_offset);
 
     if (presum_a_batch_indices != nullptr) {
@@ -848,7 +883,8 @@ public:
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
-                                        sem_workspace, stream, cuda_adapter);
+                                        sem_workspace, stream, cuda_adapter,
+                                        presum_a_scale_workspace, presum_b_scale_workspace);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -864,7 +900,8 @@ public:
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
-                                        sem_workspace, stream, cuda_adapter);
+                                        sem_workspace, stream, cuda_adapter,
+                                        presum_a_scale_workspace, presum_b_scale_workspace);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -880,7 +917,8 @@ public:
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
-                                        sem_workspace, stream, cuda_adapter);
+                                        sem_workspace, stream, cuda_adapter,
+                                        presum_a_scale_workspace, presum_b_scale_workspace);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -896,7 +934,8 @@ public:
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
-                                        sem_workspace, stream, cuda_adapter);
+                                        sem_workspace, stream, cuda_adapter,
+                                        presum_a_scale_workspace, presum_b_scale_workspace);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -912,7 +951,8 @@ public:
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
-                                        sem_workspace, stream, cuda_adapter);
+                                        sem_workspace, stream, cuda_adapter,
+                                        presum_a_scale_workspace, presum_b_scale_workspace);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -928,7 +968,8 @@ public:
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
-                                        sem_workspace, stream, cuda_adapter);
+                                        sem_workspace, stream, cuda_adapter,
+                                        presum_a_scale_workspace, presum_b_scale_workspace);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -944,7 +985,8 @@ public:
                                         presum_a_workspace, presum_a_batch_indices,
                                         presum_b_workspace, presum_b_batch_indices,
                                         postsum_m_workspace, postsum_m_batch_indices,
-                                        sem_workspace, stream, cuda_adapter);
+                                        sem_workspace, stream, cuda_adapter,
+                                        presum_a_scale_workspace, presum_b_scale_workspace);
       if (err == Status::kErrorInternal) return err;
     }
 
@@ -973,7 +1015,9 @@ public:
     ElementD* postsum_m, uint64_t* postsum_m_batch_indices,
     void* sem_workspace,
     cudaStream_t stream = nullptr,
-    CudaHostAdapter* cuda_adapter = nullptr) {
+    CudaHostAdapter* cuda_adapter = nullptr,
+    void* presum_a_scale_workspace = nullptr,
+    void* presum_b_scale_workspace = nullptr) {
 
     CUTLASS_TRACE_HOST("GemmUniversal::initialize() - workspace "
       << sem_workspace << ", stream: " << (stream ? "non-null" : "null"));
@@ -1030,6 +1074,21 @@ public:
         presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
       params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_a_batch_indices,
         presum_m_b, presum_b_batch_indices, postsum_m, postsum_m_batch_indices, sem_workspace);
+    } else if constexpr (requires { args0.mainloop.ptr_SFA; args0.mainloop.ptr_SFB; }) {
+      params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace, presum_a_scale_workspace, presum_b_scale_workspace);
+      params1 = GemmKernelM1::to_underlying_arguments(args1, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace, presum_a_scale_workspace, presum_b_scale_workspace);
+      params2 = GemmKernelM2::to_underlying_arguments(args2, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace, presum_a_scale_workspace, presum_b_scale_workspace);
+      params3 = GemmKernelM3::to_underlying_arguments(args3, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace, presum_a_scale_workspace, presum_b_scale_workspace);
+      params4 = GemmKernelM4::to_underlying_arguments(args4, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace, presum_a_scale_workspace, presum_b_scale_workspace);
+      params5 = GemmKernelM5::to_underlying_arguments(args5, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace, presum_a_scale_workspace, presum_b_scale_workspace);
+      params6 = GemmKernelM6::to_underlying_arguments(args6, presum_m_a, presum_m_b, postsum_m,
+        sem_workspace, presum_a_scale_workspace, presum_b_scale_workspace);
     } else {
       params0 = GemmKernelM0::to_underlying_arguments(args0, presum_m_a, presum_m_b, postsum_m,
         sem_workspace);
