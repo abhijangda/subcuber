@@ -1801,7 +1801,8 @@ struct CollectiveStrassenMma<
       a3 = *(PresumVecTypeA*)smem_a3_ptr;
     }
 
-    asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
+    if (condition)
+      asm volatile("bar.cta.sync %0, %1;" : : "r"(4), "r"(NumMMAThreads));
 
     if (condition and thread_idx < PresumComputeThreads) {
       PresumIOToComputeTypeA presum_io_to_compute_type;

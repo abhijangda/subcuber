@@ -190,16 +190,16 @@ using PresumOpts = cutlass::gemm::device::PresumOpt<>;//0,0,0,0>;
 //TODO: Stages 5 produces wrong results for C2
 
 using AllPresumsKernel = AllPresums<>;
-// using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
-              //  PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
-using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                   PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
+                                    PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
+// using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
+                                  //  PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 0 //TMA Reduce
+#if 1 //TMA Reduce
 // #if defined(COOPERATIVE)
 //   static_assert(StageCountTypeM4M5 == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
 // #endif
@@ -696,7 +696,7 @@ void initialize(const Options &options) {
 
   initialize_tensor(tensor_A.host_view(), dist_A, seed + 2022, false);
   initialize_tensor(tensor_B.host_view(), dist_B, seed + 2023, false);
-  initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, true);
+  initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, false);
   initialize_scale_tensor(blockscale_tensor_B.host_view(), dist_scaleB, seed + 2026, false);
   cutlass::reference::host::TensorFill(tensor_D.host_view());
 
@@ -823,7 +823,8 @@ void strassen_winograd_reference(const Options &options) {
         }
       }
       for (int presum_idx = 0; presum_idx < 4; ++presum_idx) {
-        float scale = 1.0f;
+        float scale = max_abs[presum_idx] > 0.0f ?
+          std::max(max_abs[presum_idx]/float(cutlass::platform::numeric_limits<ElementA>::max()), FLT_MIN) : 1.0f;
         presum_scale_a[presum_idx][presum_layout_sfa(make_coord(row,block*ScaleK,0))] = scale;
         for (int element_idx = 0; element_idx < ScaleK; ++element_idx) {
           auto coord = make_coord(row,block*ScaleK+element_idx,0);

@@ -101,7 +101,7 @@ constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // M
 using         ElementD    = cutlass::bfloat16_t;
 using         LayoutD     = cutlass::layout::RowMajor;
 constexpr int AlignmentD  = 128 / cutlass::sizeof_bits<ElementD>::value;
-using         ElementC    = void;
+using         ElementC    = cutlass::bfloat16_t;
 using         LayoutC     = LayoutD;
 constexpr int AlignmentC  = AlignmentD;
 
