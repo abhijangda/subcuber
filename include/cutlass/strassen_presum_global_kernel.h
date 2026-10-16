@@ -81,9 +81,12 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
     block_idx, {0, 0}, thread_idx, a1_coord, a2_coord, a3_coord
   );
 
-  auto b1_coord = IsStrassenLayout ? MatrixCoord(1*halfK, 0) : MatrixCoord(0, halfN);
-  auto b2_coord = IsStrassenLayout ? MatrixCoord(2*halfK, 0) : MatrixCoord(halfK, 0);
-  auto b3_coord = IsStrassenLayout ? MatrixCoord(3*halfK, 0) : MatrixCoord(halfK, halfN);
+  auto packed_b1_coord = is_B_row_or_col_major ? MatrixCoord(halfK, 0) : MatrixCoord(0, halfN);
+  auto packed_b2_coord = is_B_row_or_col_major ? MatrixCoord(2*halfK, 0) : MatrixCoord(0, 2*halfN);
+  auto packed_b3_coord = is_B_row_or_col_major ? MatrixCoord(3*halfK, 0) : MatrixCoord(0, 3*halfN);
+  auto b1_coord = IsStrassenLayout ? packed_b1_coord : MatrixCoord(0, halfN);
+  auto b2_coord = IsStrassenLayout ? packed_b2_coord : MatrixCoord(halfK, 0);
+  auto b3_coord = IsStrassenLayout ? packed_b3_coord : MatrixCoord(halfK, halfN);
 
   PresumGlobalIteratorB iter_PresumB(
     params.get_ptr_B(problem_idx), params.get_stride_B(problem_idx) / (IsStrassenLayout ? 2 : 1),
@@ -151,9 +154,9 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
           {M, K/ScaleGranularityK},
           {scale_row, scale_column/ScaleGranularityK},
           block_idx, {0, 0}, 0,
-          MatrixCoord(a1_coord.row(), a1_coord.column()/ScaleGranularityK),
-          MatrixCoord(a2_coord.row(), a2_coord.column()/ScaleGranularityK),
-          MatrixCoord(a3_coord.row(), a3_coord.column()/ScaleGranularityK)
+          MatrixCoord(0, halfK/ScaleGranularityK),
+          MatrixCoord(halfM, 0),
+          MatrixCoord(halfM, halfK/ScaleGranularityK)
         );
         bool valid_scale = iter_PresumScaleA.validTB() && iter_PresumScaleA.valid() &&
                            scale_row < halfM && scale_column < halfK;
@@ -330,9 +333,9 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
               {K/ScaleGranularityK, N/ScaleGranularityN},
               {scale_row/ScaleGranularityK, scale_column/ScaleGranularityN},
               block_idx, {0, 0}, 0,
-              MatrixCoord(b1_coord.row()/ScaleGranularityK, b1_coord.column()/ScaleGranularityN),
-              MatrixCoord(b2_coord.row()/ScaleGranularityK, b2_coord.column()/ScaleGranularityN),
-              MatrixCoord(b3_coord.row()/ScaleGranularityK, b3_coord.column()/ScaleGranularityN)
+              MatrixCoord(0, halfN/ScaleGranularityN),
+              MatrixCoord(halfK/ScaleGranularityK, 0),
+              MatrixCoord(halfK/ScaleGranularityK, halfN/ScaleGranularityN)
             );
             bool valid_scale = iter_PresumScaleB.validTB() && iter_PresumScaleB.valid() &&
                                scale_row < halfK && scale_column < halfN;

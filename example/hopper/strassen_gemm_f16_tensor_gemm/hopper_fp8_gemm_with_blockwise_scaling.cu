@@ -85,9 +85,6 @@
 #include "cutlass/util/host_tensor.h"
 #include "cutlass/util/packed_stride.hpp"
 #include "cutlass/util/tensor_view_io.h"
-#include "cutlass/util/reference/device/gemm.h"
-#include "cutlass/util/reference/device/tensor_compare.h"
-#include "cutlass/util/reference/device/tensor_fill.h"
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cutlass/util/reference/host/tensor_copy.h"
 #include "cutlass/util/reference/host/tensor_compare.h"
@@ -110,15 +107,15 @@ using namespace cute;
 // A matrix configuration
 using         ElementA    = cutlass::float_e4m3_t;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-// using         SubMatLayoutA = cutlass::layout::StrassenLayout;
-using         SubMatLayoutA = cutlass::layout::OriginalLayout;
+using         SubMatLayoutA = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = cutlass::float_e4m3_t;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::ColumnMajor;                   // Layout type for B matrix operand
-// using         SubMatLayoutB = cutlass::layout::StrassenLayout;
-using         SubMatLayoutB = cutlass::layout::OriginalLayout;
+using         SubMatLayoutB = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
@@ -199,7 +196,7 @@ using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  P
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 1 //TMA Reduce
+#if 0 //TMA Reduce
 // #if defined(COOPERATIVE)
 //   static_assert(StageCountTypeM4M5 == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
 // #endif
@@ -430,17 +427,6 @@ using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenG
 
 using Gemm = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenGemmKernels>;
 
-// Reference device GEMM implementation type
-using DeviceGemmReference = cutlass::reference::device::Gemm<
-  ElementA,
-  LayoutA,
-  ElementB,
-  LayoutB,
-  ElementD,
-  LayoutC,
-  ElementAccumulator,
-  ElementAccumulator>;
-
 using StrideA = typename Gemm::GemmKernel::StrideA;
 using StrideB = typename Gemm::GemmKernel::StrideB;
 using StrideC = typename Gemm::GemmKernel::StrideC;
@@ -666,6 +652,25 @@ bool initialize_scale_tensor(
   return true;
 }
 
+template <class Element>
+void upload_strassen_layout(
+    Element const* original, Element* packed, int outer, int inner, bool column_major) {
+  int half_outer = outer / 2;
+  int half_inner = inner / 2;
+  size_t quadrant_elements = size_t(half_outer) * half_inner;
+  for (int quadrant = 0; quadrant < 4; ++quadrant) {
+    int outer_quadrant = column_major ? quadrant % 2 : quadrant / 2;
+    int inner_quadrant = column_major ? quadrant / 2 : quadrant % 2;
+    auto source = original + size_t(outer_quadrant * half_outer) * inner +
+                  inner_quadrant * half_inner;
+    CUDA_CHECK(cudaMemcpy2D(packed + quadrant * quadrant_elements,
+                           size_t(half_inner) * sizeof(Element),
+                           source, size_t(inner) * sizeof(Element),
+                           size_t(half_inner) * sizeof(Element), half_outer,
+                           cudaMemcpyHostToDevice));
+  }
+}
+
 /// Initialize operands to be used in the GEMM and reference GEMM
 void initialize(const Options &options) {
 
@@ -708,31 +713,21 @@ void initialize(const Options &options) {
 #endif
 
   // Print block scaling tensors on the host side.
-  tensor_A.sync_device();
-  tensor_B.sync_device();
+  if constexpr (cute::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout>) {
+    upload_strassen_layout(tensor_A.host_data(), tensor_A.device_data(), options.m, options.k, false);
+  } else {
+    tensor_A.sync_device();
+  }
+  if constexpr (cute::is_same_v<SubMatLayoutB, cutlass::layout::StrassenLayout>) {
+    upload_strassen_layout(tensor_B.host_data(), tensor_B.device_data(), options.n, options.k, true);
+  } else {
+    tensor_B.sync_device();
+  }
   tensor_D.sync_device();
   blockscale_tensor_A.sync_device();
   blockscale_tensor_B.sync_device();
 }
 
-
-template <class Element>
-__global__ void unpack_strassen_layout(
-  Element const* packed, Element* original, int rows, int columns) {
-  int row = blockIdx.x;
-  int half_rows = rows / 2;
-  int half_columns = columns / 2;
-  int row_in_quadrant = row % half_rows;
-  int row_quadrant = row / half_rows;
-
-  for (int column = threadIdx.x; column < columns; column += blockDim.x) {
-    int column_in_quadrant = column % half_columns;
-    int quadrant = row_quadrant * 2 + column / half_columns;
-    int packed_idx = quadrant * half_rows * half_columns +
-                     row_in_quadrant * half_columns + column_in_quadrant;
-    original[row * columns + column] = packed[packed_idx];
-  }
-}
 
 /// Populates a Gemm::Arguments structure from the given commandline options
 typename Gemm::Arguments args_from_options(const Options &options)
