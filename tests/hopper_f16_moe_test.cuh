@@ -45,23 +45,23 @@ inline std::string moe_gtest_case_name(testing::TestParamInfo<MoeTestCase> const
 }
 
 inline cudaError_t compare_moe_group_results(
-	ElementC const *actual,
-	ElementC const *expected,
+	ElementD const *actual,
+	ElementD const *expected,
 	std::size_t element_count,
 	int n) {
 	constexpr std::size_t kComparisonChunkElements = 1 << 20;
-	std::vector<ElementC> host_actual(kComparisonChunkElements);
-	std::vector<ElementC> host_expected(kComparisonChunkElements);
+	std::vector<ElementD> host_actual(kComparisonChunkElements);
+	std::vector<ElementD> host_expected(kComparisonChunkElements);
 
 	for (std::size_t offset = 0; offset < element_count; offset += kComparisonChunkElements) {
 		std::size_t count = std::min(kComparisonChunkElements, element_count - offset);
 		cudaError_t result = cudaMemcpy(
-			host_actual.data(), actual + offset, count * sizeof(ElementC), cudaMemcpyDeviceToHost);
+			host_actual.data(), actual + offset, count * sizeof(ElementD), cudaMemcpyDeviceToHost);
 		if (result != cudaSuccess) {
 			return result;
 		}
 		result = cudaMemcpy(
-			host_expected.data(), expected + offset, count * sizeof(ElementC), cudaMemcpyDeviceToHost);
+			host_expected.data(), expected + offset, count * sizeof(ElementD), cudaMemcpyDeviceToHost);
 		if (result != cudaSuccess) {
 			return result;
 		}
@@ -80,7 +80,7 @@ inline cudaError_t compare_moe_group_results(
 
 inline cudaError_t run_moe_case(MoeTestCase const &test_case, MoeRunner runner) {
 	using DeviceGemmReference = cutlass::reference::device::Gemm<
-		ElementA, LayoutA, ElementB, LayoutB, ElementC, LayoutC,
+		ElementA, LayoutA, ElementB, LayoutB, ElementD, LayoutC,
 		ElementAccumulator, ElementAccumulator>;
 
 	int m = test_case.problem_size.m();
@@ -93,8 +93,8 @@ inline cudaError_t run_moe_case(MoeTestCase const &test_case, MoeRunner runner) 
 
 	cutlass::device_memory::allocation<ElementA> tensor_a(elements_a);
 	cutlass::device_memory::allocation<ElementB> tensor_b(elements_b);
-	cutlass::device_memory::allocation<ElementC> tensor_d(elements_d);
-	cutlass::device_memory::allocation<ElementC> tensor_ref_d(elements_d_per_group);
+	cutlass::device_memory::allocation<ElementD> tensor_d(elements_d);
+	cutlass::device_memory::allocation<ElementD> tensor_ref_d(elements_d_per_group);
 
 	cutlass::reference::device::BlockFillRandomUniform(
 		tensor_a.get(), elements_a, 2021, ElementA(4), ElementA(-4), 0);
@@ -126,7 +126,7 @@ inline cudaError_t run_moe_case(MoeTestCase const &test_case, MoeRunner runner) 
 
 	DeviceGemmReference gemm_reference;
 	for (int group = 0; group < test_case.groups; ++group) {
-		result = cudaMemset(tensor_ref_d.get(), 0, elements_d_per_group * sizeof(ElementC));
+		result = cudaMemset(tensor_ref_d.get(), 0, elements_d_per_group * sizeof(ElementD));
 		if (result != cudaSuccess) {
 			return result;
 		}
@@ -144,7 +144,7 @@ inline cudaError_t run_moe_case(MoeTestCase const &test_case, MoeRunner runner) 
 			return result;
 		}
 
-		ElementC const *group_d = tensor_d.get() + std::size_t(group) * elements_d_per_group;
+		ElementD const *group_d = tensor_d.get() + std::size_t(group) * elements_d_per_group;
 		result = compare_moe_group_results(group_d, tensor_ref_d.get(), elements_d_per_group, n);
 		if (result != cudaSuccess) {
 			std::cerr << "MoE output mismatch in group " << group << std::endl;

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -189,11 +190,16 @@ inline cudaError_t run_cutlass_gemm(
 		}
 	}();
 
+	typename CutlassGemm::GemmKernel::ElementC const *ptr_c = nullptr;
+	if constexpr (!std::is_void_v<typename CutlassGemm::GemmKernel::ElementC>) {
+		ptr_c = ref_c.data();
+	}
+
 	typename CutlassGemm::Arguments args(
 		cutlass::gemm::GemmUniversalMode::kGemm,
 		kernel_problem_size,
 		{ref_a.data(), stride_a, ref_b.data(), stride_b},
-		{{1.0f, 0.0f}, ref_c.data(), stride_c, ref_d.data(), stride_d},
+		{{1.0f, 0.0f}, ptr_c, stride_c, ref_d.data(), stride_d},
 		kernel_hw_info);
 
 	CutlassGemm gemm_operator;
@@ -205,7 +211,7 @@ inline cudaError_t run_cutlass_gemm(
 
 	size_t workspace_size = CutlassGemm::get_workspace_size(args);
 	cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
-	int swizzles[7] = {2, 2, 1, 1, 1, 1, 1};
+	int swizzles[7] = {1, 1, 1, 1, 1, 1, 1};
 
 	status = gemm_operator.initialize(args, swizzles, workspace.get());
 	if (status != cutlass::Status::kSuccess) {
@@ -235,8 +241,14 @@ inline cudaError_t run_cutlass_gemm(
 template<typename CutlassGemm,
 				 typename ElementInputA,
 		 		 typename ElementInputB,
-		 		 typename ElementOutput>
+		 		 typename ElementOutput_>
 inline cudaError_t run_case(TestCase const &test_case) {
+#if defined(CUTLASS_API_v3)
+	using ElementOutput = typename CutlassGemm::GemmKernel::ElementD;
+#else
+	using ElementOutput = ElementOutput_;
+#endif
+
 	auto problem_size = test_case.problem_size;
 	int lda = problem_size.k();
 	int ldb = problem_size.n();

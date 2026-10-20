@@ -306,6 +306,8 @@ public:
     uint64_t* postsum_m_batch_indices;
 
     void* workspace{nullptr};
+    StrideA dA{};
+    StrideB dB{};
 
     int run = 0;
 
@@ -332,6 +334,16 @@ public:
     CUTLASS_HOST_DEVICE
     int get_stride_B(int problem_idx = 0) const {
       return get_problem_shape_n(problem_idx);
+    }
+
+    CUTLASS_HOST_DEVICE
+    constexpr bool get_layout_B(int idx = 0) const {
+      if constexpr (cute::is_constant<1, decltype(get<0>(dB[idx]))>::value) {
+        return true; //true for RowMajor
+      }
+      else {
+        return false; //false for ColumnMajor
+      }
     }
 
     CUTLASS_HOST_DEVICE
@@ -499,7 +511,9 @@ public:
       presum_m_a, presum_a_batch_indices,
       presum_m_b, presum_b_batch_indices,
       postsum_m, postsum_m_batch_indices,
-      workspace
+      workspace,
+      args.mainloop.dA,
+      args.mainloop.dB
     };
   }
 

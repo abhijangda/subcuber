@@ -7,6 +7,7 @@ class F16HopperStrassenWinogradLevel2CooperativeTmaReduceTest : public testing::
 static std::vector<strassen_tests::TestCase> test_cases() {
 	std::vector<strassen_tests::TestCase> cases = {
 		{{16384, 16384, 8192}, 1, 2, "16384x16384x8192 split_k=1"},
+		{{16384, 16384, 16384}, 1, 2, "16384x16384x16384 split_k=1"},
 	};
 
 	return cases;

@@ -184,9 +184,9 @@ public:
   using PresumIOToComputeType = NumericArrayConverter<PresumComputeType, typename IteratorA::Element, PresumVecTypeA::kElements>;
 
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<typename IteratorA::Element, NumThreads,  
-                                                            PresumShapeA, PresumVecTypeA, false, false>;
+                                                            PresumShapeA, PresumVecTypeA, false, true, false>;
   using PresumGlobalIteratorB = PresumDetail::GlobalIterator<typename IteratorB::Element, NumThreads,  
-                                                            PresumShapeB, PresumVecTypeB, true, false>;
+                                                            PresumShapeB, PresumVecTypeB, true, true, false>;
 
   using PresumSharedIterator = PresumDetail::SharedIterator<typename IteratorA::Element, PresumVecTypeA, NumThreads,
                                                             Base::SharedStorage::PresumBuffer::NumLoadsForPresum,

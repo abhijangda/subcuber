@@ -276,6 +276,11 @@ struct StrassenGemm {
     }
 
     CUTLASS_HOST_DEVICE
+    constexpr bool get_layout_B(int = 0) const {
+      return true;
+    }
+
+    CUTLASS_HOST_DEVICE
     int get_stride_MA(int) const {
       return layout_MA.stride(0);
     }

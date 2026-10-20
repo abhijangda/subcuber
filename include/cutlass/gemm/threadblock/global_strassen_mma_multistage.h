@@ -169,7 +169,7 @@ public:
   using PresumShape = GemmShape<Shape::kM, Shape::kN, 1>;
   static const int PresumAccessPerIter = 1;//TODO: change for half
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<typename IteratorA::Element, NumThreads,  
-                                                            PresumShape, Array<float, 4>, false, false>;
+                                                            PresumShape, Array<float, 4>, false, true, false>;
   using PresumGlobalIteratorB =PresumGlobalIteratorA;
   using PresumSharedIterator = PresumDetail::SharedIterator<typename IteratorA::Element, Array<float, 4>, NumThreads,
                                                             1,

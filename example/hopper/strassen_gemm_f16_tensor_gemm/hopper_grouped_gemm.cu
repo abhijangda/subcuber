@@ -102,28 +102,23 @@ using namespace cute;
 // A matrix configuration
 using         ElementA    = cutlass::half_t;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-#ifdef STRASSEN_LAYOUT
 using         SubMatLayoutA = cutlass::layout::StrassenLayout;
-#else
-using         SubMatLayoutA = cutlass::layout::OriginalLayout;
-#endif
+// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = cutlass::half_t;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
-#ifdef STRASSEN_LAYOUT
 using         SubMatLayoutB = cutlass::layout::StrassenLayout;
-#else
-using         SubMatLayoutB = cutlass::layout::OriginalLayout;
-#endif
+// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = cutlass::half_t;                                // Element type for C and D matrix operands
+using         ElementC    = void; //cutlass::half_t;                                // Element type for C and D matrix operands
+using         ElementD    = cutlass::half_t;
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
-constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementC>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
+constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;    // Memory access granularity/alignment of C matrix in units of elements (up to 16 bytes)
 
 // Core kernel configurations
 using ElementAccumulator  = float;                                          // Element type for internal accumulation
@@ -145,8 +140,8 @@ using TileShapeM2To6      = TileShape;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0 = 6 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = 6 ;
-using PresumTileShapeA    = Shape<_2, _128>;
-using PresumTileShapeB    = Shape<_2, _128>;
+using PresumTileShapeA    = Shape<_4, _128>;
+using PresumTileShapeB    = Shape<_4, _128>;
 using KernelScheduleM0 = cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueScheduleM0 = cutlass::epilogue::PtrArrayTmaWarpSpecializedPingpong;
 using KernelScheduleM2To6 = KernelScheduleM0;
@@ -155,8 +150,8 @@ using EpilogueScheduleM2To6 = EpilogueScheduleM0;
 using TileShapeM0           = Shape<_128,_256,_64>;                           // Threadblock-level tile size
 using TileShapeM2To6        = Shape<_128,_256,_64>;
 using ClusterShape        = Shape<_2,_1,_1>;                                // Shape of the threadblocks in a cluster
-const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;           // Stage count maximized based on the tile size
-const uint StageCountTypeM2M6 = 4 ;
+const uint StageCountTypeM0 = cute::is_void_v<ElementC> ? 4 : 3;
+const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 4 : 3;
 using PresumTileShapeA    = Shape<_2, _256>;
 using PresumTileShapeB    = Shape<_2, _256>;
 using KernelScheduleM0 = cutlass::gemm::KernelPtrArrayTmaWarpSpecializedCooperative;
@@ -185,7 +180,7 @@ using AllPresumsKernel = AllPresums<>;
 // using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
                                     // PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
 using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                 PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
+                                 PresumCompute, PresumCompute, PresumCompute, PresumCompute>;//PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
@@ -411,7 +406,9 @@ using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<StrassenG
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
-                                                                       PresumOpts>;
+                                                                       PresumOpts,
+                                                                       AlignmentA, AlignmentB, AlignmentC,
+                                                                       ElementD>;
 
 using Gemm = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenGemmKernels>;
 
@@ -421,7 +418,7 @@ using DeviceGemmReference = cutlass::reference::device::Gemm<
   LayoutA,
   ElementB,
   LayoutB,
-  ElementC,
+  ElementD,
   LayoutC,
   ElementAccumulator,
   ElementAccumulator>;
@@ -459,7 +456,7 @@ cutlass::DeviceAllocation<typename ProblemShape::UnderlyingProblemShape> problem
 
 cutlass::DeviceAllocation<typename Gemm::ElementA> block_A;
 cutlass::DeviceAllocation<typename Gemm::ElementB> block_B;
-cutlass::DeviceAllocation<typename Gemm::ElementC> block_C;
+cutlass::DeviceAllocation<ElementD> block_C;
 cutlass::DeviceAllocation<typename Gemm::EpilogueOutputOp::ElementOutput> block_D;
 cutlass::DeviceAllocation<typename Gemm::EpilogueOutputOp::ElementOutput> block_ref_D;
 
@@ -854,7 +851,7 @@ void initialize(const Options &options) {
   std::vector<ElementA *> ptr_A_host(options.groups);
   std::vector<ElementB *> ptr_B_host(options.groups);
   std::vector<ElementC *> ptr_C_host(options.groups);
-  std::vector<ElementC *> ptr_D_host(options.groups);
+  std::vector<ElementD *> ptr_D_host(options.groups);
   std::vector<ElementAccumulator *> ptr_alpha_host(options.groups);
   std::vector<ElementAccumulator *> ptr_beta_host(options.groups);
 
@@ -928,9 +925,11 @@ void initialize(const Options &options) {
     auto problem = options.problem_sizes_host.at(i);
     uint64_t elements_A = uint64_t(get<0>(problem)) * uint64_t(get<2>(problem));
     uint64_t elements_B = uint64_t(get<2>(problem)) * uint64_t(get<1>(problem));
+    uint64_t elements_C = uint64_t(get<0>(problem)) * uint64_t(get<1>(problem));
 
     initialize_block(block_A.get() + offset_A.at(i), i, elements_A, seed + 2021 + 2*i, false, false);
     initialize_block(block_B.get() + offset_B.at(i), i, elements_B, seed + 2022 + 2*i, false, false);
+    initialize_block(block_C.get() + offset_C.at(i), i, elements_C, seed + 2023 + 2*i, false, false);
   }
   block_alpha.copy_from_host(alpha_host.data());
   block_beta.copy_from_host(beta_host.data());
@@ -944,6 +943,18 @@ typename Gemm::Arguments args_from_options(const Options &options)
   int device_id = 0;
   cutlass::KernelHardwareInfo kernel_hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Gemm::GemmKernel>(device_id);
   // kernel_hw_info.sm_count = ;
+#if defined(MOE)
+  ElementC const* ptr_source_C = nullptr;
+#else
+  ElementC const** ptr_source_C = nullptr;
+#endif
+  if constexpr (!cute::is_void_v<ElementC>) {
+  #if defined(MOE)
+    ptr_source_C = block_C.get();
+  #else
+    ptr_source_C = ptr_C.get();
+  #endif
+  }
 
   typename Gemm::Arguments arguments;
   decltype(arguments.epilogue.thread) fusion_args;
@@ -980,11 +991,11 @@ typename Gemm::Arguments args_from_options(const Options &options)
     #if defined(MOE)
       {block_A.get(), stride_A.get(), block_B.get(), stride_B.get(),
        ptr_A_batch_indices.get(), ptr_B_batch_indices.get()},
-      {fusion_args, nullptr, nullptr, block_D.get(), stride_D.get(),
-       nullptr, ptr_D_batch_indices.get()},
+      {fusion_args, ptr_source_C, stride_C.get(), block_D.get(), stride_D.get(),
+       ptr_source_C ? ptr_C_batch_indices.get() : nullptr, ptr_D_batch_indices.get()},
     #else
       {ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get()},
-      {fusion_args, nullptr, nullptr, ptr_D.get(), stride_D.get()},
+      {fusion_args, ptr_source_C, stride_C.get(), ptr_D.get(), stride_D.get()},
     #endif
       kernel_hw_info
     };
@@ -996,11 +1007,11 @@ typename Gemm::Arguments args_from_options(const Options &options)
     #if defined(MOE)
       {block_A.get(), stride_A.get(), block_B.get(), stride_B.get(),
        ptr_A_batch_indices.get(), ptr_B_batch_indices.get()},
-      {fusion_args, block_C.get(), stride_C.get(), block_D.get(), stride_D.get(),
-       ptr_C_batch_indices.get(), ptr_D_batch_indices.get()},
+      {fusion_args, ptr_source_C, stride_C.get(), block_D.get(), stride_D.get(),
+       ptr_source_C ? ptr_C_batch_indices.get() : nullptr, ptr_D_batch_indices.get()},
     #else
       {ptr_A.get(), stride_A.get(), ptr_B.get(), stride_B.get()},
-      {fusion_args, ptr_C.get(), stride_C.get(), ptr_D.get(), stride_D.get()},
+      {fusion_args, ptr_source_C, stride_C.get(), ptr_D.get(), stride_D.get()},
     #endif
       kernel_hw_info
     };
@@ -1073,17 +1084,17 @@ bool verify(const Options &options) {
       ElementAccumulator(alpha_host.at(i)),
       ref_A,
       ref_B,
-      ElementAccumulator(beta_host.at(i)),
+      ElementAccumulator(cute::is_void_v<ElementC> ? 0 : beta_host.at(i)),
       ref_C,
       ref_D);
 
     // Wait for kernel to finish
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    ElementC* host_ref_D = new ElementC[M*N];
-    CUDA_CHECK(cudaMemcpy(host_ref_D, block_ref_D.get()  + offset_D.at(i), M*N*sizeof(ElementC), cudaMemcpyDeviceToHost));
-    ElementC* host_D = new ElementC[M*N];
-    CUDA_CHECK(cudaMemcpy(host_D, block_D.get() + offset_D.at(i), M*N*sizeof(ElementC), cudaMemcpyDeviceToHost));
+    ElementD* host_ref_D = new ElementD[M*N];
+    CUDA_CHECK(cudaMemcpy(host_ref_D, block_ref_D.get()  + offset_D.at(i), M*N*sizeof(ElementD), cudaMemcpyDeviceToHost));
+    ElementD* host_D = new ElementD[M*N];
+    CUDA_CHECK(cudaMemcpy(host_D, block_D.get() + offset_D.at(i), M*N*sizeof(ElementD), cudaMemcpyDeviceToHost));
 
     float MAX_REL_ERR = 1e-2;
     float MAX_ABS_ERR = 5;
