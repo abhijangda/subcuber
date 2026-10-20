@@ -1105,7 +1105,7 @@ public:
 
           if (threadIdx.x%32 == 0 && blockIdx.x == 0 && blockIdx.y == 0)
             MY_PRINTF("1106 %d %d: %d\n", m_coord, n_coord, num_mis_with_gl_loads);
-          #pragma unroll (StrassenMiGroup::numMs())
+          #pragma unroll (StrassenMiGroup::numMs() > 1 ? StrassenMiGroup::numMs() : 1)
           for (int fused_mi = 0; fused_mi < StrassenMiGroup::numMs(); fused_mi++) {
             auto new_scheduler = scheduler;
             auto work_tile_info2 = new_scheduler.get_current_work();

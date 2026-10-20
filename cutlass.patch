@@ -63,6 +63,33 @@ index 3be30af7..4f60d73a 100644
  //////////////////////////////////////////////////////////////////////////////
  ///////////////////////////// BULK COPY //////////////////////////////////////
  //////////////////////////////////////////////////////////////////////////////
+diff --git a/include/cutlass/gemm/collective/fp8_accumulation.hpp b/include/cutlass/gemm/collective/fp8_accumulation.hpp
+index 6ff3a944..bf829e82 100644
+--- a/include/cutlass/gemm/collective/fp8_accumulation.hpp
++++ b/include/cutlass/gemm/collective/fp8_accumulation.hpp
+@@ -93,7 +93,8 @@ private:
+     static_assert(is_static<LayoutScale>::value, "Scale Layout should be static");
+     static_assert(is_rmem<TensorScale>::value , "Scale tensor must be rmem resident.");
+ 
+-    static_assert(LayoutAccum{}.shape() == LayoutScale{}.shape(), "Accumulator and scale must have same shape.");
++    static_assert(cute::product_each(LayoutAccum{}.shape()) == cute::product_each(LayoutScale{}.shape()),
++            "Accumulator and scale must have same extents.");
+ 
+     CUTLASS_PRAGMA_UNROLL
+     for (int i = 0; i < size(accum_); ++i) {
+@@ -116,8 +117,10 @@ private:
+     static_assert(is_rmem<TensorScaleA>::value, "ScaleA tensor must be rmem resident.");
+     static_assert(is_rmem<TensorScaleB>::value, "ScaleB tensor must be rmem resident.");
+ 
+-    static_assert(LayoutAccum{}.shape() == LayoutScaleA{}.shape(), "Accumulator and scaleA must have same shape.");
+-    static_assert(LayoutAccum{}.shape() == LayoutScaleB{}.shape(), "Accumulator and scaleB must have same shape.");
++    static_assert(cute::product_each(LayoutAccum{}.shape()) == cute::product_each(LayoutScaleA{}.shape()),
++            "Accumulator and scaleA must have same extents.");
++    static_assert(cute::product_each(LayoutAccum{}.shape()) == cute::product_each(LayoutScaleB{}.shape()),
++            "Accumulator and scaleB must have same extents.");
+ 
+     CUTLASS_PRAGMA_UNROLL
+     for (int i = 0; i < size(accum_); ++i) {
 diff --git a/include/cutlass/gemm/gemm_enumerated_types.h b/include/cutlass/gemm/gemm_enumerated_types.h
 index 8961735b..f03e333d 100644
 --- a/include/cutlass/gemm/gemm_enumerated_types.h
@@ -75,6 +102,18 @@ index 8961735b..f03e333d 100644
    kInvalid
  };
  
+diff --git a/include/cutlass/gemm/kernel/sm90_tile_scheduler_group.hpp b/include/cutlass/gemm/kernel/sm90_tile_scheduler_group.hpp
+index 92749b19..da6ca8a6 100644
+--- a/include/cutlass/gemm/kernel/sm90_tile_scheduler_group.hpp
++++ b/include/cutlass/gemm/kernel/sm90_tile_scheduler_group.hpp
+@@ -428,6 +428,7 @@ public:
+               scheduler_params.log_swizzle_size_, 
+               scheduler_params.raster_order_);
+   }
++
+   template <typename TileSchedulerPipeline, typename TileSchedulerPipelineState>
+   CUTLASS_DEVICE
+   auto
 diff --git a/include/cutlass/layout/tensor.h b/include/cutlass/layout/tensor.h
 index 9e8a354e..6d32dc9a 100644
 --- a/include/cutlass/layout/tensor.h
