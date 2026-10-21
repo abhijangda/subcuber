@@ -550,12 +550,13 @@ template <typename Kernel>
 constexpr auto kernel_runner_raster_order() {
   using RasterOrderOptions = typename Kernel::TileScheduler::RasterOrderOptions;
   if constexpr (std::is_same_v<typename Kernel::ArchTag, cutlass::arch::Sm90> &&
-                cute::size<0>(typename Kernel::ClusterShape{}) == 1 &&
-                cute::size<1>(typename Kernel::ClusterShape{}) == 2) {
-    return RasterOrderOptions::AlongM;
-  } else {
-    return RasterOrderOptions::AlongN;
+                requires { typename Kernel::ClusterShape; }) {
+    if constexpr (cute::size<0>(typename Kernel::ClusterShape{}) == 1 &&
+                  cute::size<1>(typename Kernel::ClusterShape{}) == 2) {
+      return RasterOrderOptions::AlongM;
+    }
   }
+  return RasterOrderOptions::AlongN;
 }
 
 template <typename Gemm>

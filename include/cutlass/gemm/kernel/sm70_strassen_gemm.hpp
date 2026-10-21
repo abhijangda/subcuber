@@ -178,6 +178,8 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
     ElementB* presum_m_b_workspace;
     ElementD* postsum_m_workspace;
 
+    StrideA dA{};
+    StrideB dB{};
     int run = 0;
 
     CUTLASS_HOST_DEVICE
@@ -203,6 +205,16 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
     CUTLASS_HOST_DEVICE
     int get_stride_B(int idx = 0) const {
       return get<1>(mainloop.dB);
+    }
+
+    CUTLASS_HOST_DEVICE
+    constexpr bool get_layout_B(int idx = 0) const {
+      if constexpr (cute::is_constant<1, decltype(get<0>(dB))>::value) {
+        return true;
+      }
+      else {
+        return false;
+      }
     }
 
     CUTLASS_HOST_DEVICE
@@ -284,6 +296,8 @@ static_assert(is_valid_tile_scheduler, "SM70 kernel does not support specializin
       const_cast<ElementB*>(args.mainloop.ptr_B),
       const_cast<ElementD*>(args.epilogue.ptr_D),
       presum_m_a, presum_m_b, postsum_m,
+      args.mainloop.dA,
+      args.mainloop.dB
     };
   }
 
