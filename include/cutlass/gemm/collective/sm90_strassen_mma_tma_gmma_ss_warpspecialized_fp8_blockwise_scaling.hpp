@@ -34,7 +34,7 @@
 #include "cutlass/cutlass.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/collective/collective_strassen_mma_decl.hpp"
-#include "cutlass/gemm/collective/strassen_fp8_accumulation.hpp"
+#include "cutlass/gemm/collective/fp8_accumulation.hpp"
 #include "cutlass/trace.h"
 #include "cutlass/numeric_types.h"
 #include "cutlass/layout/strassen_layout.hpp"
@@ -2059,7 +2059,7 @@ struct CollectiveStrassenMma<
     class ScaleFactor
   >
   CUTLASS_DEVICE
-  void scale_if_needed(StrassenGmmaFP8Accumulation<EngineAccum, LayoutAccum>& accumulation, ScaleFactor scaleFactor) {
+  void scale_if_needed(GmmaFP8Accumulation<EngineAccum, LayoutAccum>& accumulation, ScaleFactor scaleFactor) {
     if constexpr (ScalePromotionInterval != 4) {
       accumulation.scale_if_needed(scaleFactor);
     }
@@ -2075,7 +2075,7 @@ struct CollectiveStrassenMma<
     class ScaleFactor2
   >
   CUTLASS_DEVICE
-  void scale_if_needed(StrassenGmmaFP8Accumulation<EngineAccum, LayoutAccum>& accumulation, ScaleFactor1 scaleFactor1, ScaleFactor2 scaleFactor2) {
+  void scale_if_needed(GmmaFP8Accumulation<EngineAccum, LayoutAccum>& accumulation, ScaleFactor1 scaleFactor1, ScaleFactor2 scaleFactor2) {
     if constexpr (ScalePromotionInterval != 4) {
       accumulation.scale_if_needed(scaleFactor1, scaleFactor2);
     }
@@ -2229,7 +2229,7 @@ struct CollectiveStrassenMma<
     // WAIT on smem_pipe_read until its data are available (phase bit flips from rdPhaseBit value)
     auto barrier_token = pipeline.consumer_try_wait(smem_pipe_read);
     pipeline.consumer_wait(smem_pipe_read, barrier_token);
-    StrassenGmmaFP8Accumulation accumulation(accum, ScalePromotionInterval, size<2>(tCrA));
+    GmmaFP8Accumulation accumulation(accum, ScalePromotionInterval, size<2>(tCrA));
     warpgroup_fence_operand(accumulation());
     {
       int read_stage = smem_pipe_read.index();
