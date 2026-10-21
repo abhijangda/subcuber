@@ -7,6 +7,7 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <vector>
 
 #include <cuda_runtime.h>
 
@@ -18,6 +19,7 @@
 #include "cutlass/numeric_types.h"
 #include "cutlass/util/device_memory.h"
 #include "cutlass/util/packed_stride.hpp"
+#include "cutlass/util/reference/host/tensor_fill.h"
 
 struct KernelRunnerBuffers {
   void const *a;
@@ -610,6 +612,90 @@ int kernel_runner_run_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
       args, warmup_iterations, iterations, streams, num_streams, avg_ms);
 }
 
+template <typename Gemm, typename ScaleConfig>
+int kernel_runner_run_fp8_blockwise_cutlass3(
+    KernelRunnerBuffers buffers, int m, int n, int k,
+    int warmup_iterations, int iterations, cudaStream_t *streams,
+    int num_streams, int, float *avg_ms) {
+  using Kernel = typename Gemm::GemmKernel;
+  using ElementA = typename Gemm::ElementA;
+  using ElementB = typename Gemm::ElementB;
+  using ElementD = typename Gemm::ElementD;
+  using StrideA = typename Gemm::StrideA;
+  using StrideB = typename Gemm::StrideB;
+  using StrideC = typename Gemm::StrideC;
+  using StrideD = typename Gemm::StrideD;
+  constexpr int scale_n = Gemm::CollectiveMainloop::ScaleGranularityN;
+  constexpr int scale_k = Gemm::CollectiveMainloop::ScaleGranularityK;
+
+  if (m < 2 * int(cute::size<0>(typename Kernel::TileShape{})) ||
+      n < 2 * int(cute::size<1>(typename Kernel::TileShape{})) ||
+      k < 2 * int(cute::size<2>(typename Kernel::TileShape{})) ||
+      m % 2 || n % (2 * scale_n) || k % (2 * scale_k)) {
+    return kernel_runner_status_to_error(cutlass::Status::kErrorInvalidProblem);
+  }
+
+  auto problem_shape = cute::make_shape(m, n, k, 1);
+  auto layout_sfa = ScaleConfig::tile_atom_to_shape_SFA(problem_shape);
+  auto layout_sfb = ScaleConfig::tile_atom_to_shape_SFB(problem_shape);
+  std::vector<float> host_scale_a(cute::size(cute::filter_zeros(layout_sfa)));
+  std::vector<float> host_scale_b(cute::size(cute::filter_zeros(layout_sfb)));
+  cutlass::reference::host::BlockFillRandomUniform(
+      host_scale_a.data(), host_scale_a.size(), 2025, 4.0, -4.0);
+  cutlass::reference::host::BlockFillRandomUniform(
+      host_scale_b.data(), host_scale_b.size(), 2026, 4.0, -4.0);
+  cutlass::device_memory::allocation<float> scale_a(host_scale_a.size());
+  cutlass::device_memory::allocation<float> scale_b(host_scale_b.size());
+  cutlass::device_memory::allocation<ElementA> packed_a(size_t(m) * k);
+  cutlass::device_memory::allocation<ElementB> packed_b(size_t(n) * k);
+  cudaError_t err = cudaMemcpy(scale_a.get(), host_scale_a.data(),
+                              host_scale_a.size() * sizeof(float), cudaMemcpyHostToDevice);
+  if (err == cudaSuccess) {
+    err = cudaMemcpy(scale_b.get(), host_scale_b.data(),
+                     host_scale_b.size() * sizeof(float), cudaMemcpyHostToDevice);
+  }
+  auto pack_operand = [&](auto const *source, auto *packed, int outer, bool column_major) {
+    int half_outer = outer / 2;
+    int half_k = k / 2;
+    size_t quadrant_elements = size_t(half_outer) * half_k;
+    for (int quadrant = 0; quadrant < 4; ++quadrant) {
+      int outer_quadrant = column_major ? quadrant % 2 : quadrant / 2;
+      int inner_quadrant = column_major ? quadrant / 2 : quadrant % 2;
+      auto quadrant_source = source + size_t(outer_quadrant * half_outer) * k +
+                             inner_quadrant * half_k;
+      cudaError_t copy_err = cudaMemcpy2D(
+          packed + quadrant * quadrant_elements, size_t(half_k) * sizeof(*packed),
+          quadrant_source, size_t(k) * sizeof(*packed),
+          size_t(half_k) * sizeof(*packed), half_outer, cudaMemcpyDeviceToDevice);
+      if (copy_err != cudaSuccess) return copy_err;
+    }
+    return cudaSuccess;
+  };
+  if (err == cudaSuccess) {
+    err = pack_operand(static_cast<ElementA const *>(buffers.a), packed_a.get(), m, false);
+  }
+  if (err == cudaSuccess) {
+    err = pack_operand(static_cast<ElementB const *>(buffers.b), packed_b.get(), n, true);
+  }
+  int device_id = 0;
+  if (err == cudaSuccess) err = cudaGetDevice(&device_id);
+  if (err != cudaSuccess) return static_cast<int>(err);
+  auto hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Kernel>(device_id);
+  StrideA stride_a = cutlass::make_cute_packed_stride(StrideA{}, {m, k, 1});
+  StrideB stride_b = cutlass::make_cute_packed_stride(StrideB{}, {n, k, 1});
+  StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {m, n, 1});
+  typename Gemm::Arguments args{
+      cutlass::gemm::GemmUniversalMode::kGemm, {m, n, k},
+      {packed_a.get(), stride_a, packed_b.get(), stride_b,
+       scale_a.get(), layout_sfa, scale_b.get(), layout_sfb},
+      {{}, nullptr, StrideC{}, static_cast<ElementD *>(buffers.d), stride_d},
+      hw_info};
+  args.scheduler.raster_order = kernel_runner_raster_order<Kernel>();
+  num_streams = std::max(1, std::min(num_streams, kKernelRunnerMaxStreams));
+  return kernel_runner_tune_swizzle_array<Gemm>(
+      args, warmup_iterations, iterations, streams, num_streams, avg_ms);
+}
+
 template <typename Gemm>
 int kernel_runner_run_moe_cutlass3(KernelRunnerBuffers buffers, int m, int n, int k,
                                    int warmup_iterations, int iterations,
@@ -948,6 +1034,16 @@ int kernel_runner_run_grouped_gemm_cutlass3(KernelRunnerBuffers buffers, int m, 
                                int split_k_slices, float *avg_ms) { \
     return kernel_runner_run_cutlass3<gemm_type>(buffers, m, n, k, warmup_iterations, \
                                                 iterations, streams, num_streams, split_k_slices, avg_ms); \
+  }
+
+#define STRASSEN_RUNNER_EXPORT_FP8_BLOCKWISE_CUTLASS3(function_name, gemm_type, scale_config) \
+  extern "C" int function_name(KernelRunnerBuffers buffers, int m, int n, int k, \
+                               int warmup_iterations, int iterations, \
+                               cudaStream_t *streams, int num_streams, \
+                               int split_k_slices, float *avg_ms) { \
+    return kernel_runner_run_fp8_blockwise_cutlass3<gemm_type, scale_config>( \
+        buffers, m, n, k, warmup_iterations, iterations, streams, num_streams, \
+        split_k_slices, avg_ms); \
   }
 
 #define STRASSEN_RUNNER_EXPORT_MOE_CUTLASS3(function_name, gemm_type) \

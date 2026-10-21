@@ -127,6 +127,35 @@ The level-2 `4x256_4x256_opt_no` variant builds and runs at this size; numerical
 correctness has not been validated. Use `--strassen_level=1` for the variants
 validated against cuBLAS.
 
+Hopper FP8 blockwise scaling:
+
+Hopper FP8 blockwise-scaled level-1 Strassen kernels are registered as
+`hopper_fp8_blockwise_scaling_sm_kernel_presum_cooperative_max_fusion_*` and
+`hopper_fp8_blockwise_scaling_sm_kernel_presum_cooperative_max_fusion_tma_reduce_*`.
+Both have `_4x128_4x128_opt_no_1x2_seq` and `_4x128_4x128_opt_no_1x2_par` suffixes.
+They retain the example's E4M3 inputs, FP32 scales with granularities 1x128 for A
+and 128x128 for B, and FP16 row-major output. The cuBLASLt FP8 baseline uses BF16
+column-major output instead. Input packing and scale initialization are outside
+timing. Both A and B presums use global kernels; the adapter caches them after
+the first two launches, so use at least two warmup iterations to exclude their
+initial computation from timing. Scale seeds are 2025 and 2026, as in the
+cuBLASLt baseline.
+
+```bash
+make -j kernel_runner_hopper
+timeout 30s ./build/kernel_runner_hopper \
+	--m=16384 --n=16384 --k=8192 \
+	--dtype=fp8 --gpu_arch=hopper --strassen_level=1 \
+	--iterations=10 --warmup=2 --streams=3 --sleep_seconds=0 \
+	--kernel_regex='^hopper_fp8_blockwise_scaling_sm_kernel_presum_'
+```
+
+`make -C tests test_hopper_fp8_blockwise_scaling_sm_kernel_presum` builds a
+bitwise runner-vs-original-layout regression test for both reductions and both
+schedules. This checks integration with non-unit scales, not agreement with a
+CPU arithmetic reference; the standalone example's known CPU/GPU numerical
+differences and tolerances are unchanged.
+
 Optional filtering:
 
 ```bash
