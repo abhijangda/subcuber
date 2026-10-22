@@ -647,36 +647,11 @@ int kernel_runner_run_fp8_blockwise_cutlass3(
       host_scale_b.data(), host_scale_b.size(), 2026, 4.0, -4.0);
   cutlass::device_memory::allocation<float> scale_a(host_scale_a.size());
   cutlass::device_memory::allocation<float> scale_b(host_scale_b.size());
-  cutlass::device_memory::allocation<ElementA> packed_a(size_t(m) * k);
-  cutlass::device_memory::allocation<ElementB> packed_b(size_t(n) * k);
   cudaError_t err = cudaMemcpy(scale_a.get(), host_scale_a.data(),
                               host_scale_a.size() * sizeof(float), cudaMemcpyHostToDevice);
   if (err == cudaSuccess) {
     err = cudaMemcpy(scale_b.get(), host_scale_b.data(),
                      host_scale_b.size() * sizeof(float), cudaMemcpyHostToDevice);
-  }
-  auto pack_operand = [&](auto const *source, auto *packed, int outer, bool column_major) {
-    int half_outer = outer / 2;
-    int half_k = k / 2;
-    size_t quadrant_elements = size_t(half_outer) * half_k;
-    for (int quadrant = 0; quadrant < 4; ++quadrant) {
-      int outer_quadrant = column_major ? quadrant % 2 : quadrant / 2;
-      int inner_quadrant = column_major ? quadrant / 2 : quadrant % 2;
-      auto quadrant_source = source + size_t(outer_quadrant * half_outer) * k +
-                             inner_quadrant * half_k;
-      cudaError_t copy_err = cudaMemcpy2D(
-          packed + quadrant * quadrant_elements, size_t(half_k) * sizeof(*packed),
-          quadrant_source, size_t(k) * sizeof(*packed),
-          size_t(half_k) * sizeof(*packed), half_outer, cudaMemcpyDeviceToDevice);
-      if (copy_err != cudaSuccess) return copy_err;
-    }
-    return cudaSuccess;
-  };
-  if (err == cudaSuccess) {
-    err = pack_operand(static_cast<ElementA const *>(buffers.a), packed_a.get(), m, false);
-  }
-  if (err == cudaSuccess) {
-    err = pack_operand(static_cast<ElementB const *>(buffers.b), packed_b.get(), n, true);
   }
   int device_id = 0;
   if (err == cudaSuccess) err = cudaGetDevice(&device_id);
@@ -687,7 +662,8 @@ int kernel_runner_run_fp8_blockwise_cutlass3(
   StrideD stride_d = cutlass::make_cute_packed_stride(StrideD{}, {m, n, 1});
   typename Gemm::Arguments args{
       cutlass::gemm::GemmUniversalMode::kGemm, {m, n, k},
-      {packed_a.get(), stride_a, packed_b.get(), stride_b,
+      {static_cast<ElementA const *>(buffers.a), stride_a,
+       static_cast<ElementB const *>(buffers.b), stride_b,
        scale_a.get(), layout_sfa, scale_b.get(), layout_sfb},
       {{}, nullptr, StrideC{}, static_cast<ElementD *>(buffers.d), stride_d},
       hw_info};

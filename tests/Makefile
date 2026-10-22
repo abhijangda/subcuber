@@ -48,7 +48,7 @@ HOPPER_F16_SCHEDULE_SRCS := $(foreach schedule,cooperative pingpong,$(foreach re
 	kernels/hopper/b_presum_kernel/hopper_f16_sw_a_presum_interleaved_b_presum_kernel_$(schedule)_$(reduction).cu))
 HOPPER_F16_SCHEDULE_BUILD_DIR := $(abspath ../build/obj/kernel_runner_hopper)
 HOPPER_F16_SCHEDULE_OBJS := $(addprefix $(HOPPER_F16_SCHEDULE_BUILD_DIR)/,$(HOPPER_F16_SCHEDULE_SRCS:.cu=.o))
-HOPPER_FP8_BLOCKWISE_SCALING_SRCS := $(foreach reduction,max_fusion max_fusion_tma_reduce,kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sm_kernel_presum_cooperative_$(reduction).cu)
+HOPPER_FP8_BLOCKWISE_SCALING_SRCS := $(foreach reduction,max_fusion max_fusion_tma_reduce,kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_$(reduction).cu)
 HOPPER_FP8_BLOCKWISE_SCALING_OBJS := $(addprefix $(HOPPER_F16_SCHEDULE_BUILD_DIR)/,$(HOPPER_FP8_BLOCKWISE_SCALING_SRCS:.cu=.o))
 HOPPER_F16_MOE_SW_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion.cu
 HOPPER_F16_MOE_SW_PINGPONG_TMA_REDUCE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce.cu
@@ -94,7 +94,7 @@ HOPPER_TESTS := test_hopper_f32_strassen_winograd_fused_presum \
 	test_hopper_f16_tensorop_strassen_winograd_cooperative \
 	test_hopper_f16_tensorop_strassen_winograd_cooperative_pingpong \
 	test_hopper_f16_tensorop_strassen_winograd_schedules \
-	test_hopper_fp8_blockwise_scaling_sm_kernel_presum \
+	test_hopper_fp8_blockwise_scaling_sw_kernel_presum \
 	test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce \
 	test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce
 
@@ -113,7 +113,7 @@ all: $(TARGETS)
 hopper_fp8_blockwise_scaling_objects:
 	$(MAKE) -C .. BUILD_DIR=$(HOPPER_F16_SCHEDULE_BUILD_DIR) $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS)
 
-test_hopper_fp8_blockwise_scaling_sm_kernel_presum: hopper_fp8_blockwise_scaling_sm_kernel_presum.cu ../src/cuda/kernel_runner_support.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sm_kernel_presum_cooperative_max_fusion.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sm_kernel_presum_cooperative_max_fusion_tma_reduce.cuh hopper_fp8_blockwise_scaling_objects
+test_hopper_fp8_blockwise_scaling_sw_kernel_presum: hopper_fp8_blockwise_scaling_sw_kernel_presum.cu ../src/cuda/kernel_runner_support.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_tma_reduce.cuh hopper_fp8_blockwise_scaling_objects
 	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED $(HOPPER_GENCODE) $< $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS) -o $@
 
 $(GTEST_OBJECT): $(GTEST_SRC)

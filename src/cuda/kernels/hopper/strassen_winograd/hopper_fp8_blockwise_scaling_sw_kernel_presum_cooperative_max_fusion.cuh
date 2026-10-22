@@ -23,11 +23,11 @@ using namespace cute;
 
 using ElementA = cutlass::float_e4m3_t;
 using LayoutA = cutlass::layout::RowMajor;
-using SubMatLayoutA = cutlass::layout::StrassenLayout;
+using SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA = 128 / cutlass::sizeof_bits<ElementA>::value;
 using ElementB = cutlass::float_e4m3_t;
 using LayoutB = cutlass::layout::ColumnMajor;
-using SubMatLayoutB = cutlass::layout::StrassenLayout;
+using SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB = 128 / cutlass::sizeof_bits<ElementB>::value;
 using ElementC = void;
 using ElementD = cutlass::half_t;
@@ -116,10 +116,10 @@ using StrassenGemmKernelsForReduce = cutlass::gemm::device::StrassenGemmKernels<
     AlignmentA, AlignmentB, AlignmentC, ElementD>;
 
 template <bool UseTmaReduce, typename Schedule = ScheduleStrassenGroups1>
-using HopperFp8SmKernelPresumCooperativeMaxFusionForReduce =
+using HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionForReduce =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenGemmKernelsForReduce<UseTmaReduce, Schedule>>;
 
-using HopperFp8SmKernelPresumCooperativeMaxFusion_4x128_4x128_OptNo_1x2 =
-    HopperFp8SmKernelPresumCooperativeMaxFusionForReduce<false>;
-using HopperFp8SmKernelPresumCooperativeMaxFusion_4x128_4x128_OptNo_1x2_Par =
-    HopperFp8SmKernelPresumCooperativeMaxFusionForReduce<false, ScheduleStrassenGroupsPar>;
+using HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusion_4x128_4x128_OptNo_1x2 =
+    HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionForReduce<false>;
+using HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusion_4x128_4x128_OptNo_1x2_Par =
+    HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionForReduce<false, ScheduleStrassenGroupsPar>;

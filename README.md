@@ -97,7 +97,7 @@ The runner requires the GEMM problem size, data type, GPU architecture, Strassen
 Supported values:
 
 ```text
---dtype=f32|f16|fp64
+--dtype=f32|f16|fp8|fp64
 --gpu_arch=volta|ampere|hopper|blackwell
 --strassen_level=0|1|2|all
 ```
@@ -105,120 +105,20 @@ Supported values:
 Optional `--sleep_seconds=N` sets a nonnegative integer delay in seconds between
 candidate benchmarks and split-K trials. Use `--sleep_seconds=0` to disable the delay
 or `--sleep_seconds=1` for one second. When omitted, the delay is 5 seconds for `f32`
-and 10 seconds for `f16`/`f64`. It does not apply between warmup or timed iterations,
+and 10 seconds for `f16`/`fp8`/`f64`. It does not apply between warmup or timed iterations,
 or after the final benchmark.
 
-For non-grouped Hopper FP16 GEMM, `--b_presum=kernel` selects the variants in
-`src/cuda/kernels/hopper/b_presum_kernel/`. These keep A presums interleaved,
-and compute B presums in a separate global kernel. Level-1 variants use Strassen
-layout for both A and B inputs. Input packing is performed before timing. The existing adapter
-caches global presums after its first two launches, so B-presum cost may fall
-within warmup rather than the timed iterations. The names replace `sw_interleaved_presum` with
-`sw_a_presum_interleaved_b_presum_kernel`, retaining their configuration suffixes.
-The default `--b_presum=interleaved` preserves the existing kernels and names.
-Non-grouped GEMM baselines remain available in either mode. This option is
-incompatible with `--experts` and `--groups`; MoE and grouped kernels are unchanged.
-
-At M=N=16384, K=8192, the 19 level-1 max-fusion variants pass full-output cuBLAS
-comparison using the existing FP16 test tolerances. Low-fusion variants are
-excluded from `--b_presum=kernel`. Level 2 offers `2x256_2x256_opt_no` and
-`4x256_4x256_opt_no` with the same schedule and current input-layout settings.
-The level-2 `4x256_4x256_opt_no` variant builds and runs at this size; numerical
-correctness has not been validated. Use `--strassen_level=1` for the variants
-validated against cuBLAS.
-
-Hopper FP8 blockwise scaling:
-
-Hopper FP8 blockwise-scaled level-1 Strassen kernels are registered as
-`hopper_fp8_blockwise_scaling_sm_kernel_presum_cooperative_max_fusion_*` and
-`hopper_fp8_blockwise_scaling_sm_kernel_presum_cooperative_max_fusion_tma_reduce_*`.
-Both have `_4x128_4x128_opt_no_1x2_seq` and `_4x128_4x128_opt_no_1x2_par` suffixes.
-They retain the example's E4M3 inputs, FP32 scales with granularities 1x128 for A
-and 128x128 for B, and FP16 row-major output. The cuBLASLt FP8 baseline uses BF16
-column-major output instead. Input packing and scale initialization are outside
-timing. Both A and B presums use global kernels; the adapter caches them after
-the first two launches, so use at least two warmup iterations to exclude their
-initial computation from timing. Scale seeds are 2025 and 2026, as in the
-cuBLASLt baseline.
-
-```bash
-make -j kernel_runner_hopper
-timeout 30s ./build/kernel_runner_hopper \
-	--m=16384 --n=16384 --k=8192 \
-	--dtype=fp8 --gpu_arch=hopper --strassen_level=1 \
-	--iterations=10 --warmup=2 --streams=3 --sleep_seconds=0 \
-	--kernel_regex='^hopper_fp8_blockwise_scaling_sm_kernel_presum_'
-```
-
-`make -C tests test_hopper_fp8_blockwise_scaling_sm_kernel_presum` builds a
-bitwise runner-vs-original-layout regression test for both reductions and both
-schedules. This checks integration with non-unit scales, not agreement with a
-CPU arithmetic reference; the standalone example's known CPU/GPU numerical
-differences and tolerances are unchanged.
-
-Optional filtering:
-
-```bash
-./build/kernel_runner \
-	--m=4096 --n=4096 --k=4096 \
-	--dtype=f32 --gpu_arch=ampere --strassen_level=all \
-	--iterations=10 --warmup=2 --streams=7 \
-	--kernel_regex='presum'
-```
-
-Non-grouped Hopper fp16 level-1 cooperative and pingpong Strassen kernel names
-end in `_seq` or `_par`, including the `--b_presum=kernel` variants and both
-TMA-reduce and non-TMA-reduce variants. `_seq` preserves each kernel's existing
-schedule; `_par` places `FusedMiGroup<7, 0>`, `FusedMiGroup<7, 2>`, and
-`FusedMiGroup<7, 4>` in one `ParallelMiGroups`. Use `--kernel_regex='_par$'`
-to select the new schedule or `--kernel_regex='_seq$'` for the existing one.
-Level-2, grouped MoE, and cooperative-pingpong kernel names are unchanged.
-Build the runner-entry reference tests with
-`make -C tests test_hopper_f16_tensorop_strassen_winograd_schedules`.
-
-The Hopper fp16 level-2 cooperative-pingpong kernel uses the example's
-`L2_SCHED_TMA_REDUCE_ADD` schedule, with 2x256 A/B presum tiles and original
-row-major input layouts:
-
-```bash
-make kernel_runner_hopper
-timeout 30s ./build/kernel_runner_hopper \
-	--m=16384 --n=16384 --k=16384 \
-	--dtype=f16 --gpu_arch=hopper --strassen_level=2 \
-	--iterations=10 --warmup=2 --streams=1 \
-	--kernel_regex='level_2_cooperative_pingpong_max_fusion_tma_reduce'
-```
-
-This kernel defaults to `--split-compile=1`; parallel split compilation can
-fail register allocation with CUDA 13.2. The runner benchmarks without checking
-output. Run its full-output reference test separately:
-
-```bash
-make -C tests test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce
-timeout 30s ./tests/test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce
-```
-
-The all-cooperative level-2 TMA-reduce variants use 128x256x64 GEMM tiles with
-four stages and either 2x256 or 4x256 A/B presum tile parameters. They match
-the level-2 example's interleaved A presums and global B-presum kernels.
-For M=N=16384, K=8192, use
-`--kernel_regex='level_2_cooperative_max_fusion_tma_reduce_4x256_4x256_opt_no$'`:
-the 4x256 variant passes the reference test, while 2x256 is rejected by
-`can_implement` at this shape. Their reference-test build target is
-`make -C tests test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce`.
-
-The fp16 MoE grouped GEMM treats `m` as the number of routed token rows per
+The MoE grouped GEMM treats `m` as the number of routed token rows per
 expert, `k` as the input hidden size, and `n` as the output hidden size. Each
 expert uses a separate `k` by `n` weight matrix, so the total number of token
-rows is `m * experts`. Because all experts have the same shape, the runner uses
-one fp16 `cublasGemmStridedBatchedEx` call. Run it at Strassen level 0:
+rows is `m * experts`. Run it as:
 
 ```bash
 ./build/kernel_runner \
 	--m=4096 --n=4096 --k=4096 \
-	--dtype=f16 --gpu_arch=hopper --strassen_level=0 \
+	--dtype=f16 --gpu_arch=hopper \
 	--iterations=10 --warmup=2 --streams=1 \
-	--experts=8 --kernel_regex='cublas_grouped_moe'
+	--experts=8
 ```
 
 `--groups=N` is accepted as an alias for `--experts=N`.

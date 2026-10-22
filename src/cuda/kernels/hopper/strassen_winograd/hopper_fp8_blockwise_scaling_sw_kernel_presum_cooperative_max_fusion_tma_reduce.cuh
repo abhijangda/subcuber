@@ -1,0 +1,8 @@
+#pragma once
+
+#include "cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion.cuh"
+
+using HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionTmaReduce_4x128_4x128_OptNo_1x2 =
+    HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionForReduce<true>;
+using HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionTmaReduce_4x128_4x128_OptNo_1x2_Par =
+    HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionForReduce<true, ScheduleStrassenGroupsPar>;
