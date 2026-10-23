@@ -420,6 +420,9 @@ public:
         bool has_A_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyAPresum(MmaStrassen::PresumCompute);
         bool has_B_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyBPresum(MmaStrassen::PresumCompute);
 
+        if (has_B_presums && gemm::detail::is_major<1, StrideB>()) {
+          return Status::kInvalid;
+        }
         //Multiple kernels
         if (!GemmKernelM0::StrassenMiGroup::hasM0() ||
             has_A_presums && !GemmKernelM0::StrassenMiGroup::hasM0() ||

@@ -103,15 +103,15 @@ using TensorOpElem = cutlass::bfloat16_t;
 // A matrix configuration
 using         ElementA    = TensorOpElem;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-using         SubMatLayoutA = cutlass::layout::StrassenLayout;
-// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
+// using         SubMatLayoutA = cutlass::layout::StrassenLayout;
+using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = TensorOpElem;                                // Element type for B matrix operand
-using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
-using         SubMatLayoutB = cutlass::layout::StrassenLayout;
-// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
+using         LayoutB     = cutlass::layout::ColumnMajor;                   // RowMajor or ColumnMajor for B matrix operand
+// using         SubMatLayoutB = cutlass::layout::StrassenLayout;
+using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
@@ -664,7 +664,7 @@ void initialize(const Options &options) {
   initialize_block(block_C, seed + 2021, false, false, false);
 }
 
-template <class Element>
+template <class Element, class Layout>
 __global__ void unpack_strassen_layout(
   Element const* packed, Element* original, int rows, int columns) {
   int row = blockIdx.x;
@@ -672,13 +672,15 @@ __global__ void unpack_strassen_layout(
   int half_columns = columns / 2;
   int row_in_quadrant = row % half_rows;
   int row_quadrant = row / half_rows;
+  auto layout = Layout::packed({rows, columns});
+  auto quadrant_layout = Layout::packed({half_rows, half_columns});
 
   for (int column = threadIdx.x; column < columns; column += blockDim.x) {
     int column_in_quadrant = column % half_columns;
     int quadrant = row_quadrant * 2 + column / half_columns;
     int packed_idx = quadrant * half_rows * half_columns +
-                     row_in_quadrant * half_columns + column_in_quadrant;
-    original[row * columns + column] = packed[packed_idx];
+                     quadrant_layout({row_in_quadrant, column_in_quadrant});
+    original[layout({row, column})] = packed[packed_idx];
   }
 }
 
@@ -717,13 +719,13 @@ bool verify(const Options &options) {
 
   if constexpr (std::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout>) {
     block_reference_A.reset(options.m * options.k);
-    unpack_strassen_layout<<<options.m, 256>>>(
+    unpack_strassen_layout<ElementA, LayoutA><<<options.m, 256>>>(
       block_A.get(), block_reference_A.get(), options.m, options.k);
     reference_A = block_reference_A.get();
   }
   if constexpr (std::is_same_v<SubMatLayoutB, cutlass::layout::StrassenLayout>) {
     block_reference_B.reset(options.k * options.n);
-    unpack_strassen_layout<<<options.k, 256>>>(
+    unpack_strassen_layout<ElementB, LayoutB><<<options.k, 256>>>(
       block_B.get(), block_reference_B.get(), options.k, options.n);
     reference_B = block_reference_B.get();
   }

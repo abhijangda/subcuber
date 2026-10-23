@@ -48,7 +48,10 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
 
   constexpr bool is_B_row_or_col_major = params.get_layout_B();
   using PresumGlobalIteratorA = threadblock::PresumDetail::GlobalIterator<ElementA, kThreadCount, PresumShapeA, PresumVecType, false, true, false>;
-  using PresumGlobalIteratorB = threadblock::PresumDetail::GlobalIterator<ElementB, kThreadCount, PresumShapeB, PresumVecType, true, is_B_row_or_col_major, false>;
+  using PresumIteratorShapeB = cute::conditional_t<is_B_row_or_col_major, PresumShapeB,
+                                                  cutlass::gemm::GemmShape<PresumShapeB::kN, PresumShapeB::kM, 1>>;
+  // Column-major B traverses K first, including the presum tile multiplier.
+  using PresumGlobalIteratorB = threadblock::PresumDetail::GlobalIterator<ElementB, kThreadCount, PresumIteratorShapeB, PresumVecType, is_B_row_or_col_major, is_B_row_or_col_major, false>;
 
   cutlass::gemm::GemmCoord threadblock_tile_offset = {(int)blockIdx.y, (int)blockIdx.x, 0};
 

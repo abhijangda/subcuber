@@ -102,7 +102,7 @@ constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // M
 
 // B matrix configuration
 using         ElementB    = TensorOpElem;                                // Element type for B matrix operand
-using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
+using         LayoutB     = cutlass::layout::ColumnMajor;                   // Layout type for B matrix operand
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
