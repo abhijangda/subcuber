@@ -115,9 +115,9 @@ using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = void;//TensorOpElem;                                           // No C source operand
+using         ElementC    = TensorOpElem;                                           // No C source operand
 using         ElementD    = TensorOpElem;                                // Element type for D matrix operand
-using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
+using         LayoutC     = cutlass::layout::ColumnMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
 constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;    // Memory access granularity/alignment of C/D matrix in units of elements (up to 16 bytes)
 
@@ -148,7 +148,7 @@ using TileShapeM2To6        = Shape<_128,_256,_64>;
 using ClusterShape        = Shape<_1,_2,_1>;                                // Shape of the threadblocks in a cluster
 const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 4 : 4;          // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 4 : 4;
-const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 4 : 3;
+const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 4 : 4;
 using PresumTileShapeA    = Shape<_2, _256>;
 using PresumTileShapeB    = Shape<_2, _256>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder

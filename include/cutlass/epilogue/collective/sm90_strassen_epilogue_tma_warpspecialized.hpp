@@ -236,16 +236,27 @@ private:
     alignas(SmemAlignmentD) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D2;
   };
 
-  template<bool HasD2>
-  union CollectiveStorageReuseCWithoutPostsumAndD2_ {
+  union CollectiveStorageReuseCWithD2WithoutPostsum_ {
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_Postsum;
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
     alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_C2;
     struct {
       alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
-      alignas(int(HasD2)*MaxSmemAlignment) ArrayEngine<SmemElementD, int(HasD2)*cosize_v<SmemLayoutD>> smem_D2;
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D2;
     };
   };
+
+  union CollectiveStorageReuseCWithoutPostsumAndD2_ {
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_Postsum;
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementC, cosize_v<SmemLayoutC>> smem_C;
+    alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutC>> smem_C2;
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D;
+      alignas(MaxSmemAlignment) ArrayEngine<SmemElementD, cosize_v<SmemLayoutD>> smem_D2;
+  };
+
+  template<bool HasD2>
+  using CollectiveStorageReuseCWithoutPostsum_ = cute::conditional_t<HasD2, CollectiveStorageReuseCWithD2WithoutPostsum_,
+                                                                            CollectiveStorageReuseCWithoutPostsumAndD2_>;
 
   template<bool HasD2>
   struct CollectiveStorageReuseCWithPostsum_ {
@@ -300,12 +311,12 @@ private:
 #endif
 
   using CollectiveStorageReuseC = cute::conditional_t<(Level2StoreM4_ || Level2LoadsC2) && l2_sched_tma_reduce_add,
-                                                      CollectiveStorageReuseCWithoutPostsumAndD2_<Level2StoreM4_>,
+                                                      CollectiveStorageReuseCWithoutPostsum_<Level2StoreM4_>,
                                                       cute::conditional_t<MaxNumGLLoads + int(Level2LoadsC2) >= 3,
                                                                           CollectiveStorageReuseCWithPostsumAndC2_,
                                                                           cute::conditional_t<MaxNumGLLoads + int(Level2LoadsC2) >= 2  || Level2StoreM4_,
                                                                                               CollectiveStorageReuseCWithPostsum_<Level2StoreM4_>,
-                                                                                              CollectiveStorageReuseCWithoutPostsumAndD2_<Level2StoreM4_>>>
+                                                                                              CollectiveStorageReuseCWithoutPostsum_<Level2StoreM4_>>>
                                                      >;
   using RWCTypes = typename StrassenMiGroup::RWCTypes;
 
