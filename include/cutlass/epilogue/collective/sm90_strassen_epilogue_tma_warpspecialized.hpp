@@ -494,7 +494,16 @@ public:
 
     typename Params::TMA_C tma_load_postsum_m{};
 
-    Tensor tensor_load_m = make_tensor(make_gmem_ptr<TmaElementC const>(postsum_m), make_layout(make_shape(4*M/2,N/2,L), make_stride(N/2, get<1>(args.dD), get<2>(args.dD))));
+    auto postsum_shape = is_m_major_D ? make_shape(M/2,4*N/2,L) : make_shape(4*M/2,N/2,L);
+    auto postsum_stride = [&] {
+      if constexpr (is_m_major_D) {
+        return make_stride(_1{}, M/2, get<2>(args.dD));
+      }
+      else {
+        return make_stride(N/2, _1{}, get<2>(args.dD));
+      }
+    }();
+    Tensor tensor_load_m = make_tensor(make_gmem_ptr<TmaElementC const>(postsum_m), make_layout(postsum_shape, postsum_stride));
     tma_load_postsum_m = make_tma_copy_C_sm90(
         CopyOpG2S{},
         tensor_load_m,
@@ -502,7 +511,7 @@ public:
         EpilogueTile{});
 
     typename Params::TMA_D tma_store_postsum_m{};
-    Tensor tensor_store_m = make_tensor(make_gmem_ptr<TmaElementD>(postsum_m), make_layout(make_shape(4*M/2,N/2,L), make_stride(N/2, get<1>(args.dD), get<2>(args.dD))));
+    Tensor tensor_store_m = make_tensor(make_gmem_ptr<TmaElementD>(postsum_m), make_layout(postsum_shape, postsum_stride));
 
     tma_store_postsum_m = make_tma_copy_C_sm90(
         CopyOpS2G{},
@@ -721,11 +730,12 @@ public:
 
     if (global_src.valid() && global_src.is_mem_global()) {
       if (global_src.is_layout_final()) {
-        auto d_ptr = d.data() + make_coord((global_src.get_op()%2)*N/2,
-                                           (global_src.get_op()/2)*M/2,_);
+        auto d_offset = is_m_major_D ? make_coord((global_src.get_op()/2)*M/2, (global_src.get_op()%2)*N/2, _) :
+                                      make_coord((global_src.get_op()%2)*N/2, (global_src.get_op()/2)*M/2, _);
+        auto d_ptr = d.data() + d_offset;
         return cute::tuple(make_tensor(d_ptr, d.layout()), false);
       } else if (global_src.is_layout_interim_matrix()) {
-        auto m_ptr = postsum_m.data() + make_coord(0,global_src.get_op()*M/2,_);
+        auto m_ptr = postsum_m.data() + make_coord(0,global_src.get_op()*(is_m_major_D ? N/2 : M/2),_);
         return cute::tuple(make_tensor(m_ptr, postsum_m.layout()), true);
       }
     }
@@ -751,8 +761,9 @@ public:
       int sign_mi = RWCTypes::MiSignByOutputIndex(i, StrassenMiGroup::getMi(sub_m_idx));
       if (global_dest.valid() && global_dest.is_mem_global() &&
           global_dest.is_layout_final() && sign_mi != 0) {
-        auto c_ptr = c.data() + make_coord((global_dest.get_op() % 2) * N / 2,
-                                           (global_dest.get_op() / 2) * M / 2, _);
+        auto c_offset = is_m_major_C ? make_coord((global_dest.get_op()/2)*M/2, (global_dest.get_op()%2)*N/2, _) :
+                                      make_coord((global_dest.get_op()%2)*N/2, (global_dest.get_op()/2)*M/2, _);
+        auto c_ptr = c.data() + c_offset;
         return make_tensor(c_ptr, c.layout());
       }
     }
@@ -772,7 +783,7 @@ public:
 
     if (StrassenMiGroup::hasM5() && !IsFusedM4M5) {
       //Load M2
-      auto m2_ptr = postsum_m.data() + make_coord(0,1*M/2,_);
+      auto m2_ptr = postsum_m.data() + make_coord(0,is_m_major_D ? N/2 : M/2,_);
       return cute::tuple(make_tensor(m2_ptr, postsum_m.layout()), true);
     }
 
@@ -803,8 +814,9 @@ public:
         PostsumOp src0 = RWCTypes::PostsumSrcByOutputIndex(i, 0);
         PostsumOp src1 = RWCTypes::PostsumSrcByOutputIndex(i, 1);
         if (global_dest.is_layout_final()) {
-          auto d_ptr = d.data() + make_coord((global_dest.get_op()%2)*N/2,
-                                            (global_dest.get_op()/2)*M/2,_);
+          auto d_offset = is_m_major_D ? make_coord((global_dest.get_op()/2)*M/2, (global_dest.get_op()%2)*N/2, _) :
+                                        make_coord((global_dest.get_op()%2)*N/2, (global_dest.get_op()/2)*M/2, _);
+          auto d_ptr = d.data() + d_offset;
           int idx = 0;
           //If the src op and dest op are same then use TMA Reduce instead of Load, Add and Store 
           bool use_tma = src0.is_mem_global() && src0.is_layout_final() && src0.get_op() == global_dest.get_op();
@@ -818,7 +830,7 @@ public:
           use_tma_reduce = use_tma_reduce || use_tma;
           return cute::tuple(make_tensor(d_ptr, d.layout()), global_dest, false);
         } else if (global_dest.is_layout_interim_matrix() || global_dest.is_layout_interim_linear()) {
-          auto m_ptr = postsum_m.data() + make_coord(0,global_dest.get_op()*M/2,_);
+          auto m_ptr = postsum_m.data() + make_coord(0,global_dest.get_op()*(is_m_major_D ? N/2 : M/2),_);
           int idx = 0;
           use_tma_reduce = false;
           if (src0.valid() && src0.is_mem_global())// && src0.get_op() != global_dest.get_op() && src0.is_layout_interim_linear()
@@ -1441,8 +1453,9 @@ struct SM90_BULK_TMA_ADD_S2G
       if constexpr (Level2StoreM4) {
         if (store_level2_m4) {
           Tensor output_d2 = params.tma_store_d2.get_tma_tensor(make_shape(M, N, L));
-          auto output_d2_ptr = output_d2.data() + make_coord((first_store_dest.get_op() % 2) * N / 2,
-                                                           (first_store_dest.get_op() / 2) * M / 2, _);
+          auto output_d2_offset = is_m_major_D ? make_coord((first_store_dest.get_op()/2)*M/2, (first_store_dest.get_op()%2)*N/2, _) :
+                                               make_coord((first_store_dest.get_op()%2)*N/2, (first_store_dest.get_op()/2)*M/2, _);
+          auto output_d2_ptr = output_d2.data() + output_d2_offset;
           return make_tensor(output_d2_ptr, output_d2.layout());
         }
       }
@@ -1693,11 +1706,9 @@ struct SM90_BULK_TMA_ADD_S2G
         if (issue_tma_store) {
           if (use_tma_first_store) {
             if (thread_idx == 0) {
-              Tensor sD_tile = group_modes<0,2>(sD_epi(_,_,store_pipe_producer_state.index()));
-              Tensor gD_tile = group_modes<0,2>(gD_epi(_,_,epi_m,epi_n));
               copy(tma_add_dorm,
-                   sD_tile,
-                   gD_tile);
+                   bSG_sD(_,_,_,store_pipe_producer_state.index()),
+                   bSG_gD(_,_,_,epi_m,epi_n));
             }
             // copy(tma_store_dorm, bSG_sD(_,_,_,store_pipe_producer_state.index()), bSG_gD(_,_,_,epi_m,epi_n));
           } else {
@@ -1708,9 +1719,9 @@ struct SM90_BULK_TMA_ADD_S2G
             if (store_level2_m4) {
               if (use_tma_first_store) {
                 if (thread_idx == 0) {
-                  Tensor sD2_tile = group_modes<0,2>(sD2_epi(_,_,store_pipe_producer_state.index()));
-                  Tensor gD2_tile = group_modes<0,2>(gD2_epi(_,_,epi_m,epi_n));
-                  copy(params.tma_add_d2, sD2_tile, gD2_tile);
+                  copy(params.tma_add_d2,
+                       bSG_sD2(_,_,_,store_pipe_producer_state.index()),
+                       bSG_gD2(_,_,_,epi_m,epi_n));
                 }
               }
               else {
