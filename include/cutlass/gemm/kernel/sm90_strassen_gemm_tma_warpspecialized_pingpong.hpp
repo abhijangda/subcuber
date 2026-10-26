@@ -370,7 +370,12 @@ public:
 
     CUTLASS_HOST_DEVICE
     int get_stride_B(int idx = 0) const {
-      return get<1>(dB);
+      if constexpr (cute::is_constant<1, decltype(get<0>(dB))>::value) {
+        return get<1>(dB);
+      }
+      else {
+        return get<0>(dB);
+      }
     }
 
     CUTLASS_HOST_DEVICE
@@ -390,7 +395,7 @@ public:
 
     CUTLASS_HOST_DEVICE
     int get_stride_MB(int idx = 0) const {
-      return get_problem_shape_n(idx)/2;
+      return get_layout_B() ? get_problem_shape_n(idx)/2 : get_problem_shape_k(idx)/2;
     }
 
     CUTLASS_HOST_DEVICE
