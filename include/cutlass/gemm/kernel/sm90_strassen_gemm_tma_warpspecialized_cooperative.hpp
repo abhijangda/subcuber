@@ -147,8 +147,8 @@ public:
   // 1 stage ordered sequence between mainloop and epilogue producer load threads
   using LoadWarpOrderBarrier = cutlass::OrderedSequenceBarrier<1,2>;
   static constexpr bool UseM0M1MainloopStorageReuse = CollectiveMainloop::PresumStages == 4 &&
-                                                   ((StrassenMiGroup::hasM0() && (!cute::is_void_v<ElementC> || size<0>(typename CollectiveMainloop::PresumTileShapeA{}) > 2)) ||
-                                                    (StrassenMiGroup::hasM1() && (!cute::is_void_v<ElementC> || size<0>(typename CollectiveMainloop::PresumTileShapeB{}) > 2)));
+                                                   ((StrassenMiGroup::hasM0() && (!cute::is_void_v<ElementC> || cute::size(typename CollectiveMainloop::PresumTileShapeA{}) > 2*256)) ||
+                                                    (StrassenMiGroup::hasM1() && (!cute::is_void_v<ElementC> || cute::size(typename CollectiveMainloop::PresumTileShapeB{}) > 2*256)));
 
   using TileSchedulerPipeline = typename TileScheduler::Pipeline;
   using TileSchedulerPipelineState = typename TileSchedulerPipeline::PipelineState;

@@ -103,21 +103,21 @@ using TensorOpElem = cutlass::bfloat16_t;
 // A matrix configuration
 using         ElementA    = TensorOpElem;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-// using         SubMatLayoutA = cutlass::layout::StrassenLayout;
-using         SubMatLayoutA = cutlass::layout::OriginalLayout;
+using         SubMatLayoutA = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = TensorOpElem;                                // Element type for B matrix operand
-using         LayoutB     = cutlass::layout::ColumnMajor;                   // RowMajor or ColumnMajor for B matrix operand
-// using         SubMatLayoutB = cutlass::layout::StrassenLayout;
-using         SubMatLayoutB = cutlass::layout::OriginalLayout;
+using         LayoutB     = cutlass::layout::RowMajor;                   // RowMajor or ColumnMajor for B matrix operand
+using         SubMatLayoutB = cutlass::layout::StrassenLayout;
+// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = TensorOpElem;                                           // No C source operand
+using         ElementC    = void;//TensorOpElem;                                           // No C source operand
 using         ElementD    = TensorOpElem;                                // Element type for D matrix operand
-using         LayoutC     = cutlass::layout::ColumnMajor;                   // Layout type for C and D matrix operands
+using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
 constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;    // Memory access granularity/alignment of C/D matrix in units of elements (up to 16 bytes)
 
@@ -150,7 +150,9 @@ const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 4 : 4;          // S
 const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 4 : 4;
 const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 4 : 4;
 using PresumTileShapeA    = Shape<_2, _256>;
-using PresumTileShapeB    = Shape<_2, _256>;
+using PresumTileShapeB    = cute::conditional_t<cute::is_same_v<LayoutB, cutlass::layout::RowMajor>,
+                                                Shape<_2, _256>,
+                                                Shape<_4, _128>>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecializedCooperative;
 using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
@@ -163,7 +165,9 @@ const uint StageCountTypeM0 = 4 ; //cutlass::gemm::collective::StageCountAuto;  
 const uint StageCountTypeM2M6 = 6 ;
 const uint StageCountTypeM4M5 = 6;
 using PresumTileShapeA    = Shape<_2, _256>;
-using PresumTileShapeB    = Shape<_2, _256>;
+using PresumTileShapeB    = cute::conditional_t<cute::is_same_v<LayoutB, cutlass::layout::RowMajor>,
+                                                Shape<_2, _256>,
+                                                Shape<_4, _128>>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedPingpong;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecialized;
 using KernelScheduleM0 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;
@@ -178,7 +182,7 @@ using AllPresumsKernel = AllPresums<>;
 // using AllPresumsM0    =  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
 //                PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
 using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                   PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>;//PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
+                                   PresumCompute, PresumCompute, PresumCompute, PresumCompute>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
@@ -229,13 +233,13 @@ using StrassenGroups = StrassenLevel1Groups<StrassenPresum<1, 0, TileShapeM0, Al
                                                                   RWCTypes<CUW<2, LayoutFinal, LayoutNone, Expr<Neg<6>>, Expr<Plus<2, MemGlobal, LayoutInterim1D>>>>, //C2 = C2-M6
                                                                   AllPresumsM1To6>
                                             >;
-using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0, EpilogueScheduleM0, false, FusedMiGroup<7, 0>, FusedMiGroup<7, 2>, FusedMiGroup<7, 4>>
-                                                      //  ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
+using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelScheduleM0, EpilogueScheduleM0, false, FusedMiGroup<7, 0>>, //FusedMiGroup<7, 2>, FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>, //TODO: Change this to true
                                                                                                                           //  FusedMiGroup<7, 4>>
                                                                                 // FusedMiGroup<7, 6>>
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 2>>,
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 3>>,
-                                                      //  ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
+                                                       ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>
                                                       //  ParallelMiGroups<true, FusedMiGroup<7, 5>>,
                                                       //  ParallelMiGroups<false, FusedMiGroup<7, 6>>
                                                         >;

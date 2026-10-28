@@ -151,6 +151,7 @@ struct CollectiveStrassenMma<
   using SmemCopyAtomB = SmemCopyAtomB_;
   using TransformA = TransformA_;
   using TransformB = TransformB_;
+  static const int NumMMAThreads = size(TiledMma{});
   using ArchTag = typename DispatchPolicy::ArchTag;
   using PresumShape = GemmShape<size<0>(TileShape{}), size<1>(TileShape{}), 1>;
   using PresumShapeA = PresumShape;
@@ -158,7 +159,7 @@ struct CollectiveStrassenMma<
   using PresumTileShapeA = PresumTileShapeA_;
   using PresumTileShapeB = PresumTileShapeB_;
   using PresumVecTypeA = Array<ElementA, (size<0>(PresumTileShapeA{})*sizeof(ElementA))/sizeof(ElementA)>;
-  using PresumVecTypeB = Array<ElementA, (size<0>(PresumTileShapeB{})*sizeof(ElementA))/sizeof(ElementA)>;
+  using PresumVecTypeB = Array<ElementA, ((size<0>(PresumTileShapeB{}) * size<1>(PresumTileShapeB{}))/NumMMAThreads*sizeof(ElementA))/sizeof(ElementA)>;
   using PresumStoreVecType = Array<ElementA, 16/sizeof(ElementA)>;
   using PresumComputeType = ElementAccumulator;
   using PresumComputeToIOTypeA = NumericArrayConverter<ElementA, PresumComputeType, PresumVecTypeA::kElements>;
@@ -167,20 +168,22 @@ struct CollectiveStrassenMma<
   using PresumIOToComputeTypeB = NumericArrayConverter<PresumComputeType, ElementA, PresumVecTypeB::kElements>;
   static const bool IsStrassenLayout = cute::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout> &&
                                        cute::is_same_v<SubMatLayoutB, cutlass::layout::StrassenLayout>;
+  static const bool IsBRowMajor    = ::cutlass::gemm::detail::is_major<0,StrideB>();
+  static const bool IsBColumnMajor = ::cutlass::gemm::detail::is_major<1,StrideB>();
 
-  static const int NumMMAThreads = size(TiledMma{});
   static constexpr int PresumStoreWarpSize = NumMMAThreads/4;
-  static const int kPresumThreads = NumMMAThreads/4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
+  static const int kPresumThreads = (size<0>(PresumTileShapeA{}) * size<1>(PresumTileShapeA{}))/PresumStoreVecType::kElements;//NumMMAThreads/4 * (size<0>(PresumTileShapeA{})/2);//TODO: Pass this from StrassenGemmKernel
   using PresumGlobalIteratorA = PresumDetail::GlobalIterator<ElementA, kPresumThreads,  
                                                              PresumShape, PresumStoreVecType, false, true, false>;
-  using PresumGlobalIteratorB = PresumDetail::GlobalIterator<ElementB, kPresumThreads, 
-                                                             PresumShape, PresumStoreVecType, true, true, false>;
+  using PresumGlobalIteratorB = PresumDetail::GlobalIterator<ElementB, kPresumThreads,
+                                                             cute::conditional_t<IsBRowMajor, PresumShape, GemmShape<PresumShape::kN, PresumShape::kM, 1>>,
+                                                             PresumStoreVecType, true, IsBRowMajor, false>;
   // using PresumSharedIterator = PresumDetail::SharedIterator<ElementA, PresumVecType, NumThreads,
   //                                                           Base::SharedStorage::PresumBuffer::NumLoadsForPresum,
   //                                                           Base::SharedStorage::PresumBuffer::SingleStageSize,
   //                                                           Stages, PresumAccessPerIter>;
-  static const uint kPresumComputeIterationsA = size<0>(TileShape{})/size<0>(PresumTileShapeA{});
-  static const uint kPresumComputeIterationsB = size<0>(TileShape{})/size<0>(PresumTileShapeB{});
+  static const uint kPresumComputeIterationsA = (size<0>(TileShape{}) * size<1>(TileShape{}))/(size<0>(PresumTileShapeA{}) * size<1>(PresumTileShapeA{}));
+  static const uint kPresumComputeIterationsB = (size<0>(TileShape{}) * size<1>(TileShape{}))/(size<0>(PresumTileShapeB{}) * size<1>(PresumTileShapeB{}));
 
   static const bool is_fused = StrassenMiGroup::hasM0() && StrassenMiGroup::hasM1();
   static const bool is_fused_m2_m3 = StrassenMiGroup::hasM2() && StrassenMiGroup::hasM3();
@@ -234,6 +237,7 @@ struct CollectiveStrassenMma<
   using PresumSmemShapeA__ = decltype(make_shape(shape<0>(PresumTileShapeB{}), shape<1>(PresumTileShapeB{}), Int<PresumStages>{}));
   using PresumSmemLayoutA__ = decltype(make_layout(make_shape(shape<0>(PresumTileShapeA{}), shape<1>(PresumTileShapeA{})), LayoutRight{}));
   using PresumSmemLayoutB__ = decltype(make_layout(make_shape(shape<0>(PresumTileShapeB{}), shape<1>(PresumTileShapeB{})), LayoutRight{}));
+                                                    // cute::conditional_t< ::cutlass::gemm::detail::is_major<0,StrideB>(), LayoutRight, LayoutLeft>{}));
 
   static_assert(DispatchPolicy::Stages >= 2, "Specialization requires Stages set to value 2 or more.");
   static_assert(cute::is_base_of<cute::GMMA::DescriptorIterator, typename TiledMma::FrgTypeA>::value &&
@@ -391,9 +395,10 @@ struct CollectiveStrassenMma<
         SM90_TMA_LOAD{},
         make_tensor(static_cast<InternalElementA const*>(nullptr), repeat_like(StrideA{}, int32_t(0)), StrideA{}),
         PresumSmemLayoutA__{}));
+    using StridePresumB = cute::conditional_t<IsBColumnMajor, StrideB, decltype(select<1,0,2>(StrideB{}))>;
     using TMA_PresumLoad_B = decltype(make_tma_copy(
         SM90_TMA_LOAD{},
-        make_tensor(static_cast<InternalElementB const*>(nullptr), repeat_like(StrideA{}, int32_t(0)), StrideA{}),
+      make_tensor(static_cast<InternalElementB const*>(nullptr), repeat_like(StridePresumB{}, int32_t(0)), StridePresumB{}),
         PresumSmemLayoutB__{}));
     // Assumption: StrideB is congruent with Problem_NK
     using TMA_PresumStore_A = decltype(make_tma_copy(
@@ -402,7 +407,7 @@ struct CollectiveStrassenMma<
         PresumSmemLayoutA__{}));
     using TMA_PresumStore_B = decltype(make_tma_copy(
         SM90_TMA_STORE{},
-        make_tensor(static_cast<InternalElementB const*>(nullptr), repeat_like(StrideA{}, int32_t(0)), StrideA{}),
+      make_tensor(static_cast<InternalElementB const*>(nullptr), repeat_like(StridePresumB{}, int32_t(0)), StridePresumB{}),
         PresumSmemLayoutB__{}));
     TMA_PresumLoad_A tma_load_presumld_a;
     TMA_PresumLoad_B tma_load_presumld_b;
@@ -444,6 +449,8 @@ struct CollectiveStrassenMma<
 
     CUTLASS_HOST_DEVICE
     uint32_t get_presum_tile_log_divider_b() const {
+      //TODO: log_divider not supported for Column Major B
+      if (IsBColumnMajor) return 0;
       return (PresumOpt::FixedPresumTileDividerLogB != UINT32_MAX) ? 
               PresumOpt::FixedPresumTileDividerLogB :
               presum_tile_log_divider_b_;
@@ -566,9 +573,9 @@ struct CollectiveStrassenMma<
         SM90_TMA_LOAD{},
         tensor_a,
         PresumSmemLayoutA__{});
-    
+
     auto get_presum_layout_b = [&] (auto layout_b) {
-      if constexpr (::cutlass::gemm::detail::is_major<1,StrideB>()) {
+      if constexpr (IsBColumnMajor) {
         return layout_b;
       } else {
         return select<1,0,2>(layout_b);
@@ -579,7 +586,7 @@ struct CollectiveStrassenMma<
         SM90_TMA_LOAD{},
         make_tensor(ptr_B, get_presum_layout_b(tensor_b.layout())),
         PresumSmemLayoutB__{});
-    
+
     typename Params::TMA_PresumStore_A tma_store_presumld_a = make_tma_copy(
         SM90_TMA_STORE{},
         tensor_presum_a,
@@ -900,17 +907,30 @@ struct CollectiveStrassenMma<
     // TMA requires special handling of strides to deal with coord codomain mapping
     // Represent the full tensors -- get these from TMA
     Tensor mA_mkl = mainloop_params.tma_load_presumld_a.get_tma_tensor(is_original_a ? make_shape(M,K,L) : make_shape(4*M/2,K/2,L));                            // (m,k,l)
-    Tensor mB_nkl = mainloop_params.tma_load_presumld_b.get_tma_tensor(is_original_b ? make_shape(N,K,L) : make_shape(N/2,4*K/2,L));                            // (n,k,l)
+    auto packed_shape_b = IsBColumnMajor ? make_shape(4*halfN,halfK,L) : make_shape(halfN,4*halfK,L);
+    Tensor mB_nkl = mainloop_params.tma_load_presumld_b.get_tma_tensor(is_original_b ? make_shape(N,K,L) : packed_shape_b);                            // (n,k,l)
 
     auto A00_data = mA_mkl.data() + (is_original_a ? make_coord(0*halfK,0*halfM,_) : make_coord(0*halfK,0*halfM,_));
     auto A01_data = mA_mkl.data() + (is_original_a ? make_coord(1*halfK,0*halfM,_) : make_coord(0*halfK,1*halfM,_));
     auto A10_data = mA_mkl.data() + (is_original_a ? make_coord(0*halfK,1*halfM,_) : make_coord(0*halfK,2*halfM,_));
     auto A11_data = mA_mkl.data() + (is_original_a ? make_coord(1*halfK,1*halfM,_) : make_coord(0*halfK,3*halfM,_));
 
-    auto B00_data = mB_nkl.data() + (is_original_b ? make_coord(0*halfN,0*halfK,_) : make_coord(0*halfN,0*halfK,_));
-    auto B01_data = mB_nkl.data() + (is_original_b ? make_coord(1*halfN,0*halfK,_) : make_coord(0*halfN,1*halfK,_));
-    auto B10_data = mB_nkl.data() + (is_original_b ? make_coord(0*halfN,1*halfK,_) : make_coord(0*halfN,2*halfK,_));
-    auto B11_data = mB_nkl.data() + (is_original_b ? make_coord(1*halfN,1*halfK,_) : make_coord(0*halfN,3*halfK,_));
+    auto get_b_quadrant_offset = [&] (int quadrant) {
+      if (is_original_b) {
+        if constexpr (IsBColumnMajor) {
+          return make_coord((quadrant / 2)*halfK, (quadrant % 2)*halfN, _);
+        } else {
+          return make_coord((quadrant % 2)*halfN, (quadrant / 2)*halfK, _);
+        }
+      } else {
+        return make_coord(0, quadrant*(IsBColumnMajor ? halfN : halfK), _);
+      }
+    };
+
+    auto B00_data = mB_nkl.data() + get_b_quadrant_offset(0);
+    auto B01_data = mB_nkl.data() + get_b_quadrant_offset(1);
+    auto B10_data = mB_nkl.data() + get_b_quadrant_offset(2);
+    auto B11_data = mB_nkl.data() + get_b_quadrant_offset(3);
 
     // // Make tiled views, defer the slice
     // Tensor gA00_mkl = local_tile(make_tensor(A00_data, mA_mkl.layout()), PresumTileShapeA{}, make_coord(_,_,_));        // (BLK_M,BLK_K,m,k,l)
@@ -1024,12 +1044,17 @@ struct CollectiveStrassenMma<
           new_n_coord * size<1>(TileShape{})},
         block_idx, {0, 0}, 0, {1*halfM, 0}, {2*halfM, 0}, {3*halfM, 0}
       );
+
+      auto bm1_coord = IsBRowMajor ? MatrixCoord{1*halfK, 0} : MatrixCoord{0, 1*halfN};
+      auto bm2_coord = IsBRowMajor ? MatrixCoord{2*halfK, 0} : MatrixCoord{0, 2*halfN};
+      auto bm3_coord = IsBRowMajor ? MatrixCoord{3*halfK, 0} : MatrixCoord{0, 3*halfN};
+
       PresumGlobalIteratorB iter_PresumB_M(
-        mainloop_params.ptr_presum_B, halfN,
+        mainloop_params.ptr_presum_B, IsBRowMajor ? halfN : halfK,
         {halfK, halfN},
-        {(m_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_b()) * (size<0>(TileShape{}))) >> mainloop_params.get_presum_tile_log_divider_b(),
+        MatrixCoord{(m_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_b()) * size<0>(TileShape{})) >> mainloop_params.get_presum_tile_log_divider_b(),
           n_coord * size<1>(TileShape{})},
-        block_idx, {0, 0}, 0, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}
+        block_idx, {0, 0}, 0, bm1_coord, bm2_coord, bm3_coord
       );
 
       Tensor sA = make_tensor(make_smem_ptr(shared_tensors.stages[0].smem_A.data()), InterleavedSmemLayoutA{});        // (BLK_M,BLK_K,PIPE)
@@ -1204,12 +1229,16 @@ struct CollectiveStrassenMma<
           uint RR = presumComputeIterationsB;
           uint presum_tile = presum_load_iter/kPresumComputeIterationsB;
           uint presum_tile_k_iter = presum_load_iter - presum_tile*kPresumComputeIterationsB;
-          uint presum_row = m_coord*RR + presum_tile * kPresumComputeIterationsB + presum_tile_k_iter;
-          uint presum_col = n_coord;
-          Tensor gB0_tile = local_tile(gB0, PresumTileShapeB{}, make_coord(presum_row, presum_col, 0));
-          Tensor gB1_tile = local_tile(gB1, PresumTileShapeB{}, make_coord(presum_row, presum_col, 0));
-          Tensor gB2_tile = local_tile(gB2, PresumTileShapeB{}, make_coord(presum_row, presum_col, 0));
-          Tensor gB3_tile = local_tile(gB3, PresumTileShapeB{}, make_coord(presum_row, presum_col, 0));
+          uint row_major_presum_row = m_coord*RR + presum_tile * kPresumComputeIterationsB + presum_tile_k_iter;
+          uint row_major_presum_col = n_coord;
+          uint col_major_presum_col = m_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_b()) + presum_tile;
+          uint col_major_presum_row = n_coord*kPresumComputeIterationsB + presum_tile_k_iter;
+          auto gB_coord = IsBRowMajor ? make_coord(row_major_presum_row, row_major_presum_col, 0) :
+                                        make_coord(col_major_presum_row, col_major_presum_col, 0);
+          Tensor gB0_tile = local_tile(gB0, PresumTileShapeB{}, gB_coord);
+          Tensor gB1_tile = local_tile(gB1, PresumTileShapeB{}, gB_coord);
+          Tensor gB2_tile = local_tile(gB2, PresumTileShapeB{}, gB_coord);
+          Tensor gB3_tile = local_tile(gB3, PresumTileShapeB{}, gB_coord);
 
           Tensor tBgB0 = block_tma_presum_ld_b.partition_S(gB0_tile);
           Tensor tBgB1 = block_tma_presum_ld_b.partition_S(gB1_tile);
@@ -1290,11 +1319,17 @@ struct CollectiveStrassenMma<
                                   (0) * sizeof(PresumStoreVecType)/sizeof(ElementA);
               ElementA* st_ptr = ((ElementA*)iter_PresumB_M.get(0)) +
                                   wid*iter_PresumB_M.extent.row()*iter_PresumB_M.extent.column();
-
-              SM90_TMA_STORE().copy(mainloop_params.tma_store_presumld_b.get_tma_descriptor(), smem_dst_ptr,
-                                    iter_PresumB_M.tb_offset.column(),
-                                    wid*iter_PresumB_M.extent.row() +
-                                    iter_PresumB_M.tb_offset.row() + presum_tile*size<0>(TileShape{}) + presum_write_iter*size<0>(PresumTileShapeB{}), 0);
+              if (IsBRowMajor) {
+                SM90_TMA_STORE().copy(mainloop_params.tma_store_presumld_b.get_tma_descriptor(), smem_dst_ptr,
+                                      iter_PresumB_M.tb_offset.column(),
+                                      wid*iter_PresumB_M.extent.row() +
+                                      iter_PresumB_M.tb_offset.row() + presum_tile*size<0>(TileShape{}) + presum_write_iter*size<0>(PresumTileShapeB{}), 0);
+              } else {
+                SM90_TMA_STORE().copy(mainloop_params.tma_store_presumld_b.get_tma_descriptor(), smem_dst_ptr,
+                                      iter_PresumB_M.tb_offset.row() + presum_tile*size<1>(PresumTileShapeB{}),
+                                      wid*halfN +
+                                      iter_PresumB_M.tb_offset.column() + presum_write_iter*size<0>(PresumTileShapeB{}), 0);
+              }
               asm volatile("cp.async.bulk.commit_group;");
             }
           } else CUTE_GCC_UNREACHABLE;
@@ -1669,7 +1704,12 @@ struct CollectiveStrassenMma<
         if (true) {
           int presum_tile = presumIter/kPresumComputeIterationsB;
           presumIter = presumIter - presum_tile*kPresumComputeIterationsB;
-          iter_PresumB_M.reset(presum_tile);
+          if constexpr (IsBColumnMajor) {
+            iter_PresumB_M.tb_offset.row() += presum_tile*size<1>(PresumTileShapeB{});
+            iter_PresumB_M.reset();
+          } else {
+            iter_PresumB_M.reset(presum_tile);
+          }
           iter_PresumB_M.set_iteration(presumIter);
 
           // asm volatile("wgmma.fence.sync.aligned;");
@@ -1843,12 +1883,18 @@ struct CollectiveStrassenMma<
         new_n_coord * size<1>(TileShape{})},
       block_idx, {0, 0}, thread_idx%kPresumThreads, {1*halfM, 0}, {2*halfM, 0}, {3*halfM, 0}
     );
+
+    auto bm1_coord = IsBRowMajor ? MatrixCoord{1*halfK, 0} : MatrixCoord{0, 1*halfN};
+    auto bm2_coord = IsBRowMajor ? MatrixCoord{2*halfK, 0} : MatrixCoord{0, 2*halfN};
+    auto bm3_coord = IsBRowMajor ? MatrixCoord{3*halfK, 0} : MatrixCoord{0, 3*halfN};
+
     PresumGlobalIteratorB iter_PresumB_M(
-      mainloop_params.ptr_presum_B, halfN,
+      mainloop_params.ptr_presum_B, IsBRowMajor ? halfN : halfK,
       {halfK, halfN},
-      {(m_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_b()) * (size<0>(TileShape{}))) >> mainloop_params.get_presum_tile_log_divider_b(),
-       n_coord * size<1>(TileShape{})},
-      block_idx, {0, 0}, thread_idx%kPresumThreads, {1*halfK, 0}, {2*halfK, 0}, {3*halfK, 0}
+      MatrixCoord{
+          (m_coord * (1 << mainloop_params.get_presum_tile_log_multiplier_b()) * size<0>(TileShape{})) >> mainloop_params.get_presum_tile_log_divider_b(),
+        n_coord * size<1>(TileShape{})},
+      block_idx, {0, 0}, thread_idx%kPresumThreads, bm1_coord, bm2_coord, bm3_coord
     );
     // if (threadIdx.x == 128 or threadIdx.x == 256)
     //   printf("963 %d ; %d %d ; %d %d\n", threadIdx.x, m_coord * size<0>(TileShape{}), n_coord * size<1>(TileShape{}), iter_PresumA_M.tb_offset.row(), iter_PresumA_M.tb_offset.column());

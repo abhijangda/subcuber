@@ -420,9 +420,6 @@ public:
         bool has_A_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyAPresum(MmaStrassen::PresumCompute);
         bool has_B_presums = GemmKernelM0::StrassenMiGroup::AllPresums::computeAnyBPresum(MmaStrassen::PresumCompute);
 
-        if (has_B_presums && gemm::detail::is_major<1, StrideB>()) {
-          return Status::kInvalid;
-        }
         //Multiple kernels
         if (!GemmKernelM0::StrassenMiGroup::hasM0() ||
             has_A_presums && !GemmKernelM0::StrassenMiGroup::hasM0() ||
@@ -459,8 +456,9 @@ public:
           const int total_presum_iterations = std::max(GemmKernelM0::Mma::kPresumComputeIterationsA*has_A_presums*(1<<presum_a_log_tile_multiplier),
                                                        GemmKernelM0::Mma::kPresumComputeIterationsB*has_B_presums*(1<<presum_b_log_tile_multiplier));
           int required_k = total_presum_iterations * size<2>(typename GemmKernelM0::Mma::TileShape{});
-          if (k/2 < required_k)
+          if (k/2 < required_k) {
             return Status::kErrorInvalidProblem;
+          }
         }
       }
       return Status::kSuccess;
