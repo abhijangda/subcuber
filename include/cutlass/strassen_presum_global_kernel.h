@@ -143,7 +143,7 @@ void KernelPresumGlobalCompute(typename GemmKernel0::Params params, int problem_
     if (!(iter_PresumA_M.validTB() && iter_PresumA_M.valid())) continue;
     if (presumAComputeLoads.numAccess() > 0) {
       if constexpr (requires { params.mainloop.ptr_SFA; params.mainloop.layout_SFA; }) {
-        constexpr uint ScaleGranularityK = GemmKernel0::Mma::ScaleGranularityK;
+        constexpr int ScaleGranularityK = GemmKernel0::Mma::ScaleGranularityK;
         using PresumShapeScaleA = cutlass::gemm::GemmShape<PresumShapeA::kM, ScaleGranularityK, 1>;
         using PresumGlobalScaleIteratorA = threadblock::PresumDetail::GlobalIterator<ElementBlockScale const, kThreadCount, PresumShapeScaleA, Array<float, 1>, false, false, false>;
 

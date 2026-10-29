@@ -113,21 +113,11 @@ all: $(TARGETS)
 hopper_fp8_blockwise_scaling_objects:
 	$(MAKE) -C .. BUILD_DIR=$(HOPPER_F16_SCHEDULE_BUILD_DIR) $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS)
 
-test_hopper_fp8_blockwise_scaling_sw_kernel_presum: hopper_fp8_blockwise_scaling_sw_kernel_presum.cu ../src/cuda/kernel_runner_support.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_tma_reduce.cuh hopper_fp8_blockwise_scaling_objects
-	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED $(HOPPER_GENCODE) $< $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS) -o $@
+test_hopper_fp8_blockwise_scaling_sw_kernel_presum: hopper_fp8_blockwise_scaling_sw_kernel_presum.cu base_test.cuh ../src/cuda/kernel_runner_support.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_tma_reduce.cuh hopper_fp8_blockwise_scaling_objects $(GTEST_OBJECT)
+	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED $(HOPPER_GENCODE) $< $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS) $(GTEST_OBJECT) -o $@ -Xcompiler -pthread -Xcompiler -fopenmp
 
 $(GTEST_OBJECT): $(GTEST_SRC)
 	$(CXX) $(GTEST_CXXFLAGS) -c $< -o $@
-
-.PHONY: hopper_f16_schedule_objects
-hopper_f16_schedule_objects:
-	$(MAKE) -C .. BUILD_DIR=$(HOPPER_F16_SCHEDULE_BUILD_DIR) $(HOPPER_F16_SCHEDULE_OBJS)
-
-hopper_f16_tensorop_strassen_winograd_schedules.o: hopper_f16_tensorop_strassen_winograd_schedules.cu base_test.cuh ../src/cuda/kernel_runner_support.cuh
-	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $(INCLUDES) -DCUTLASS_API_v3 $(HOPPER_GENCODE) -Xcompiler -pthread -c $< -o $@
-
-test_hopper_f16_tensorop_strassen_winograd_schedules: hopper_f16_tensorop_strassen_winograd_schedules.o $(GTEST_OBJECT) hopper_f16_schedule_objects
-	$(NVCC) hopper_f16_tensorop_strassen_winograd_schedules.o $(HOPPER_F16_SCHEDULE_OBJS) $(GTEST_OBJECT) -Xcompiler -pthread -o $@
 
 test_volta_f32_strassen_winograd_tile: f32_strassen_winograd_tile.cu base_test.cuh $(VOLTA_F32_SW_TILE_SRC) $(GTEST_OBJECT)
 	$(NVCC) $(NVCC_FLAGS) $< $(VOLTA_F32_SW_TILE_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v2 -DTHREADBLOCK -DTILE_SIZE_128 -DSPLIT_K=1 -o $@ $(VOLTA_GENCODE) -Xcompiler -pthread
