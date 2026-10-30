@@ -526,10 +526,10 @@ inline cudaError_t run_block_scaled_reference(
 }
 #endif
 
-template<typename CutlassGemm, typename ElementInputA, typename ElementInputB>
+template<typename CutlassGemm, typename ElementInputA, typename ElementInputB, typename LayoutInputB>
 inline void initialize_inputs(
 	cutlass::TensorView<ElementInputA, cutlass::layout::RowMajor> view_a,
-	cutlass::TensorView<ElementInputB, cutlass::layout::RowMajor> view_b) {
+	cutlass::TensorView<ElementInputB, LayoutInputB> view_b) {
 #if defined(CUTLASS_API_v3)
 	using Mainloop = typename CutlassGemm::GemmKernel::CollectiveMainloop;
 	if constexpr (requires { Mainloop::ScaleGranularityK; }) {
@@ -556,8 +556,12 @@ template<typename CutlassGemm,
 inline cudaError_t run_case(TestCase const &test_case) {
 #if defined(CUTLASS_API_v3)
 	using ElementOutput = typename CutlassGemm::GemmKernel::ElementD;
+	using LayoutInputB = cute::conditional_t<
+		cutlass::gemm::detail::is_major<1, typename CutlassGemm::GemmKernel::StrideB>(),
+		cutlass::layout::ColumnMajor, cutlass::layout::RowMajor>;
 #else
 	using ElementOutput = ElementOutput_;
+	using LayoutInputB = cutlass::layout::RowMajor;
 #endif
 
 	auto problem_size = test_case.problem_size;
@@ -568,7 +572,7 @@ inline cudaError_t run_case(TestCase const &test_case) {
 
 	cutlass::HostTensor<ElementInputA, cutlass::layout::RowMajor> tensor_a(
 		problem_size.mk());
-	cutlass::HostTensor<ElementInputB, cutlass::layout::RowMajor> tensor_b(
+	cutlass::HostTensor<ElementInputB, LayoutInputB> tensor_b(
 		problem_size.kn());  // <- Create matrix B with dimensions K x N
 	cutlass::HostTensor<ElementOutput, cutlass::layout::RowMajor> tensor_c(
 		problem_size.mn());  // <- Create matrix C with dimensions M x N
@@ -617,19 +621,31 @@ inline cudaError_t run_case(TestCase const &test_case) {
 					test_case, tensor_a.host_ref(), tensor_b.host_ref(), tensor_ref_d.device_ref(), block_scales);
 			} else
 #endif
-			return ReferenceStrassenWinogradGemm<ElementInputA, ElementInputB, ElementOutput, float, float>(
-			problem_size.m(),
-			problem_size.n(),
-			problem_size.k(),
-			test_case.level,
-			1.0f,
-			tensor_a.device_ref().data(),
-			lda,
-			tensor_b.device_ref().data(),
-			ldb,
-			0.0f,
-			tensor_ref_d.device_ref().data(),
-			ldc);
+			{
+				auto run_row_major_reference = [&](auto ref_b) {
+					return ReferenceStrassenWinogradGemm<ElementInputA, ElementInputB, ElementOutput, float, float>(
+						problem_size.m(),
+						problem_size.n(),
+						problem_size.k(),
+						test_case.level,
+						1.0f,
+						tensor_a.device_ref().data(),
+						lda,
+						ref_b.data(),
+						ldb,
+						0.0f,
+						tensor_ref_d.device_ref().data(),
+						ldc);
+				};
+				if constexpr (!std::is_same_v<LayoutInputB, cutlass::layout::RowMajor>) {
+					cutlass::HostTensor<ElementInputB, cutlass::layout::RowMajor> reference_b(problem_size.kn());
+					cutlass::reference::host::TensorCopy(reference_b.host_view(), tensor_b.host_view());
+					reference_b.sync_device();
+					return run_row_major_reference(reference_b.device_ref());
+				} else {
+					return run_row_major_reference(tensor_b.device_ref());
+				}
+			}
 		};
 		result = run_reference();
 		if (result != cudaSuccess) {
