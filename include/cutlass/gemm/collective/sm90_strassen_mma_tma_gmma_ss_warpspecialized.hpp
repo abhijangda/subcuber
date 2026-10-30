@@ -2023,6 +2023,15 @@ struct CollectiveStrassenMma<
       warpgroup_wait<K_PIPE_MMAS>();
       warpgroup_fence_operand(accum);
 
+      if (presum_iter % (K_PIPE_MMAS + 1) == 0 &&
+          ((StrassenMiGroup::hasM0() && (!is_fused || sub_m_idx == 0) &&
+            StrassenMiGroup::AllPresums::computeAnyAPresum() && presum_iter < presumComputeIterationsA) ||
+           (StrassenMiGroup::hasM1() && (!is_fused || sub_m_idx == 1) &&
+            StrassenMiGroup::AllPresums::computeAnyBPresum() && presum_iter < presumComputeIterationsB))) {
+        if (NumMMAThreads == 256) //TODO: Is needed for Pingpong?
+          cutlass::arch::fence_view_async_shared();
+      }
+
       // UNLOCK smem_pipe_release, done _computing_ on it
       pipeline.consumer_release(smem_pipe_release);
       presum_iter++;

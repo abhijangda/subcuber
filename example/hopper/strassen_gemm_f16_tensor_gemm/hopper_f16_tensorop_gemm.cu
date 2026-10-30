@@ -149,9 +149,9 @@ using ClusterShape        = Shape<_1,_2,_1>;                                // S
 const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 4 : 4;          // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 4 : 4;
 const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 4 : 4;
-using PresumTileShapeA    = Shape<_4, _256>;
+using PresumTileShapeA    = Shape<_2, _256>;
 using PresumTileShapeB    = cute::conditional_t<cute::is_same_v<LayoutB, cutlass::layout::RowMajor>,
-                                                Shape<_4, _256>,
+                                                Shape<_2, _256>,
                                                 Shape<_4, _128>>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecializedCooperative;
@@ -188,7 +188,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 0 //TMA Reduce
+#if 1 //TMA Reduce
 #if defined(COOPERATIVE)
   static_assert(StageCountTypeM4M5 == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
 #endif

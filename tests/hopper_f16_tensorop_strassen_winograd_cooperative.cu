@@ -18,6 +18,10 @@ TEST_P(F16HopperStrassenWinogradCooperativeTest, MatchesReference_TTT) {
 	strassen_tests::run_gtest_case<HopperF16InterleavedPresumCooperativeMaxFusion_4x256_4x256_OptNo<cutlass::layout::RowMajor, cutlass::layout::RowMajor>, ElementA, ElementB, ElementC>(GetParam());
 }
 
+TEST_P(F16HopperStrassenWinogradCooperativeTest, MatchesReference_TNT) {
+	strassen_tests::run_gtest_case<HopperF16InterleavedPresumCooperativeMaxFusion_4x256_4x256_OptNo<cutlass::layout::ColumnMajor, cutlass::layout::RowMajor>, ElementA, ElementB, ElementC>(GetParam());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ,
 	F16HopperStrassenWinogradCooperativeTest,

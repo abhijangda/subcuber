@@ -19,6 +19,10 @@ TEST_P(F16HopperStrassenWinogradPingpongTest, MatchesReference_TTT) {
 	strassen_tests::run_gtest_case<HopperF16InterleavedPresumPingpongMaxFusion_4x128_4x128_OptNo<cutlass::layout::RowMajor, cutlass::layout::RowMajor>, ElementA, ElementB, ElementC>(GetParam());
 }
 
+TEST_P(F16HopperStrassenWinogradPingpongTest, MatchesReference_TNT) {
+	strassen_tests::run_gtest_case<HopperF16InterleavedPresumPingpongMaxFusion_4x128_4x128_OptNo<cutlass::layout::ColumnMajor, cutlass::layout::RowMajor>, ElementA, ElementB, ElementC>(GetParam());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     ,
 	F16HopperStrassenWinogradPingpongTest,
