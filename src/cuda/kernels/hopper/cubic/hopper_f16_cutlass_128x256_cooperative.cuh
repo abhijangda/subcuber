@@ -26,7 +26,7 @@
 
 using namespace cute;
 
-template <typename ClusterShape_>
+template <typename ClusterShape_, typename LayoutB_ = cutlass::layout::RowMajor, typename LayoutCD_ = cutlass::layout::RowMajor>
 class HopperF16Cutlass128x256CooperativeT {
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 public:
@@ -42,13 +42,13 @@ static constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value; 
 
 // B matrix configuration
 using         ElementB    = cutlass::half_t;                                // Element type for B matrix operand
-using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
+using         LayoutB     = LayoutB_;                   // Layout type for B matrix operand
 static constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
 using         ElementC    = void;                                           // No C source operand
 using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
-using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
+using         LayoutC     = LayoutCD_;                   // Layout type for C and D matrix operands
 static constexpr int AlignmentC  = 128 / cutlass::sizeof_bits<ElementD>::value;    // Memory access granularity/alignment of C/D matrix in units of elements (up to 16 bytes)
 
 // Core kernel configurations

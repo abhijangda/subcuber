@@ -10,28 +10,32 @@ using MoePingpongScheduleStrassenGroups = ScheduleStrassenGroups<
     ParallelMiGroups<MoePingpongKernelSchedule, MoePingpongEpilogueSchedule, false, FusedMiGroup<7, 2>>,
     ParallelMiGroups<MoePingpongKernelSchedule, MoePingpongEpilogueSchedule, false, FusedMiGroup<7, 4>>>;
 
-template <typename ClusterShape_, int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
 using MoePingpongStrassenGemmKernelsForCluster = cutlass::gemm::device::StrassenGemmKernels<
     StrassenGroupsForCluster<ClusterShape_, StageCount>, MoePingpongScheduleStrassenGroups, MoeProblemShape,
     ArchTag, OperatorClass,
-    ElementA, LayoutA *, cutlass::layout::OriginalLayout,
-    ElementB, LayoutB *, cutlass::layout::OriginalLayout,
-    ElementC, LayoutC *, cutlass::layout::OriginalLayout, ElementAccumulator,
+    ElementA, cutlass::layout::RowMajor *, cutlass::layout::OriginalLayout,
+    ElementB, LayoutB_ *, cutlass::layout::OriginalLayout,
+    ElementC, LayoutCD_ *, cutlass::layout::OriginalLayout, ElementAccumulator,
     ClusterShape_, cute::Int<StageCount>, PresumTileShapeA, PresumTileShapeB,
     cutlass::gemm::device::PresumOpt<0,0,0,0>,
     AlignmentA, AlignmentB, AlignmentC, ElementD>;
-template <int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
-using MoePingpongStrassenGemmKernels = MoePingpongStrassenGemmKernelsForCluster<ClusterShape, StageCount, PresumTileShapeA, PresumTileShapeB>;
+template <typename LayoutB_, typename LayoutCD_, int StageCount, typename PresumTileShapeA, typename PresumTileShapeB>
+using MoePingpongStrassenGemmKernels = MoePingpongStrassenGemmKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape, StageCount, PresumTileShapeA, PresumTileShapeB>;
 
-template <typename ClusterShape_>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_>
 using HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128ForCluster =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<
-        MoePingpongStrassenGemmKernelsForCluster<ClusterShape_, 6, Shape<_2,_128>, Shape<_2,_128>>>;
-using HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128 = HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128ForCluster<ClusterShape>;
-using HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128_1x2 = HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128ForCluster<Shape<_1,_2,_1>>;
-template <typename ClusterShape_>
+        MoePingpongStrassenGemmKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape_, 6, Shape<_2,_128>, Shape<_2,_128>>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128 = HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128ForCluster<LayoutB_, LayoutCD_, ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128_1x2 = HopperF16MoeInterleavedPresumPingpongMaxFusion_2x128ForCluster<LayoutB_, LayoutCD_, Shape<_1,_2,_1>>;
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_>
 using HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128ForCluster =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<
-        MoePingpongStrassenGemmKernelsForCluster<ClusterShape_, 6, Shape<_4,_128>, Shape<_4,_128>>>;
-using HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128 = HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128ForCluster<ClusterShape>;
-using HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128_1x2 = HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128ForCluster<Shape<_1,_2,_1>>;
+        MoePingpongStrassenGemmKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape_, 6, Shape<_4,_128>, Shape<_4,_128>>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128 = HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128ForCluster<LayoutB_, LayoutCD_, ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128_1x2 = HopperF16MoeInterleavedPresumPingpongMaxFusion_4x128ForCluster<LayoutB_, LayoutCD_, Shape<_1,_2,_1>>;

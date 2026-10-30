@@ -8,7 +8,7 @@ extern "C" int run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_4x12
 class F16HopperMoePingpong4x128Test
 	: public testing::TestWithParam<strassen_tests::MoeTestCase> {};
 
-TEST_P(F16HopperMoePingpong4x128Test, MatchesReference) {
+TEST_P(F16HopperMoePingpong4x128Test, MatchesReference_TTT) {
 	strassen_tests::run_moe_gtest_case(
 		GetParam(), run_hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_4x128);
 }

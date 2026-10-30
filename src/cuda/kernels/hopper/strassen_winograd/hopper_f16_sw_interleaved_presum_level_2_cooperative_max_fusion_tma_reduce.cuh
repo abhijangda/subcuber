@@ -93,15 +93,15 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSc
                                                        ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 2>>,
                                                        ParallelMiGroups<KernelScheduleM2To6, EpilogueScheduleM2To6, false, FusedMiGroup<7, 4>>>;
 
-template<typename Groups, typename ElementL2Postsum, typename PresumTileShapeA, typename PresumTileShapeB,
+template <typename LayoutB_, typename LayoutCD_, typename Groups, typename ElementL2Postsum, typename PresumTileShapeA, typename PresumTileShapeB,
          typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<Groups,
                                                                        ScheduleStrassenGroups1,
                                                                        ProblemShape,
                                                                        ArchTag, OperatorClass,
-                                                                       ElementA, LayoutA, cutlass::layout::OriginalLayout,
-                                                                       ElementB, LayoutB, cutlass::layout::OriginalLayout,
-                                                                       ElementL2Postsum, LayoutC, cutlass::layout::OriginalLayout,
+                                                                       ElementA, cutlass::layout::RowMajor, cutlass::layout::OriginalLayout,
+                                                                       ElementB, LayoutB_, cutlass::layout::OriginalLayout,
+                                                                       ElementL2Postsum, LayoutCD_, cutlass::layout::OriginalLayout,
                                                                        ElementAccumulator, ClusterShape,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
@@ -109,15 +109,15 @@ using StrassenGemmKernels = cutlass::gemm::device::StrassenGemmKernels<Groups,
                                                                        AlignmentA, AlignmentB, AlignmentC,
                                                                        ElementD>;
 
-template<typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
+template <typename LayoutB_, typename LayoutCD_, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
 using StrassenGemmLevel2UniversalAdapter = cutlass::gemm::device::StrassenGemmLevel2UniversalAdapter<
-    StrassenGemmKernels<StrassenGroupsM0, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
-    StrassenGemmKernels<StrassenGroups<1>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
-    StrassenGemmKernels<StrassenGroups<2>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
-    StrassenGemmKernels<StrassenGroups<3>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
-    StrassenGemmKernels<StrassenGroups<4>, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
-    StrassenGemmKernels<StrassenGroups<5>, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
-    StrassenGemmKernels<StrassenGroups<6>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<LayoutB_, LayoutCD_, StrassenGroupsM0, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<LayoutB_, LayoutCD_, StrassenGroups<1>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<LayoutB_, LayoutCD_, StrassenGroups<2>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<LayoutB_, LayoutCD_, StrassenGroups<3>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<LayoutB_, LayoutCD_, StrassenGroups<4>, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<LayoutB_, LayoutCD_, StrassenGroups<5>, void, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
+    StrassenGemmKernels<LayoutB_, LayoutCD_, StrassenGroups<6>, ElementD, PresumTileShapeA, PresumTileShapeB, PresumOpts>,
     true>;
 
 template <typename StrassenGemmKernel_>
@@ -176,5 +176,7 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduce_2x256_2x256_OptNo = HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduceBase<StrassenGemmLevel2UniversalAdapter<Shape<_2,_256>, Shape<_2,_256>>>;
-using HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduce_4x256_4x256_OptNo = HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduceBase<StrassenGemmLevel2UniversalAdapter<Shape<_4,_256>, Shape<_4,_256>>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduce_2x256_2x256_OptNo = HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduceBase<StrassenGemmLevel2UniversalAdapter<LayoutB_, LayoutCD_, Shape<_2,_256>, cute::conditional_t<cute::is_same_v<LayoutB_, cutlass::layout::ColumnMajor>, Shape<_4,_128>, Shape<_2,_256>>>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduce_4x256_4x256_OptNo = HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduceBase<StrassenGemmLevel2UniversalAdapter<LayoutB_, LayoutCD_, Shape<_4,_256>, cute::conditional_t<cute::is_same_v<LayoutB_, cutlass::layout::ColumnMajor>, Shape<_8,_128>, Shape<_4,_256>>>>;

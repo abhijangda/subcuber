@@ -2,19 +2,23 @@
 
 #include "cuda/kernel_runner_support.cuh"
 
+template <typename Layout>
 static __global__ void kernel_runner_pack_strassen_f16(
     cutlass::half_t const *source, cutlass::half_t *destination,
     int rows, int columns) {
   size_t matrix_elements = size_t(rows) * size_t(columns);
-  size_t half_rows = size_t(rows) / 2;
-  size_t half_columns = size_t(columns) / 2;
+  int half_rows = rows / 2;
+  int half_columns = columns / 2;
+  auto layout = Layout::packed({rows, columns});
+  auto quadrant_layout = Layout::packed({half_rows, half_columns});
   for (size_t index = size_t(blockIdx.x) * blockDim.x + threadIdx.x;
        index < matrix_elements; index += size_t(blockDim.x) * gridDim.x) {
-    size_t row = index / size_t(columns);
-    size_t column = index % size_t(columns);
+    auto coordinate = layout.inverse(index);
+    int row = coordinate.row();
+    int column = coordinate.column();
     size_t quadrant = (row / half_rows) * 2 + column / half_columns;
-    size_t packed_index = quadrant * half_rows * half_columns +
-                          (row % half_rows) * half_columns + column % half_columns;
+    size_t packed_index = quadrant * size_t(half_rows) * half_columns +
+                          quadrant_layout({row % half_rows, column % half_columns});
     destination[packed_index] = source[index];
   }
 }
@@ -36,12 +40,12 @@ int kernel_runner_run_b_presum_kernel(
   cudaStream_t stream = streams != nullptr && num_streams > 0 ? streams[0] : nullptr;
   unsigned blocks_a = unsigned(std::min<size_t>((a_elements + 255) / 256, 65535));
   unsigned blocks_b = unsigned(std::min<size_t>((b_elements + 255) / 256, 65535));
-  kernel_runner_pack_strassen_f16<<<blocks_a, 256, 0, stream>>>(
+    kernel_runner_pack_strassen_f16<typename Gemm::StrassenGemmKernel::LayoutA><<<blocks_a, 256, 0, stream>>>(
       static_cast<cutlass::half_t const *>(buffers.a), packed_a.get(),
       rows, reduction);
   cudaError_t error = cudaGetLastError();
   if (error != cudaSuccess) return static_cast<int>(error);
-  kernel_runner_pack_strassen_f16<<<blocks_b, 256, 0, stream>>>(
+    kernel_runner_pack_strassen_f16<typename Gemm::StrassenGemmKernel::LayoutB><<<blocks_b, 256, 0, stream>>>(
       static_cast<cutlass::half_t const *>(buffers.b), packed_b.get(),
       reduction, columns);
   error = cudaGetLastError();

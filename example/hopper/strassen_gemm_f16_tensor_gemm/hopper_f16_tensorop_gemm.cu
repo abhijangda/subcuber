@@ -103,15 +103,15 @@ using TensorOpElem = cutlass::bfloat16_t;
 // A matrix configuration
 using         ElementA    = TensorOpElem;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
-using         SubMatLayoutA = cutlass::layout::StrassenLayout;
-// using         SubMatLayoutA = cutlass::layout::OriginalLayout;
+// using         SubMatLayoutA = cutlass::layout::StrassenLayout;
+using         SubMatLayoutA = cutlass::layout::OriginalLayout;
 constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // Memory access granularity/alignment of A matrix in units of elements (up to 16 bytes)
 
 // B matrix configuration
 using         ElementB    = TensorOpElem;                                // Element type for B matrix operand
 using         LayoutB     = cutlass::layout::RowMajor;                   // RowMajor or ColumnMajor for B matrix operand
-using         SubMatLayoutB = cutlass::layout::StrassenLayout;
-// using         SubMatLayoutB = cutlass::layout::OriginalLayout;
+// using         SubMatLayoutB = cutlass::layout::StrassenLayout;
+using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
@@ -149,9 +149,9 @@ using ClusterShape        = Shape<_1,_2,_1>;                                // S
 const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 4 : 4;          // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 4 : 4;
 const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 4 : 4;
-using PresumTileShapeA    = Shape<_2, _256>;
+using PresumTileShapeA    = Shape<_4, _256>;
 using PresumTileShapeB    = cute::conditional_t<cute::is_same_v<LayoutB, cutlass::layout::RowMajor>,
-                                                Shape<_2, _256>,
+                                                Shape<_4, _256>,
                                                 Shape<_4, _128>>;
 using KernelScheduleM2To6 = cutlass::gemm::KernelTmaWarpSpecializedCooperative;       // Kernel to launch based on the default setting in the Collective Builder
 using EpilogueScheduleM2To6 = cutlass::epilogue::TmaWarpSpecializedCooperative;
@@ -188,7 +188,7 @@ using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, 
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-#if 1 //TMA Reduce
+#if 0 //TMA Reduce
 #if defined(COOPERATIVE)
   static_assert(StageCountTypeM4M5 == 4, "StageCountTypeM4M5 should be 4 for TMA Reduce");
 #endif
@@ -815,9 +815,9 @@ bool verify(const Options &options) {
       }
     }
     // if (r > 0 || c > 4112) 
-    if (!passed) break;
+    // if (!passed) break;
   }
-  if (!passed) break;
+  // if (!passed) break;
   }
 
   return passed;

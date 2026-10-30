@@ -520,7 +520,7 @@ struct CollectiveStrassenMma<
     };
 
     auto get_tensor_b = [&] () {
-      if (cute::is_same_v<SubMatLayoutB, cutlass::layout::OriginalLayout>) {
+      if constexpr (cute::is_same_v<SubMatLayoutB, cutlass::layout::OriginalLayout>) {
         return make_tensor(ptr_B, make_layout(make_shape(N,K,L), args.dB));
       } else if constexpr (::cutlass::gemm::detail::is_major<1,StrideB>()) { //ColumnMajor
         return make_tensor(ptr_B, make_layout(make_shape(4*N/2,K/2,L), make_stride(get<0>(args.dB)/2, get<1>(args.dB), get<2>(args.dB))));

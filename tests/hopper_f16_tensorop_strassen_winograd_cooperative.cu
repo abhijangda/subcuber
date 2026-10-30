@@ -14,8 +14,8 @@ static std::vector<strassen_tests::TestCase> test_cases() {
 	return cases;
 }
 
-TEST_P(F16HopperStrassenWinogradCooperativeTest, MatchesReference) {
-	strassen_tests::run_gtest_case<HopperF16InterleavedPresumCooperativeMaxFusion_4x256_4x256_OptNo, ElementA, ElementB, ElementC>(GetParam());
+TEST_P(F16HopperStrassenWinogradCooperativeTest, MatchesReference_TTT) {
+	strassen_tests::run_gtest_case<HopperF16InterleavedPresumCooperativeMaxFusion_4x256_4x256_OptNo<cutlass::layout::RowMajor, cutlass::layout::RowMajor>, ElementA, ElementB, ElementC>(GetParam());
 }
 
 INSTANTIATE_TEST_SUITE_P(

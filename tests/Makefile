@@ -12,6 +12,7 @@ GTEST_OBJECT := gtest-all.o
 SPLIT_COMPILE ?= 10
 NVCC ?= /usr/local/cuda/bin/nvcc
 CXX ?= g++
+PYTHON ?= python3
 NVCC_FLAGS ?= -std=c++20 -O3 -Xptxas -v,-O3 --split-compile=$(SPLIT_COMPILE) --expt-relaxed-constexpr -DNDEBUG
 HOPPER_F16_NVCC_FLAGS ?= -std=c++20 -O3 -Xptxas -v,-O3 --split-compile=1 --expt-relaxed-constexpr -DNDEBUG
 VOLTA_GENCODE := --generate-code=arch=compute_80,code=[compute_80,sm_80]    -DGENCODE_ARCH=700
@@ -38,16 +39,12 @@ HOPPER_F32_SW_KERNEL_PRESUM_SRC := ../src/cuda/kernels/hopper/strassen_winograd/
 HOPPER_F32_SW_FUSED_PRESUM_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f32_sw_fused_presum.cu
 BLACKWELL_F32_SW_INTERLEAVED_PRESUM_SRC := ../src/cuda/kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_128x256.cu
 BLACKWELL_F32_SW_INTERLEAVED_PRESUM_LEVEL_2_SRC := ../src/cuda/kernels/blackwell/strassen_winograd/blackwell_f32_sw_interleaved_presum_level_2_128x256.cu
-HOPPER_F16_SW_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion.cu
-HOPPER_F16_SW_COOPERATIVE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion.cu
-HOPPER_F16_SW_COOPERATIVE_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion.cu
-HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce.cu
-HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce.cu
-HOPPER_F16_SCHEDULE_SRCS := $(foreach schedule,cooperative pingpong,$(foreach reduction,max_fusion max_fusion_tma_reduce,\
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_$(schedule)_$(reduction).cu \
-	kernels/hopper/b_presum_kernel/hopper_f16_sw_a_presum_interleaved_b_presum_kernel_$(schedule)_$(reduction).cu))
+HOPPER_F16_SW_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_TTT.cu
+HOPPER_F16_SW_COOPERATIVE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_TTT.cu
+HOPPER_F16_SW_COOPERATIVE_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_TTT.cu
+HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce_TTT.cu
+HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_TTT.cu
 HOPPER_F16_SCHEDULE_BUILD_DIR := $(abspath ../build/obj/kernel_runner_hopper)
-HOPPER_F16_SCHEDULE_OBJS := $(addprefix $(HOPPER_F16_SCHEDULE_BUILD_DIR)/,$(HOPPER_F16_SCHEDULE_SRCS:.cu=.o))
 HOPPER_FP8_BLOCKWISE_SCALING_SRCS := $(foreach reduction,max_fusion max_fusion_tma_reduce,kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_$(reduction).cu)
 HOPPER_FP8_BLOCKWISE_SCALING_OBJS := $(addprefix $(HOPPER_F16_SCHEDULE_BUILD_DIR)/,$(HOPPER_FP8_BLOCKWISE_SCALING_SRCS:.cu=.o))
 HOPPER_F16_MOE_SW_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion.cu
@@ -84,6 +81,7 @@ HOPPER_TESTS := test_hopper_f32_strassen_winograd_fused_presum \
 	test_hopper_f32_strassen_winograd_presum \
 	test_hopper_f32_strassen_winograd_presum_level_2 \
 	test_hopper_f32_strassen_winograd_kernel_presum \
+	test_hopper_f32_strassen_winograd_tile \
 	test_hopper_f16_tensorop_strassen_winograd_pingpong \
 	test_hopper_f16_moe_strassen_winograd_pingpong_4x128 \
 	test_hopper_f16_moe_strassen_winograd_pingpong_tma_reduce_4x128 \
@@ -93,7 +91,6 @@ HOPPER_TESTS := test_hopper_f32_strassen_winograd_fused_presum \
 	test_hopper_f16_moe_strassen_winograd_cooperative_pingpong_tma_reduce_2x256 \
 	test_hopper_f16_tensorop_strassen_winograd_cooperative \
 	test_hopper_f16_tensorop_strassen_winograd_cooperative_pingpong \
-	test_hopper_f16_tensorop_strassen_winograd_schedules \
 	test_hopper_fp8_blockwise_scaling_sw_kernel_presum \
 	test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce \
 	test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce
@@ -109,15 +106,11 @@ TARGETS := $(VOLTA_TESTS) $(AMPERE_TESTS) $(HOPPER_TESTS) $(BLACKWELL_TESTS)
 
 all: $(TARGETS)
 
-.PHONY: hopper_fp8_blockwise_scaling_objects
-hopper_fp8_blockwise_scaling_objects:
-	$(MAKE) -C .. BUILD_DIR=$(HOPPER_F16_SCHEDULE_BUILD_DIR) $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS)
-
-test_hopper_fp8_blockwise_scaling_sw_kernel_presum: hopper_fp8_blockwise_scaling_sw_kernel_presum.cu base_test.cuh ../src/cuda/kernel_runner_support.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_tma_reduce.cuh hopper_fp8_blockwise_scaling_objects $(GTEST_OBJECT)
-	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED $(HOPPER_GENCODE) $< $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS) $(GTEST_OBJECT) -o $@ -Xcompiler -pthread -Xcompiler -fopenmp
-
 $(GTEST_OBJECT): $(GTEST_SRC)
 	$(CXX) $(GTEST_CXXFLAGS) -c $< -o $@
+
+$(HOPPER_FP8_BLOCKWISE_SCALING_OBJS): $(HOPPER_F16_SCHEDULE_BUILD_DIR)/%.o: ../src/cuda/%.cu ../src/cuda/kernel_runner_support.cuh
+	$(MAKE) -C .. BUILD_DIR=$(HOPPER_F16_SCHEDULE_BUILD_DIR) KERNEL_SRCS='$(HOPPER_FP8_BLOCKWISE_SCALING_SRCS)' $@
 
 test_volta_f32_strassen_winograd_tile: f32_strassen_winograd_tile.cu base_test.cuh $(VOLTA_F32_SW_TILE_SRC) $(GTEST_OBJECT)
 	$(NVCC) $(NVCC_FLAGS) $< $(VOLTA_F32_SW_TILE_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v2 -DTHREADBLOCK -DTILE_SIZE_128 -DSPLIT_K=1 -o $@ $(VOLTA_GENCODE) -Xcompiler -pthread
@@ -212,11 +205,14 @@ test_hopper_f16_tensorop_strassen_winograd_cooperative: hopper_f16_tensorop_stra
 test_hopper_f16_tensorop_strassen_winograd_cooperative_pingpong: hopper_f16_tensorop_strassen_winograd_cooperative_pingpong.cu base_test.cuh $(HOPPER_F16_SW_COOPERATIVE_PINGPONG_SRC) $(GTEST_OBJECT)
 	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $< $(HOPPER_F16_SW_COOPERATIVE_PINGPONG_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v3 -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
 
-test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce: hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce.cu base_test.cuh $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC) $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC:.cu=.cuh) $(GTEST_OBJECT)
+test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce: hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce.cu base_test.cuh $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC) $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC:_TTT.cu=.cuh) $(GTEST_OBJECT)
 	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $< $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
 
-test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce: hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce.cu base_test.cuh $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC) $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC:.cu=.cuh) $(GTEST_OBJECT)
+test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce: hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce.cu base_test.cuh $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC) $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC:_TTT.cu=.cuh) $(GTEST_OBJECT)
 	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $< $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
+
+test_hopper_fp8_blockwise_scaling_sw_kernel_presum: hopper_fp8_blockwise_scaling_sw_kernel_presum.cu base_test.cuh ../src/cuda/kernel_runner_support.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion.cuh ../src/cuda/kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_tma_reduce.cuh $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS) $(GTEST_OBJECT)
+	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED $(HOPPER_GENCODE) $< $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS) $(GTEST_OBJECT) -o $@ -Xcompiler -pthread -Xcompiler -fopenmp
 
 run-volta-tests: $(VOLTA_TESTS)
 	@set -e; \
@@ -226,25 +222,13 @@ run-volta-tests: $(VOLTA_TESTS)
 	done
 
 run-ampere-tests: $(AMPERE_TESTS)
-	@set -e; \
-	for target in $(AMPERE_TESTS); do \
-		echo "== $$target =="; \
-		./$$target; \
-	done
+	$(PYTHON) run-ampere-tests.py $(TEST_ARGS)
 
 run-hopper-tests: $(HOPPER_TESTS)
-	@set -e; \
-	for target in $(HOPPER_TESTS); do \
-		echo "== $$target =="; \
-		./$$target; \
-	done
+	$(PYTHON) run-hopper-tests.py $(TEST_ARGS)
 
 run-blackwell-tests: $(BLACKWELL_TESTS)
-	@set -e; \
-	for target in $(BLACKWELL_TESTS); do \
-		echo "== $$target =="; \
-		./$$target; \
-	done
+	$(PYTHON) run-blackwell-tests.py $(TEST_ARGS)
 
 run-tests: $(TARGETS)
 	@status=0; \
@@ -258,4 +242,6 @@ $(addprefix run-,$(TARGETS)): run-%: %
 	./$<
 
 clean:
-	rm -f $(TARGETS) $(GTEST_OBJECT) hopper_f16_tensorop_strassen_winograd_schedules.o
+	rm -f $(TARGETS) $(GTEST_OBJECT)
+
+-include $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS:.o=.d)

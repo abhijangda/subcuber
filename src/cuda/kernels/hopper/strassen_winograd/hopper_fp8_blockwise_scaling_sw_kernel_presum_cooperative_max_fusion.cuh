@@ -104,20 +104,20 @@ using ScheduleStrassenGroupsPar = ScheduleStrassenGroups<
     ParallelMiGroups<KernelSchedule, EpilogueSchedule, false,
         FusedMiGroup<7, 0>, FusedMiGroup<7, 2>, FusedMiGroup<7, 4>>>;
 
-template <bool UseTmaReduce, typename Schedule = ScheduleStrassenGroups1>
+template <bool UseTmaReduce, typename Schedule = ScheduleStrassenGroups1, typename LayoutCD_ = LayoutC>
 using StrassenGemmKernelsForReduce = cutlass::gemm::device::StrassenGemmKernels<
     StrassenGroupsForReduce<UseTmaReduce>, Schedule,
     ProblemShape, ArchTag, OperatorClass,
     ElementA, cute::tuple<LayoutA, LayoutSFA>, SubMatLayoutA,
     ElementB, cute::tuple<LayoutB, LayoutSFB>, SubMatLayoutB,
-    ElementC, LayoutC, cutlass::layout::OriginalLayout,
+    ElementC, LayoutCD_, cutlass::layout::OriginalLayout,
     ElementAccumulator, ClusterShape, cute::Int<StageCountTypeM0>,
     Shape<_4,_128>, Shape<_4,_128>, cutlass::gemm::device::PresumOpt<>,
     AlignmentA, AlignmentB, AlignmentC, ElementD>;
 
-template <bool UseTmaReduce, typename Schedule = ScheduleStrassenGroups1>
+template <bool UseTmaReduce, typename Schedule = ScheduleStrassenGroups1, typename LayoutCD_ = LayoutC>
 using HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionForReduce =
-    cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenGemmKernelsForReduce<UseTmaReduce, Schedule>>;
+    cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenGemmKernelsForReduce<UseTmaReduce, Schedule, LayoutCD_>>;
 
 using HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusion_4x128_4x128_OptNo_1x2 =
     HopperFp8BlockwiseScalingSwKernelPresumCooperativeMaxFusionForReduce<false>;

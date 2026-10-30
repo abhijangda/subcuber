@@ -63,7 +63,8 @@ static int cublaslt_status_to_error(cublasStatus_t status) {
   return status == CUBLAS_STATUS_SUCCESS ? 0 : 10000 + static_cast<int>(status);
 }
 
-template <typename Element>
+template <typename Element, bool ColumnMajorB = false,
+          bool ColumnMajorD = std::is_same_v<Element, cutlass::float_e4m3_t>>
 int run_cublaslt_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
                       int warmup_iterations, int iterations, cudaStream_t *streams,
                       int num_streams, int, float *avg_ms) {
@@ -195,8 +196,8 @@ int run_cublaslt_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
   int layout_a_rows = std::is_same_v<Element, cutlass::float_e4m3_t> ? k : m;
   int layout_a_cols = std::is_same_v<Element, cutlass::float_e4m3_t> ? m : k;
   int layout_a_ld = k;
-  int layout_b_ld = std::is_same_v<Element, cutlass::float_e4m3_t> ? k : n;
-  int layout_d_ld = std::is_same_v<Element, cutlass::float_e4m3_t> ? m : n;
+  int layout_b_ld = std::is_same_v<Element, cutlass::float_e4m3_t> || ColumnMajorB ? k : n;
+  int layout_d_ld = ColumnMajorD ? m : n;
   cublas_status = cublasLtMatrixLayoutCreate(
       &layout_a, Type::data_type, layout_a_rows, layout_a_cols, layout_a_ld);
   if (cublas_status != CUBLAS_STATUS_SUCCESS) {
@@ -224,24 +225,26 @@ int run_cublaslt_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
 
   if constexpr (!std::is_same_v<Element, cutlass::float_e4m3_t>) {
     cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
+    cublasLtOrder_t order_b = ColumnMajorB ? CUBLASLT_ORDER_COL : CUBLASLT_ORDER_ROW;
     cublas_status = cublasLtMatrixLayoutSetAttribute(
         layout_a, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
     if (cublas_status == CUBLAS_STATUS_SUCCESS) {
       cublas_status = cublasLtMatrixLayoutSetAttribute(
-          layout_b, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
+          layout_b, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_b, sizeof(order_b));
     }
-    if (cublas_status == CUBLAS_STATUS_SUCCESS) {
-      cublas_status = cublasLtMatrixLayoutSetAttribute(
-          layout_c, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-    }
-    if (cublas_status == CUBLAS_STATUS_SUCCESS) {
-      cublas_status = cublasLtMatrixLayoutSetAttribute(
-          layout_d, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order));
-    }
-    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
-      cleanup();
-      return cublaslt_status_to_error(cublas_status);
-    }
+  }
+  cublasLtOrder_t order_d = ColumnMajorD ? CUBLASLT_ORDER_COL : CUBLASLT_ORDER_ROW;
+  if (cublas_status == CUBLAS_STATUS_SUCCESS) {
+    cublas_status = cublasLtMatrixLayoutSetAttribute(
+        layout_c, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_d, sizeof(order_d));
+  }
+  if (cublas_status == CUBLAS_STATUS_SUCCESS) {
+    cublas_status = cublasLtMatrixLayoutSetAttribute(
+        layout_d, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_d, sizeof(order_d));
+  }
+  if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+    cleanup();
+    return cublaslt_status_to_error(cublas_status);
   }
 
   cublas_status = cublasLtMatmulPreferenceCreate(&preference);
@@ -388,4 +391,40 @@ extern "C" int run_cublaslt_f64(KernelRunnerBuffers buffers, int m, int n, int k
                                  int split_k_slices, float *avg_ms) {
   return run_cublaslt_gemm<double>(buffers, m, n, k, warmup_iterations,
                                    iterations, streams, num_streams, split_k_slices, avg_ms);
+}
+
+extern "C" int run_cublaslt_f16_TNT(
+    KernelRunnerBuffers buffers, int m, int n, int k, int warmup_iterations,
+    int iterations, cudaStream_t *streams, int num_streams, int split_k_slices,
+    float *avg_ms) {
+  return run_cublaslt_gemm<cutlass::half_t, true>(
+      buffers, m, n, k, warmup_iterations, iterations, streams, num_streams,
+      split_k_slices, avg_ms);
+}
+
+extern "C" int run_cublaslt_f16_TNN(
+    KernelRunnerBuffers buffers, int m, int n, int k, int warmup_iterations,
+    int iterations, cudaStream_t *streams, int num_streams, int split_k_slices,
+    float *avg_ms) {
+  return run_cublaslt_gemm<cutlass::half_t, true, true>(
+      buffers, m, n, k, warmup_iterations, iterations, streams, num_streams,
+      split_k_slices, avg_ms);
+}
+
+extern "C" int run_cublaslt_fp8_blockwise_128x128_TNT(
+    KernelRunnerBuffers buffers, int m, int n, int k, int warmup_iterations,
+    int iterations, cudaStream_t *streams, int num_streams, int split_k_slices,
+    float *avg_ms) {
+  return run_cublaslt_gemm<cutlass::float_e4m3_t, true, false>(
+      buffers, m, n, k, warmup_iterations, iterations, streams, num_streams,
+      split_k_slices, avg_ms);
+}
+
+extern "C" int run_cublaslt_fp8_blockwise_128x128_TNN(
+    KernelRunnerBuffers buffers, int m, int n, int k, int warmup_iterations,
+    int iterations, cudaStream_t *streams, int num_streams, int split_k_slices,
+    float *avg_ms) {
+  return run_cublaslt_gemm<cutlass::float_e4m3_t, true, true>(
+      buffers, m, n, k, warmup_iterations, iterations, streams, num_streams,
+      split_k_slices, avg_ms);
 }

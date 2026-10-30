@@ -47,7 +47,7 @@ static int cublas_status_to_error(cublasStatus_t status) {
   return status == CUBLAS_STATUS_SUCCESS ? 0 : 10000 + static_cast<int>(status);
 }
 
-template <typename Element>
+template <typename Element, bool ColumnMajorB = false, bool ColumnMajorD = false>
 int run_cublas_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
                     int warmup_iterations, int iterations, cudaStream_t *streams,
                     int num_streams, int, float *avg_ms) {
@@ -87,11 +87,20 @@ int run_cublas_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
   Scale alpha = Scale(1.0);
   Scale beta = Scale(0.0);
   auto launch = [&]() {
+    if constexpr (ColumnMajorD) {
+      return cublasGemmEx(handle,
+                          CUBLAS_OP_T, ColumnMajorB ? CUBLAS_OP_N : CUBLAS_OP_T,
+                          m, n, k, &alpha,
+                          buffers.a, Type::data_type, k,
+                          buffers.b, Type::data_type, ColumnMajorB ? k : n,
+                          &beta, buffers.d, Type::data_type, m,
+                          Type::compute_type, Type::algo);
+    }
     return cublasGemmEx(handle,
-                        CUBLAS_OP_N, CUBLAS_OP_N,
+                        ColumnMajorB ? CUBLAS_OP_T : CUBLAS_OP_N, CUBLAS_OP_N,
                         n, m, k,
                         &alpha,
-                        buffers.b, Type::data_type, n,
+                        buffers.b, Type::data_type, ColumnMajorB ? k : n,
                         buffers.a, Type::data_type, k,
                         &beta,
                         buffers.d, Type::data_type, n,
@@ -158,6 +167,24 @@ int run_cublas_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
   cleanup();
   return 0;
 }
+
+extern "C" int run_cublas_f16_TNT(
+    KernelRunnerBuffers buffers, int m, int n, int k, int warmup_iterations,
+    int iterations, cudaStream_t *streams, int num_streams, int split_k_slices,
+    float *avg_ms) {
+  return run_cublas_gemm<cutlass::half_t, true>(
+      buffers, m, n, k, warmup_iterations, iterations, streams, num_streams,
+      split_k_slices, avg_ms);
+}
+
+    extern "C" int run_cublas_f16_TNN(
+        KernelRunnerBuffers buffers, int m, int n, int k, int warmup_iterations,
+        int iterations, cudaStream_t *streams, int num_streams, int split_k_slices,
+        float *avg_ms) {
+      return run_cublas_gemm<cutlass::half_t, true, true>(
+      buffers, m, n, k, warmup_iterations, iterations, streams, num_streams,
+      split_k_slices, avg_ms);
+    }
 
 int run_cublas_grouped_moe_gemm(KernelRunnerBuffers buffers, int m, int n, int k,
                                 int warmup_iterations, int iterations,

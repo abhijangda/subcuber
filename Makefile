@@ -48,8 +48,14 @@ AMPERE_CUBIC_SRCS := \
 	kernels/ampere/cubic/ampere_f32_cutlass_256x128.cu
 
 HOPPER_CUBIC_SRCS := \
-	kernels/hopper/cubic/hopper_f16_cutlass_128x128_pingpong.cu \
-	kernels/hopper/cubic/hopper_f16_cutlass_128x256_cooperative.cu \
+	kernels/hopper/cubic/hopper_fp8_blockwise_scaling_cutlass_128x128_cooperative_TNT.cu \
+	kernels/hopper/cubic/hopper_fp8_blockwise_scaling_cutlass_128x128_cooperative_TNN.cu \
+	kernels/hopper/cubic/hopper_f16_cutlass_128x128_pingpong_TTT.cu \
+	kernels/hopper/cubic/hopper_f16_cutlass_128x128_pingpong_TNT.cu \
+	kernels/hopper/cubic/hopper_f16_cutlass_128x128_pingpong_TNN.cu \
+	kernels/hopper/cubic/hopper_f16_cutlass_128x256_cooperative_TTT.cu \
+	kernels/hopper/cubic/hopper_f16_cutlass_128x256_cooperative_TNT.cu \
+	kernels/hopper/cubic/hopper_f16_cutlass_128x256_cooperative_TNN.cu \
 	kernels/hopper/cubic/hopper_f16_grouped_cutlass_128x128_pingpong.cu \
 	kernels/hopper/cubic/hopper_f16_grouped_cutlass_128x256_cooperative.cu \
 	kernels/hopper/cubic/hopper_f64_cutlass_128x64.cu \
@@ -112,16 +118,34 @@ HOPPER_V3_SRCS := \
 	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_cooperative_max_fusion_tma_reduce.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion.cu \
 	kernels/hopper/strassen_winograd/hopper_f16_moe_sw_interleaved_presum_pingpong_max_fusion_tma_reduce.cu \
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion.cu \
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce.cu \
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion.cu \
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce.cu \
-	kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion.cu \
-	kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_tma_reduce.cu \
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion.cu \
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce.cu \
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce.cu \
-	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce.cu
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_TTT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_TTT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_pingpong_max_fusion_tma_reduce_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_TTT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_TTT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_max_fusion_tma_reduce_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_tma_reduce_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_max_fusion_tma_reduce_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_TTT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_TTT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_tma_reduce_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce_TTT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce_TNN.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_TTT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_TNT.cu \
+	kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_TNN.cu
 
 HOPPER_B_PRESUM_KERNEL_SRCS := $(patsubst $(CUDA_SRC_DIR)/%,%,$(wildcard $(CUDA_SRC_DIR)/kernels/hopper/b_presum_kernel/*.cu))
 
@@ -210,16 +234,22 @@ $(NO_CUDA_DECL_BUILD_DIR)/%.o: $(CUDA_SRC_DIR)/%.cpp $(CUDA_SRC_DIR)/kernel_runn
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXX_FLAGS) -DSTRASSEN_DISABLE_CUDA_DECLARATIONS $(CXX_INCLUDES) -MMD -MP -c $< -o $@
 
-$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce.o \
-$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce.o: PRESUM_LEVEL_2_SPLIT_COMPILE = 1
+$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce_TTT.o \
+$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce_TNT.o \
+$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce_TNN.o \
+$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_TTT.o \
+$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_TNT.o \
+$(BUILD_DIR)/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_TNN.o: PRESUM_LEVEL_2_SPLIT_COMPILE = 1
 
-$(BUILD_DIR)/kernels/hopper/b_presum_kernel/hopper_f16_sw_a_presum_interleaved_b_presum_kernel_level_2_cooperative_pingpong_max_fusion_tma_reduce.o: SPLIT_COMPILE = 1
+$(BUILD_DIR)/kernels/hopper/b_presum_kernel/hopper_f16_sw_a_presum_interleaved_b_presum_kernel_level_2_cooperative_pingpong_max_fusion_tma_reduce_TTT.o \
+$(BUILD_DIR)/kernels/hopper/b_presum_kernel/hopper_f16_sw_a_presum_interleaved_b_presum_kernel_level_2_cooperative_pingpong_max_fusion_tma_reduce_TNT.o \
+$(BUILD_DIR)/kernels/hopper/b_presum_kernel/hopper_f16_sw_a_presum_interleaved_b_presum_kernel_level_2_cooperative_pingpong_max_fusion_tma_reduce_TNN.o: SPLIT_COMPILE = 1
 
 $(BUILD_DIR)/kernels/%.o: $(CUDA_SRC_DIR)/kernels/%.cu $(CUDA_SRC_DIR)/kernel_runner_support.cuh
 	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCC_FLAGS) $(SPLIT_COMPILE_FLAGS) $(INCLUDES) \
 	  $(if $(findstring /blackwell/,$<),$(BLACKWELL_GENCODE),$(if $(findstring /hopper/,$<),$(HOPPER_GENCODE),$(if $(findstring /volta/,$<),$(VOLTA_GENCODE),$(AMPERE_GENCODE)))) \
-	    $(if $(findstring /hopper/cubic/hopper_f16_cutlass_,$<),$(V3_FLAGS), \
+	    $(if $(or $(findstring /hopper/cubic/hopper_f16_cutlass_,$<),$(findstring /hopper/cubic/hopper_fp8_blockwise_scaling_cutlass_,$<)),$(V3_FLAGS), \
 	    $(if $(findstring /cubic/,$<),$(CUBIC_FLAGS), \
 	  $(if $(or $(findstring hopper_f16_sw_interleaved_presum,$<),$(findstring hopper_f16_moe_sw_interleaved_presum,$<),$(findstring hopper_fp8_blockwise_scaling_sw_kernel_presum,$<),$(findstring /hopper/b_presum_kernel/,$<),$(findstring blackwell_f32_sw_interleaved_presum,$<)),$(V3_FLAGS), \
 	    $(if $(findstring _sw_tile,$<),$(TILE_FLAGS), \

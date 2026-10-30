@@ -20,24 +20,27 @@ using MoeCooperativePingpongSchedule = ScheduleStrassenGroups<
     ParallelMiGroups<MoePingpongKernelSchedule, MoePingpongEpilogueSchedule,
                      false, FusedMiGroup<7, 4>>>;
 
-template <typename ClusterShape_>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_>
 using MoeCooperativePingpongStrassenKernelsForCluster =
     cutlass::gemm::device::StrassenGemmKernels<
         CooperativePingpongStrassenGroupsForCluster<ClusterShape_, 4>, MoeCooperativePingpongSchedule,
         MoeCooperativePingpongProblemShape,
         ArchTag, OperatorClass,
-        ElementA, LayoutA *, cutlass::layout::OriginalLayout,
-        ElementB, LayoutB *, cutlass::layout::OriginalLayout,
-        ElementC, LayoutC *, cutlass::layout::OriginalLayout,
+        ElementA, cutlass::layout::RowMajor *, cutlass::layout::OriginalLayout,
+        ElementB, LayoutB_ *, cutlass::layout::OriginalLayout,
+        ElementC, LayoutCD_ *, cutlass::layout::OriginalLayout,
         ElementAccumulator, ClusterShape_, cute::Int<4>,
         Shape<_2,_256>, Shape<_2,_256>,
         cutlass::gemm::device::PresumOpt<0,0,0,0>,
         AlignmentA, AlignmentB, AlignmentC, ElementD>;
-using MoeCooperativePingpongStrassenKernels = MoeCooperativePingpongStrassenKernelsForCluster<ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using MoeCooperativePingpongStrassenKernels = MoeCooperativePingpongStrassenKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape>;
 
-template <typename ClusterShape_>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_>
 using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256ForCluster =
     cutlass::gemm::device::StrassenGemmUniversalAdapter<
-        MoeCooperativePingpongStrassenKernelsForCluster<ClusterShape_>>;
-using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256 = HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256ForCluster<ClusterShape>;
-using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256_1x2 = HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256ForCluster<Shape<_1,_2,_1>>;
+        MoeCooperativePingpongStrassenKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape_>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256 = HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256ForCluster<LayoutB_, LayoutCD_, ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256_1x2 = HopperF16MoeInterleavedPresumCooperativePingpongMaxFusion_2x256ForCluster<LayoutB_, LayoutCD_, Shape<_1,_2,_1>>;

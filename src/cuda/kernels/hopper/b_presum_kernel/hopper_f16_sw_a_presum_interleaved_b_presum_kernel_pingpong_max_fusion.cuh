@@ -51,25 +51,31 @@ using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized;
 using AllPresumsKernel = AllPresums<>;
                           //  AllPresums<PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel,  //A Presums
                                         // PresumGlobalKernel,   PresumGlobalKernel,  PresumGlobalKernel,   PresumGlobalKernel>; //B Presums
-using AllPresumsM0    = AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
-                                   PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>;
+template <typename LayoutB_>
+using AllPresumsM0ForLayout = cute::conditional_t<
+    cute::is_same_v<LayoutB_, cutlass::layout::ColumnMajor>,
+    AllPresums<PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel,
+               PresumCompute, PresumCompute, PresumCompute, PresumCompute>,
+    AllPresums<PresumCompute, PresumCompute, PresumCompute, PresumCompute,
+               PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel, PresumGlobalKernel>>;
+using AllPresumsM0 = AllPresumsM0ForLayout<LayoutB>;
 //TODO: Can also divide presum among M0 and M1 if K * K/N is not big enough
 //TODO: If PresumShape and K/TK cannot cover all of A and B then report error
 
 using AllPresumsM1To6 = AllPresums<PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable, PresumAvailable,    PresumAvailable,    PresumAvailable,    PresumAvailable>;
 
-template <typename ClusterShape_, int StageCountTypeM0>
-using StrassenGroupsForCluster = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, AllPresumsM0>,
+template <typename ClusterShape_, int StageCountTypeM0, typename PresumPolicy = AllPresumsM0>
+using StrassenGroupsForCluster = StrassenLevel1Groups<StrassenPresum<1, 0, TileShape, PresumPolicy>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape_, StageCountTypeM0,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                            CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>>>,//C0 = M1
-                                                                  AllPresumsM0, 0, 0, 1>,
+                                                                  PresumPolicy, 0, 0, 1>,
                                             StrassenLevel1M1Group<1, 0, TileShape, ClusterShape_, StageCountTypeM0,
                                                                   RWMTypes<>,
                                                                   RWCTypes<//CUW<1, LayoutInterim, LayoutNone, Expr<Plus<0>>>,//C1 = M0
                                                                             CUW<0, LayoutFinal, LayoutNone, Expr<Plus<1>>, Expr<Plus<1, MemGlobal, LayoutInterim1D>>>>,//C0 = M1
-                                                                  AllPresumsM0>,
+                                                                  PresumPolicy>,
                                             StrassenLevel1MiGroup<1, 0, TileShape, ClusterShape_, StageCountTypeM2M6,
                                                                   RWMTypes<>,
                                                                   RWCTypes<CUW<1, LayoutInterim, LayoutNone, Expr<Plus<2>>, Expr<Plus<1, MemGlobal, LayoutInterim>> >, //C1 = Sh = C1+M2 ; Reg = C1 //TODO: pass C1 through registers
@@ -109,34 +115,35 @@ using ScheduleStrassenGroups1 = ScheduleStrassenGroups<ParallelMiGroups<KernelSc
 using ScheduleStrassenGroupsPar = ScheduleStrassenGroups<ParallelMiGroups<KernelSchedule, EpilogueSchedule, false,
     FusedMiGroup<7, 0>, FusedMiGroup<7, 2>, FusedMiGroup<7, 4>>>;
 
-template <typename ClusterShape_, int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>, typename Schedule = ScheduleStrassenGroups1>
-using StrassenGemmKernelsForCluster = cutlass::gemm::device::StrassenGemmKernels<StrassenGroupsForCluster<ClusterShape_, StageCountTypeM0>,
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>, typename Schedule = ScheduleStrassenGroups1>
+using StrassenGemmKernelsForCluster = cutlass::gemm::device::StrassenGemmKernels<StrassenGroupsForCluster<ClusterShape_, StageCountTypeM0, AllPresumsM0ForLayout<LayoutB_>>,
                                                                        Schedule,
                                                                        ProblemShape,
                                                                        ArchTag, OperatorClass,
-                                                                       ElementA, LayoutA, cutlass::layout::StrassenLayout,
-                                                                       ElementB, LayoutB, cutlass::layout::StrassenLayout,
-                                                                       ElementC, LayoutC, cutlass::layout::OriginalLayout,
+                                                                       ElementA, cutlass::layout::RowMajor, cutlass::layout::StrassenLayout,
+                                                                       ElementB, LayoutB_, cutlass::layout::StrassenLayout,
+                                                                       ElementC, LayoutCD_, cutlass::layout::OriginalLayout,
                                                                        ElementAccumulator, ClusterShape_,
                                                                        cute::Int<StageCountTypeM0>,
                                                                        PresumTileShapeA, PresumTileShapeB,
                                                                        PresumOpts,
                                                                        AlignmentA, AlignmentB, AlignmentC,
                                                                        ElementD>;
-template <int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
-using StrassenGemmKernels = StrassenGemmKernelsForCluster<ClusterShape, StageCountTypeM0, PresumTileShapeA, PresumTileShapeB, PresumOpts>;
+template <typename LayoutB_, typename LayoutCD_, int StageCountTypeM0, typename PresumTileShapeA, typename PresumTileShapeB, typename PresumOpts = cutlass::gemm::device::PresumOpt<>>
+using StrassenGemmKernels = StrassenGemmKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape, StageCountTypeM0, PresumTileShapeA, PresumTileShapeB, PresumOpts>;
 
 template<typename StrassenKernels>
 using StrassenGemmUniversalAdapter = cutlass::gemm::device::StrassenGemmUniversalAdapter<StrassenKernels>;
-template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoKernelForCluster = StrassenGemmUniversalAdapter<
-                                                                           StrassenGemmKernelsForCluster<ClusterShape_, 6, Shape<_2,_128>, Shape<_2, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoKernelForCluster<ClusterShape>;
+                                                                           StrassenGemmKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape_, 6, Shape<_2,_128>, Shape<_2, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoKernelForCluster<LayoutB_, LayoutCD_, ClusterShape>;
 
-template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
 class HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT {
 public:
-  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoKernelForCluster<ClusterShape_, Schedule>;
+  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoKernelForCluster<LayoutB_, LayoutCD_, ClusterShape_, Schedule>;
   using GemmKernel = typename StrassenGemmKernel::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
@@ -161,21 +168,26 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<ClusterShape>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<ClusterShape, ScheduleStrassenGroupsPar>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<Shape<_1,_2,_1>>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape, ScheduleStrassenGroupsPar>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, Shape<_1,_2,_1>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
 
-template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000KernelForCluster = StrassenGemmUniversalAdapter<
-                                                                           StrassenGemmKernelsForCluster<ClusterShape_, 6, Shape<_2,_128>, Shape<_2, _128>,
+                                                                           StrassenGemmKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape_, 6, Shape<_2,_128>, Shape<_2, _128>,
                                                                                                cutlass::gemm::device::PresumOpt<0,0,0,0>, Schedule>>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000Kernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000KernelForCluster<ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000Kernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000KernelForCluster<LayoutB_, LayoutCD_, ClusterShape>;
 
-template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
 class HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T {
 public:
-  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000KernelForCluster<ClusterShape_, Schedule>;
+  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000KernelForCluster<LayoutB_, LayoutCD_, ClusterShape_, Schedule>;
   using GemmKernel = typename StrassenGemmKernel::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
@@ -200,20 +212,25 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<ClusterShape>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<ClusterShape, ScheduleStrassenGroupsPar>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<Shape<_1,_2,_1>>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape, ScheduleStrassenGroupsPar>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, Shape<_1,_2,_1>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
 
-template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoKernelForCluster = StrassenGemmUniversalAdapter<
-                                                                           StrassenGemmKernelsForCluster<ClusterShape_, 6, Shape<_4,_128>, Shape<_4, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoKernelForCluster<ClusterShape>;
+                                                                           StrassenGemmKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape_, 6, Shape<_4,_128>, Shape<_4, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoKernelForCluster<LayoutB_, LayoutCD_, ClusterShape>;
 
-template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
 class HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT {
 public:
-  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoKernelForCluster<ClusterShape_, Schedule>;
+  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoKernelForCluster<LayoutB_, LayoutCD_, ClusterShape_, Schedule>;
   using GemmKernel = typename StrassenGemmKernel::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
@@ -238,20 +255,25 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<ClusterShape>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<ClusterShape, ScheduleStrassenGroupsPar>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<Shape<_1,_2,_1>>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape, ScheduleStrassenGroupsPar>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, Shape<_1,_2,_1>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
 
-template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
 using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoKernelForCluster = StrassenGemmUniversalAdapter<
-                                                                           StrassenGemmKernelsForCluster<ClusterShape_, 5, Shape<_8,_128>, Shape<_8, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoKernelForCluster<ClusterShape>;
+                                                                           StrassenGemmKernelsForCluster<LayoutB_, LayoutCD_, ClusterShape_, 5, Shape<_8,_128>, Shape<_8, _128>, cutlass::gemm::device::PresumOpt<>, Schedule>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoKernelForCluster<LayoutB_, LayoutCD_, ClusterShape>;
 
-template <typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule = ScheduleStrassenGroups1>
 class HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT {
 public:
-  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoKernelForCluster<ClusterShape_, Schedule>;
+  using StrassenGemmKernel = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoKernelForCluster<LayoutB_, LayoutCD_, ClusterShape_, Schedule>;
   using GemmKernel = typename StrassenGemmKernel::GemmKernel;
   using Arguments = typename StrassenGemmKernel::Arguments;
   using RasterOrderOptions = typename cutlass::gemm::kernel::detail::PersistentTileSchedulerSm90Params::RasterOrderOptions;
@@ -276,7 +298,195 @@ private:
   StrassenGemmKernel gemm_;
 };
 
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<ClusterShape>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<ClusterShape, ScheduleStrassenGroupsPar>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<Shape<_1,_2,_1>>;
-using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNo = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNo_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape, ScheduleStrassenGroupsPar>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNo_1x2 = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, Shape<_1,_2,_1>>;
+template <typename LayoutB_, typename LayoutCD_>
+using HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNo_1x2_Par = HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, Shape<_1,_2,_1>, ScheduleStrassenGroupsPar>;
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::can_implement(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
+  return StrassenGemmKernel::can_implement(args);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+size_t HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::get_workspace_size(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
+  return StrassenGemmKernel::get_workspace_size(args);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::init(Arguments const &args, int swizzles[7], void *workspace,
+                              cudaStream_t stream, cutlass::CudaHostAdapter *cuda_adapter) {
+  return gemm_.initialize(args, swizzles, workspace, stream, cuda_adapter);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::launch(cudaStream_t *streams, int num_streams,
+                                cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  return gemm_.run(streams, num_streams, cuda_adapter, launch_with_pdl);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::initialize(Arguments const &args, int swizzles[7], void *workspace,
+                                    cudaStream_t stream, cutlass::CudaHostAdapter *cuda_adapter) {
+  return init(args, swizzles, workspace, stream, cuda_adapter);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::run(cudaStream_t *streams, int num_streams,
+                             cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  return launch(streams, num_streams, cuda_adapter, launch_with_pdl);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::operator()(Arguments const &args, int swizzles[7], void *workspace,
+                                    cudaStream_t *streams, int num_streams,
+                                    cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  cutlass::Status status = init(args, swizzles, workspace,
+                                streams == nullptr || num_streams == 0 ? nullptr : streams[0], cuda_adapter);
+  if (status == cutlass::Status::kSuccess) {
+    status = launch(streams, num_streams, cuda_adapter, launch_with_pdl);
+  }
+  return status;
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::can_implement(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
+  return StrassenGemmKernel::can_implement(args);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+size_t HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::get_workspace_size(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
+  return StrassenGemmKernel::get_workspace_size(args);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::init(Arguments const &args, int swizzles[7], void *workspace,
+                              cudaStream_t stream, cutlass::CudaHostAdapter *cuda_adapter) {
+  return gemm_.initialize(args, swizzles, workspace, stream, cuda_adapter);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::launch(cudaStream_t *streams, int num_streams,
+                                cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  return gemm_.run(streams, num_streams, cuda_adapter, launch_with_pdl);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::initialize(Arguments const &args, int swizzles[7], void *workspace,
+                                    cudaStream_t stream, cutlass::CudaHostAdapter *cuda_adapter) {
+  return init(args, swizzles, workspace, stream, cuda_adapter);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::run(cudaStream_t *streams, int num_streams,
+                             cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  return launch(streams, num_streams, cuda_adapter, launch_with_pdl);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_2x128_2x128_Opt_0000T<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::operator()(Arguments const &args, int swizzles[7], void *workspace,
+                                    cudaStream_t *streams, int num_streams,
+                                    cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  cutlass::Status status = init(args, swizzles, workspace,
+                                streams == nullptr || num_streams == 0 ? nullptr : streams[0], cuda_adapter);
+  if (status == cutlass::Status::kSuccess) {
+    status = launch(streams, num_streams, cuda_adapter, launch_with_pdl);
+  }
+  return status;
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::can_implement(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
+  return StrassenGemmKernel::can_implement(args);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+size_t HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::get_workspace_size(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
+  return StrassenGemmKernel::get_workspace_size(args);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::init(Arguments const &args, int swizzles[7], void *workspace,
+                              cudaStream_t stream, cutlass::CudaHostAdapter *cuda_adapter) {
+  return gemm_.initialize(args, swizzles, workspace, stream, cuda_adapter);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::launch(cudaStream_t *streams, int num_streams,
+                                cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  return gemm_.run(streams, num_streams, cuda_adapter, launch_with_pdl);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::initialize(Arguments const &args, int swizzles[7], void *workspace,
+                                    cudaStream_t stream, cutlass::CudaHostAdapter *cuda_adapter) {
+  return init(args, swizzles, workspace, stream, cuda_adapter);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::run(cudaStream_t *streams, int num_streams,
+                             cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  return launch(streams, num_streams, cuda_adapter, launch_with_pdl);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_4x128_4x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::operator()(Arguments const &args, int swizzles[7], void *workspace,
+                                    cudaStream_t *streams, int num_streams,
+                                    cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  cutlass::Status status = init(args, swizzles, workspace,
+                                streams == nullptr || num_streams == 0 ? nullptr : streams[0], cuda_adapter);
+  if (status == cutlass::Status::kSuccess) {
+    status = launch(streams, num_streams, cuda_adapter, launch_with_pdl);
+  }
+  return status;
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::can_implement(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
+  return StrassenGemmKernel::can_implement(args);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+size_t HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::get_workspace_size(Arguments const &args, cutlass::CudaHostAdapter *cuda_adapter) {
+  return StrassenGemmKernel::get_workspace_size(args);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::init(Arguments const &args, int swizzles[7], void *workspace,
+                              cudaStream_t stream, cutlass::CudaHostAdapter *cuda_adapter) {
+  return gemm_.initialize(args, swizzles, workspace, stream, cuda_adapter);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::launch(cudaStream_t *streams, int num_streams,
+                                cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  return gemm_.run(streams, num_streams, cuda_adapter, launch_with_pdl);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::initialize(Arguments const &args, int swizzles[7], void *workspace,
+                                    cudaStream_t stream, cutlass::CudaHostAdapter *cuda_adapter) {
+  return init(args, swizzles, workspace, stream, cuda_adapter);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::run(cudaStream_t *streams, int num_streams,
+                             cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  return launch(streams, num_streams, cuda_adapter, launch_with_pdl);
+}
+
+template <typename LayoutB_, typename LayoutCD_, typename ClusterShape_, typename Schedule>
+cutlass::Status HopperF16APresumInterleavedBPresumKernelPingpongMaxFusion_8x128_8x128_OptNoT<LayoutB_, LayoutCD_, ClusterShape_, Schedule>::operator()(Arguments const &args, int swizzles[7], void *workspace,
+                                    cudaStream_t *streams, int num_streams,
+                                    cutlass::CudaHostAdapter *cuda_adapter, bool launch_with_pdl) {
+  cutlass::Status status = init(args, swizzles, workspace,
+                                streams == nullptr || num_streams == 0 ? nullptr : streams[0], cuda_adapter);
+  if (status == cutlass::Status::kSuccess) {
+    status = launch(streams, num_streams, cuda_adapter, launch_with_pdl);
+  }
+  return status;
+}

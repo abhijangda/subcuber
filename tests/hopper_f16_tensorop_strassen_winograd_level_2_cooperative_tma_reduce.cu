@@ -13,12 +13,12 @@ static std::vector<strassen_tests::TestCase> test_cases() {
 	return cases;
 }
 
-TEST_P(F16HopperStrassenWinogradLevel2CooperativeTmaReduceTest, MatchesReference) {
-	strassen_tests::run_gtest_case<HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduce_2x256_2x256_OptNo, ElementA, ElementB, ElementD>(GetParam());
+TEST_P(F16HopperStrassenWinogradLevel2CooperativeTmaReduceTest, MatchesReference_TTT) {
+	strassen_tests::run_gtest_case<HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduce_2x256_2x256_OptNo<cutlass::layout::RowMajor, cutlass::layout::RowMajor>, ElementA, ElementB, ElementD>(GetParam());
 }
 
-TEST_P(F16HopperStrassenWinogradLevel2CooperativeTmaReduceTest, MatchesReference4x256) {
-	strassen_tests::run_gtest_case<HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduce_4x256_4x256_OptNo, ElementA, ElementB, ElementD>(GetParam());
+TEST_P(F16HopperStrassenWinogradLevel2CooperativeTmaReduceTest, MatchesReference4x256_TTT) {
+	strassen_tests::run_gtest_case<HopperF16InterleavedPresumLevel2CooperativeMaxFusionTmaReduce_4x256_4x256_OptNo<cutlass::layout::RowMajor, cutlass::layout::RowMajor>, ElementA, ElementB, ElementD>(GetParam());
 }
 
 INSTANTIATE_TEST_SUITE_P(
