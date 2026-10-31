@@ -2166,8 +2166,8 @@ public:
 
     {
       //m1 = a1@b2
-      auto ptr_A = args.mainloop.ptr_A + halfK; //TensorRefC ref_C = {}; TensorRefD ref_D = {};
-      auto ptr_B = args.mainloop.ptr_B + halfK*N;
+      auto ptr_A = args.mainloop.ptr_A + halfK*cute::get<1>(args.mainloop.dA); //TensorRefC ref_C = {}; TensorRefD ref_D = {};
+      auto ptr_B = args.mainloop.ptr_B + halfK*cute::get<1>(args.mainloop.dB);
       StrideC stride_m0l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
       auto ptr_m0l1 = postsum_m_ptr + (is_fp16)*halfM*halfN;
       args_m1 = to_child_arguments<ChildStrassenGemmM1>(args, args.mainloop.dA, ptr_A, args.mainloop.dB, ptr_B,
@@ -2188,7 +2188,7 @@ public:
       auto stride_S3 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
 
       //m2 is stored at [1]
-      auto ptr_m2l1 = (UseTMAReduce) ? /*m2 at C1*/ args.epilogue.ptr_D + halfN : /*m2 at [1]*/postsum_m_ptr + (is_fp16+1)*halfM*halfN;
+      auto ptr_m2l1 = (UseTMAReduce) ? /*m2 at C1*/ args.epilogue.ptr_D + halfN*cute::get<1>(args.epilogue.dD) : /*m2 at [1]*/postsum_m_ptr + (is_fp16+1)*halfM*halfN;
 
       args_m2 = to_child_arguments<ChildStrassenGemmM2>(args, stride_S2, ptr_S2, stride_S3, ptr_S3,
                                                         stride_m0l1, ptr_m0l1,
@@ -2210,10 +2210,10 @@ public:
       auto ptr_B31 = presum_b_ptr + AllPresums::indexBPresum(MmaStrassen::BPresums::B31)*halfN*halfK;
       auto stride_B31 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
 
-      auto ptr_m2l1 = (UseTMAReduce) ? /*m2 at C1*/args.epilogue.ptr_D + halfN: /*m2 at [1]*/postsum_m_ptr + (is_fp16+1)*halfM*halfN;
+      auto ptr_m2l1 = (UseTMAReduce) ? /*m2 at C1*/args.epilogue.ptr_D + halfN*cute::get<1>(args.epilogue.dD): /*m2 at [1]*/postsum_m_ptr + (is_fp16+1)*halfM*halfN;
       StrideC stride_m2l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
-      auto ptr_m3l1 = (UseTMAReduce) ? /*m3 at C3*/args.epilogue.ptr_D + halfN*M + halfN : /*m3 at [2]*/postsum_m_ptr + (is_fp16+2)*halfM*halfN;
+      auto ptr_m3l1 = (UseTMAReduce) ? /*m3 at C3*/args.epilogue.ptr_D + halfM*cute::get<0>(args.epilogue.dD) + halfN*cute::get<1>(args.epilogue.dD) : /*m3 at [2]*/postsum_m_ptr + (is_fp16+2)*halfM*halfN;
       StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
       args_m3 = to_child_arguments<ChildStrassenGemmM3>(args, stride_A02, ptr_A02, stride_B31, ptr_B31,
@@ -2238,10 +2238,10 @@ public:
       auto ptr_m3l1 = (UseTMAReduce) ? nullptr : postsum_m_ptr + (is_fp16+2)*halfM*halfN;
       StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
-      auto ptr_m4l1 = (UseTMAReduce) ? /*m4 adds to C1*/ args.epilogue.ptr_D + halfN : postsum_m_ptr + (is_fp16+3)*halfM*halfN;
+      auto ptr_m4l1 = (UseTMAReduce) ? /*m4 adds to C1*/ args.epilogue.ptr_D + halfN*cute::get<1>(args.epilogue.dD) : postsum_m_ptr + (is_fp16+3)*halfM*halfN;
       StrideC stride_m4l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
-      auto ptr_D11 = args.epilogue.ptr_D + halfM*N + halfN;
+      auto ptr_D11 = args.epilogue.ptr_D + halfM*cute::get<0>(args.epilogue.dD) + halfN*cute::get<1>(args.epilogue.dD);
 
       args_m4 = to_child_arguments<ChildStrassenGemmM4>(args, stride_S1, ptr_S1, stride_B10, ptr_B10,
                                                         stride_m3l1, ptr_m3l1,
@@ -2261,7 +2261,7 @@ public:
       auto ptr_A1S2 = presum_a_ptr + AllPresums::indexAPresum(MmaStrassen::APresums::A1S2)*halfM*halfK;
       auto stride_A1S2 = cutlass::make_cute_packed_stride(StrideA{}, {halfM, halfK, 1});
 
-      auto ptr_B3 = args.mainloop.ptr_B + halfK*N + halfN;
+      auto ptr_B3 = args.mainloop.ptr_B + halfK*cute::get<1>(args.mainloop.dB) + halfN*cute::get<0>(args.mainloop.dB);
 
       auto ptr_m2l1 = (UseTMAReduce) ? nullptr : postsum_m_ptr + (is_fp16+1)*halfM*halfN;
       StrideC stride_m2l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
@@ -2269,7 +2269,7 @@ public:
       auto ptr_m4l1 = (UseTMAReduce) ? nullptr : postsum_m_ptr + (is_fp16+3)*halfM*halfN;
       StrideC stride_m4l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
-      auto ptr_D01 = args.epilogue.ptr_D + halfN;
+      auto ptr_D01 = args.epilogue.ptr_D + halfN*cute::get<1>(args.epilogue.dD);
 
       args_m5 = to_child_arguments<ChildStrassenGemmM5>(args, stride_A1S2, ptr_A1S2, args.mainloop.dB, ptr_B3,
                                                         stride_m2l1, ptr_m2l1,
@@ -2284,16 +2284,16 @@ public:
 
     {
       //m6 = a3@s3b2
-      auto ptr_A3 = args.mainloop.ptr_A + halfM*K + halfK;
+      auto ptr_A3 = args.mainloop.ptr_A + halfM*cute::get<0>(args.mainloop.dA) + halfK*cute::get<1>(args.mainloop.dA);
 
       auto ptr_S3B2 = presum_b_ptr + AllPresums::indexBPresum(MmaStrassen::BPresums::S3B2)*halfN*halfK;
       auto stride_S3B2 = cutlass::make_cute_packed_stride(StrideB{}, {halfN, halfK, 1});
 
       //m3 is stored at [2]
-      auto ptr_m3l1 = (UseTMAReduce) ? /*m3 at C3*/args.epilogue.ptr_D + halfM*N + halfN : /*m3 at [2]*/postsum_m_ptr + (is_fp16+2)*halfM*halfN;
+      auto ptr_m3l1 = (UseTMAReduce) ? /*m3 at C3*/args.epilogue.ptr_D + halfM*cute::get<0>(args.epilogue.dD) + halfN*cute::get<1>(args.epilogue.dD) : /*m3 at [2]*/postsum_m_ptr + (is_fp16+2)*halfM*halfN;
       StrideC stride_m3l1 = cutlass::make_cute_packed_stride(StrideC{}, {halfM, halfN, 1});
 
-      auto ptr_D10 = args.epilogue.ptr_D + halfM*N;
+      auto ptr_D10 = args.epilogue.ptr_D + halfM*cute::get<0>(args.epilogue.dD);
 
       args_m6 = to_child_arguments<ChildStrassenGemmM6>(args, args.mainloop.dA, ptr_A3, stride_S3B2, ptr_S3B2,
                                                         (UseTMAReduce) ? args.epilogue.dD : stride_m3l1, ptr_m3l1,

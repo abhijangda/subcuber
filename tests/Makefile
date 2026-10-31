@@ -44,6 +44,7 @@ HOPPER_F16_SW_COOPERATIVE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/ho
 HOPPER_F16_SW_COOPERATIVE_PINGPONG_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_cooperative_pingpong_max_fusion_TTT.cu
 HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce_TTT.cu
 HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC := ../src/cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_pingpong_max_fusion_tma_reduce_TTT.cu
+HOPPER_F16_LEVEL_2_COOPERATIVE_TMA_REDUCE_TEST_OBJS := hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce.o hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce_TNT.o
 HOPPER_F16_SCHEDULE_BUILD_DIR := $(abspath ../build/obj/kernel_runner_hopper)
 HOPPER_FP8_BLOCKWISE_SCALING_SRCS := $(foreach reduction,max_fusion max_fusion_tma_reduce,kernels/hopper/strassen_winograd/hopper_fp8_blockwise_scaling_sw_kernel_presum_cooperative_$(reduction).cu)
 HOPPER_FP8_BLOCKWISE_SCALING_OBJS := $(addprefix $(HOPPER_F16_SCHEDULE_BUILD_DIR)/,$(HOPPER_FP8_BLOCKWISE_SCALING_SRCS:.cu=.o))
@@ -205,8 +206,11 @@ test_hopper_f16_tensorop_strassen_winograd_cooperative: hopper_f16_tensorop_stra
 test_hopper_f16_tensorop_strassen_winograd_cooperative_pingpong: hopper_f16_tensorop_strassen_winograd_cooperative_pingpong.cu base_test.cuh $(HOPPER_F16_SW_COOPERATIVE_PINGPONG_SRC) $(GTEST_OBJECT)
 	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $< $(HOPPER_F16_SW_COOPERATIVE_PINGPONG_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v3 -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
 
-test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce: hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce.cu base_test.cuh $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC) $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC:_TTT.cu=.cuh) $(GTEST_OBJECT)
-	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $< $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
+$(HOPPER_F16_LEVEL_2_COOPERATIVE_TMA_REDUCE_TEST_OBJS): %.o: %.cu hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce.cuh base_test.cuh $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_TMA_REDUCE_SRC:_TTT.cu=.cuh)
+	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED $(HOPPER_GENCODE) -MMD -MP -c $< -o $@ -Xcompiler -pthread
+
+test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce: $(HOPPER_F16_LEVEL_2_COOPERATIVE_TMA_REDUCE_TEST_OBJS) $(GTEST_OBJECT)
+	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $(HOPPER_F16_LEVEL_2_COOPERATIVE_TMA_REDUCE_TEST_OBJS) $(GTEST_OBJECT) -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
 
 test_hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce: hopper_f16_tensorop_strassen_winograd_level_2_cooperative_pingpong_tma_reduce.cu base_test.cuh $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC) $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC:_TTT.cu=.cuh) $(GTEST_OBJECT)
 	$(NVCC) $(HOPPER_F16_NVCC_FLAGS) $< $(HOPPER_F16_SW_LEVEL_2_COOPERATIVE_PINGPONG_TMA_REDUCE_SRC) $(GTEST_OBJECT) $(INCLUDES) -DCUTLASS_API_v3 -DCUTLASS_ENABLE_TENSOR_CORE_MMA=1 -DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED -o $@ $(HOPPER_GENCODE) -Xcompiler -pthread
@@ -242,6 +246,7 @@ $(addprefix run-,$(TARGETS)): run-%: %
 	./$<
 
 clean:
-	rm -f $(TARGETS) $(GTEST_OBJECT)
+	rm -f $(TARGETS) $(GTEST_OBJECT) $(HOPPER_F16_LEVEL_2_COOPERATIVE_TMA_REDUCE_TEST_OBJS) $(HOPPER_F16_LEVEL_2_COOPERATIVE_TMA_REDUCE_TEST_OBJS:.o=.d)
 
 -include $(HOPPER_FP8_BLOCKWISE_SCALING_OBJS:.o=.d)
+-include $(HOPPER_F16_LEVEL_2_COOPERATIVE_TMA_REDUCE_TEST_OBJS:.o=.d)

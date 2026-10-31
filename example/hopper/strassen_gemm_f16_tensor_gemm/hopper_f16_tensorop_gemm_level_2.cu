@@ -112,7 +112,7 @@ constexpr int AlignmentA  = 128 / cutlass::sizeof_bits<ElementA>::value;    // M
 
 // B matrix configuration
 using         ElementB    = TensorOpElem;                                // Element type for B matrix operand
-using         LayoutB     = cutlass::layout::RowMajor;                   // Layout type for B matrix operand
+using         LayoutB     = cutlass::layout::ColumnMajor;                   // Layout type for B matrix operand
 // using         SubMatLayoutB = cutlass::layout::StrassenLayout;
 using         SubMatLayoutB = cutlass::layout::OriginalLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
@@ -853,7 +853,7 @@ bool verify(const Options &options) {
 
   for (int r = 0; r < options.m; r++) {
   for (int c = 0; c < options.n; c++) {
-    auto idx = r*options.n + c;
+    auto idx = LayoutC::packed({options.m, options.n})({r, c});
     TensorOpElem e1 = host_ref_D[idx];
     TensorOpElem e2 = host_D[idx];
     float err = fabs((float)e1 -(float)e2)/fabs((float)e1 + 1e-6);

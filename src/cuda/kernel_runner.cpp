@@ -1513,10 +1513,10 @@ int main(int argc, char **argv) {
     bool baseline = vendor_baseline || cutlass_baseline;
     if (kernel.dtype == dtype && kernel.arch == arch &&
       (!hopper_layout || kernel.layout_ops == op) &&
-      (baseline || all_strassen_levels || kernel.strassen_level == strassen_level) &&
+      (all_strassen_levels || kernel.strassen_level == strassen_level) &&
         (!kernel.b_presum_kernel || b_presum == "kernel") &&
         (b_presum != "kernel" || (!kernel.grouped_moe &&
-          (kernel.strassen_level == 0 || kernel.b_presum_kernel))) &&
+          (kernel.strassen_level == 0 || kernel.strassen_level == 2 || kernel.b_presum_kernel))) &&
         (!kernel.grouped_moe || has_expert_count) &&
         (!has_expert_count || expert_count == 1 || kernel.grouped_moe) &&
         (baseline || !has_kernel_regex || std::regex_search(kernel.name, kernel_regex))) {

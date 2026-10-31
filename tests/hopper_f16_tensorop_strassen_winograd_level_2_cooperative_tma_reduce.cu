@@ -1,8 +1,4 @@
-#include "cuda/kernels/hopper/strassen_winograd/hopper_f16_sw_interleaved_presum_level_2_cooperative_max_fusion_tma_reduce.cuh"
-
-#include "base_test.cuh"
-
-class F16HopperStrassenWinogradLevel2CooperativeTmaReduceTest : public testing::TestWithParam<strassen_tests::TestCase> {};
+#include "hopper_f16_tensorop_strassen_winograd_level_2_cooperative_tma_reduce.cuh"
 
 static std::vector<strassen_tests::TestCase> test_cases() {
 	std::vector<strassen_tests::TestCase> cases = {
