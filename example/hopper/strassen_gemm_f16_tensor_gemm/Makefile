@@ -76,7 +76,7 @@ strassen_winograd_presum4_hopper_bf16_tensorop_gemm_level_2_cooperative_pingpong
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE_PINGPONG -DTENSOROP_ELEM_BF16
 
 strassen_winograd_presum4_hopper_fp8_tensorop_gemm_cooperative: hopper_fp8_gemm_with_blockwise_scaling.cu
-	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) -Xcompiler=-fopenmp $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE
+	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) -Xcompiler=-fopenmp $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DCOOPERATIVE -DTENSOROP_ELEM_FP16
 
 strassen_winograd_presum4_hopper_grouped_gemm_pingpong: hopper_grouped_gemm.cu
 	$(COMPILER) $(CXXFLAGS_COMMON) $(CXXFLAGS) $< $(INCLUDES) $(STRASSEN_CUTLASS) -o $@ $(CUDA_LIBS) -DSTRASSEN_FOUR_PRESUM_LEVEL1 -DPINGPONG -DGROUPED

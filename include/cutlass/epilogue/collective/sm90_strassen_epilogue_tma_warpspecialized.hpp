@@ -2110,6 +2110,9 @@ struct SM90_BULK_TMA_ADD_S2G
           load_pipeline.consumer_release(load_pipe_consumer_state);
           ++load_pipe_consumer_state;
         }
+      } else {
+        store_pipe_producer_state = load_pipe_consumer_state;
+        store_pipe_producer_state.phase_ ^= 1;
       }
     }
 

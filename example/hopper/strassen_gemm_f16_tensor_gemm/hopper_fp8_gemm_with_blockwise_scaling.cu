@@ -104,6 +104,12 @@ using namespace cute;
 /// GEMM kernel configurations
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
+#ifdef TENSOROP_ELEM_FP16
+using TensorOpElem = cutlass::half_t;
+#elif defined(TENSOROP_ELEM_BF16)
+using TensorOpElem = cutlass::bfloat16_t;
+#endif
+
 // A matrix configuration
 using         ElementA    = cutlass::float_e4m3_t;                                // Element type for A matrix operand
 using         LayoutA     = cutlass::layout::RowMajor;                      // Layout type for A matrix operand
@@ -119,8 +125,9 @@ using         SubMatLayoutB = cutlass::layout::StrassenLayout;
 constexpr int AlignmentB  = 128 / cutlass::sizeof_bits<ElementB>::value;    // Memory access granularity/alignment of B matrix in units of elements (up to 16 bytes)
 
 // C/D matrix configuration
-using         ElementC    = void;//TensorOpElem;                                           // No C source operand
+using         ElementC    = TensorOpElem;                                // Element type for C matrix operand
 using         ElementD    = cutlass::half_t;                                // Element type for D matrix operand
+using         NonVoidElementC = cute::conditional_t<cute::is_void_v<ElementC>, ElementD, ElementC>;
 using         LayoutC     = cutlass::layout::RowMajor;                   // Layout type for C and D matrix operands
 using         SubMatLayoutC = cutlass::layout::OriginalLayout;
 using         LayoutD     = LayoutC;
@@ -153,7 +160,7 @@ using EpilogueScheduleM2To6 = EpilogueScheduleM0;
 using TileShapeM0           = Shape<_128,_128,_128>;                           // Threadblock-level tile size
 using TileShapeM2To6        = Shape<_128,_128,_128>;
 using ClusterShape        = Shape<_1,_2,_1>;                                // Shape of the threadblocks in a cluster
-const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 6 : 6;          // Stage count maximized based on the tile size
+const uint StageCountTypeM0   = cute::is_void_v<ElementC> ? 6 : 5;          // Stage count maximized based on the tile size
 const uint StageCountTypeM2M6 = cute::is_void_v<ElementC> ? 5 : 5;
 const uint StageCountTypeM4M5 = cute::is_void_v<ElementC> ? 5 : 5;
 using PresumTileShapeA    = Shape<_4, _128>;
@@ -449,9 +456,11 @@ cutlass::HostTensor<typename Gemm::ElementA, LayoutA> tensor_A;
 cutlass::HostTensor<typename Gemm::ElementB, LayoutB> tensor_B;
 cutlass::HostTensor<ElementAccumulator, LayoutScalar> blockscale_tensor_A;
 cutlass::HostTensor<ElementAccumulator, LayoutScalar> blockscale_tensor_B;
+cutlass::HostTensor<NonVoidElementC, LayoutC> tensor_C;
 cutlass::HostTensor<typename Gemm::EpilogueOutputOp::ElementOutput, LayoutD> tensor_D;
 cutlass::HostTensor<typename Gemm::EpilogueOutputOp::ElementOutput, LayoutD> tensor_ref_D;
 std::array<std::vector<ElementA>, 4> reference_presum_A;
+std::vector<ElementAccumulator> reference_rounding_error;
 
 #endif // defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 
@@ -531,7 +540,7 @@ struct Options {
     std::stringstream str_swizzles_stream(str_swizzles);
 
     std::string str_swizzle;
-    if (cute::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout> &&  
+    if (cute::is_same_v<SubMatLayoutA, cutlass::layout::StrassenLayout> &&
         cute::is_same_v<SubMatLayoutB, cutlass::layout::StrassenLayout>) {
       std::getline(str_swizzles_stream, str_swizzle, ',');
       for (int ii = 0; ii < 7; ii++) swizzles[ii] = stoi(str_swizzle);
@@ -541,7 +550,7 @@ struct Options {
       {
         if (idx < 7)
           swizzles[idx] = stoi(str_swizzle);
-        idx++; 
+        idx++;
       }
       for (int ii = idx; ii < 7; ii++) swizzles[ii] = 1;
     }
@@ -676,6 +685,7 @@ void initialize(const Options &options) {
 
   stride_A = cutlass::make_cute_packed_stride(StrideA{}, {options.m, options.k, 1});
   stride_B = cutlass::make_cute_packed_stride(StrideB{}, {options.n, options.k, 1});
+  stride_C = cutlass::make_cute_packed_stride(StrideC{}, {options.m, options.n, 1});
   stride_D = cutlass::make_cute_packed_stride(StrideD{}, {options.m, options.n, 1});
 
   layout_SFA = ScaleConfig::tile_atom_to_shape_SFA(make_shape(options.m, options.n, options.k, options.l));
@@ -703,6 +713,11 @@ void initialize(const Options &options) {
   initialize_tensor(tensor_B.host_view(), dist_B, seed + 2023, false);
   initialize_scale_tensor(blockscale_tensor_A.host_view(), dist_scaleA, seed + 2025, false);
   initialize_scale_tensor(blockscale_tensor_B.host_view(), dist_scaleB, seed + 2026, false);
+  if constexpr (!cute::is_void_v<ElementC>) {
+    tensor_C.resize(d_coord);
+    initialize_tensor(tensor_C.host_view(), cutlass::Distribution::Uniform, seed + 2024, false);
+    tensor_C.sync_device();
+  }
   cutlass::reference::host::TensorFill(tensor_D.host_view());
 
 #if 0 // Dump blockscaled tensors
@@ -735,6 +750,10 @@ typename Gemm::Arguments args_from_options(const Options &options)
   int device_id = 0;
   CUDA_CHECK(cudaGetDevice(&device_id));
   auto kernel_hw_info = cutlass::KernelHardwareInfo::make_kernel_hardware_info<Gemm::GemmKernel>(device_id);
+  ElementC const* ptr_C = nullptr;
+  if constexpr (!cute::is_void_v<ElementC>) {
+    ptr_C = tensor_C.device_data();
+  }
 
   typename Gemm::Arguments arguments{
     cutlass::gemm::GemmUniversalMode::kGemm,
@@ -749,8 +768,8 @@ typename Gemm::Arguments args_from_options(const Options &options)
      layout_SFB
      },
     {
-      {}, // epilogue.thread
-      nullptr, StrideC{},
+      {options.alpha, options.beta},
+      ptr_C, stride_C,
       tensor_D.device_data(), stride_D
     },
     kernel_hw_info
@@ -889,47 +908,83 @@ void strassen_winograd_reference(const Options &options) {
 
   std::array<std::vector<ElementAccumulator>,7> products;
   auto product_layout = make_layout(make_shape(halfM,halfN,1), make_stride(int64_t(halfN),_1{},int64_t(halfM)*halfN));
-  auto reference_gemm = [&](int product_idx, auto input_a, auto scale_a, auto input_b, auto scale_b) {
-    products[product_idx].resize(size_t(halfM)*halfN);
+  std::vector<ElementAccumulator> block_products(size_t(halfM)*halfN);
+  auto block_product = make_tensor(block_products.data(), product_layout);
+  auto reference_gemm = [&](int product_idx, auto input_a, auto scale_a, auto input_b, auto scale_b,
+                            int initial_product = -1, bool round_initial = false, bool negate_initial = false) {
+    if (initial_product < 0) {
+      products[product_idx].assign(size_t(halfM)*halfN, 0.0f);
+    } else {
+      products[product_idx] = products[initial_product];
+      for (auto& value : products[product_idx]) {
+        if (round_initial) value = float(ElementD(value));
+        if (negate_initial) value = -value;
+      }
+    }
     auto product = make_tensor(products[product_idx].data(), product_layout);
-    cutlass::reference::host::GettBlockScalingMainloopParams<
-      ElementAccumulator, decltype(input_a), decltype(scale_a), decltype(input_b), decltype(scale_b)
-    > mainloop_params{input_a, scale_a, input_b, scale_b};
-    cutlass::reference::host::GettEpilogueParams<
-      float, float, ElementAccumulator, float, decltype(product), decltype(product)
-    > epilogue_params;
-    epilogue_params.D = product;
-    cutlass::reference::host::Gemm3x(mainloop_params, epilogue_params);
+    for (int block_k = 0; block_k < halfK; block_k += ScaleK) {
+      auto block_a = make_tensor(input_a.data() + input_a.layout()(make_coord(0,block_k,0)),
+        make_layout(make_shape(halfM,ScaleK,1), stride(input_a.layout())));
+      auto block_b = make_tensor(input_b.data() + input_b.layout()(make_coord(0,block_k,0)),
+        make_layout(make_shape(halfN,ScaleK,1), stride(input_b.layout())));
+      cutlass::reference::host::GettMainloopParams<
+        ElementAccumulator, decltype(block_a), decltype(block_b)
+      > mainloop_params{block_a, block_b};
+      cutlass::reference::host::GettEpilogueParams<
+        float, float, ElementAccumulator, float, decltype(block_product), decltype(block_product)
+      > epilogue_params;
+      epilogue_params.D = block_product;
+      cutlass::reference::host::Gemm3x(mainloop_params, epilogue_params);
+      #pragma omp parallel for
+      for (int row = 0; row < halfM; ++row) {
+        for (int column = 0; column < halfN; ++column) {
+          float scale = scale_a(row,block_k,0) * scale_b(column,block_k,0);
+          product(row,column,0) = std::fma(block_product(row,column,0), scale, product(row,column,0));
+        }
+      }
+    }
   };
 
   reference_gemm(0, A0, SFA0, B0, SFB0);
-  reference_gemm(1, A1, SFA1, B2, SFB2);
-  reference_gemm(2, input_presum_a(1), scale_presum_a(1), input_presum_b(2), scale_presum_b(2));
-  reference_gemm(3, input_presum_a(2), scale_presum_a(2), input_presum_b(1), scale_presum_b(1));
+  reference_gemm(1, A1, SFA1, B2, SFB2, 0);
+  reference_gemm(2, input_presum_a(1), scale_presum_a(1), input_presum_b(2), scale_presum_b(2), 0, true);
+  reference_gemm(3, input_presum_a(2), scale_presum_a(2), input_presum_b(1), scale_presum_b(1), 2);
   reference_gemm(4, input_presum_a(0), scale_presum_a(0), input_presum_b(0), scale_presum_b(0));
-  reference_gemm(5, input_presum_a(3), scale_presum_a(3), B3, SFB3);
-  reference_gemm(6, A3, SFA3, input_presum_b(3), scale_presum_b(3));
+  reference_gemm(5, input_presum_a(3), scale_presum_a(3), B3, SFB3, 4);
+  reference_gemm(6, A3, SFA3, input_presum_b(3), scale_presum_b(3), 3, false, true);
 
   auto D = make_tensor(tensor_ref_D.host_data(),
     make_layout(make_shape(options.m,options.n,options.l), stride_D));
+  reference_rounding_error.resize(size_t(options.m)*options.n);
+  auto rounding_error = make_tensor(reference_rounding_error.data(), D.layout());
+  const float output_epsilon = float(cutlass::platform::numeric_limits<ElementD>::epsilon());
+  auto beta_c = [&](int row, int column) {
+    if constexpr (!cute::is_void_v<ElementC>) {
+      return options.beta * float(tensor_C.host_view().at(cutlass::make_Coord(row, column)));
+    } else {
+      return 0.0f;
+    }
+  };
   #pragma omp parallel for
   for (int row = 0; row < halfM; ++row) {
     for (int column = 0; column < halfN; ++column) {
       size_t offset = size_t(row)*halfN + column;
-      float m0 = products[0][offset];
-      float m1 = products[1][offset];
-      float m2 = products[2][offset];
-      float m3 = products[3][offset];
-      float m4 = products[4][offset];
-      float m5 = products[5][offset];
-      float m6 = products[6][offset];
-      float interim_m0 = float(ElementD(m0));
-      float sum_m2 = interim_m0 + m2;
-      float sum_m3 = sum_m2 + m3;
-      D(row,column,0) = ElementD(m0 + m1);
-      D(row,column+halfN,0) = ElementD(float(ElementD(sum_m2)) + m4 + m5);
-      D(row+halfM,column,0) = ElementD(sum_m3 - m6);
-      D(row+halfM,column+halfN,0) = ElementD(float(ElementD(sum_m3)) + m4);
+      D(row,column,0) = ElementD(std::fma(options.alpha, products[1][offset], beta_c(row, column)));
+      D(row,column+halfN,0) = ElementD(float(ElementD(options.alpha * products[2][offset])) +
+        float(ElementD(std::fma(options.alpha, products[5][offset], beta_c(row, column + halfN)))));
+      D(row+halfM,column,0) = ElementD(std::fma(options.alpha,
+        -products[6][offset], beta_c(row + halfM, column)));
+      D(row+halfM,column+halfN,0) = ElementD(float(ElementD(options.alpha * products[3][offset])) +
+        float(ElementD(std::fma(options.alpha, products[4][offset], beta_c(row + halfM, column + halfN)))));
+      float interim_error = std::fabs(options.alpha) * output_epsilon * std::fabs(products[0][offset]);
+      rounding_error(row,column,0) = 0.0f;
+      rounding_error(row,column+halfN,0) = interim_error + output_epsilon *
+        (std::fabs(options.alpha * products[2][offset]) +
+         std::fabs(std::fma(options.alpha, products[5][offset], beta_c(row, column + halfN))));
+      rounding_error(row+halfM,column,0) = interim_error;
+      rounding_error(row+halfM,column+halfN,0) = interim_error + output_epsilon *
+        (std::fabs(options.alpha * products[3][offset]) +
+         std::fabs(std::fma(options.alpha, products[4][offset], beta_c(row + halfM, column + halfN))));
     }
   }
 }
@@ -1003,6 +1058,8 @@ bool verify(const Options &options, ElementA const* device_presum_A) {
 
   auto computed_view = tensor_D.host_view();
   auto reference_view = tensor_ref_D.host_view();
+  auto rounding_error = make_tensor(reference_rounding_error.data(),
+    make_layout(make_shape(options.m,options.n,options.l), stride_D));
   for (int r = 0; r < options.m; r++) {
     for (int c = 0; c < options.n; c++) {
       auto coord = cutlass::make_Coord(r, c);
@@ -1010,7 +1067,9 @@ bool verify(const Options &options, ElementA const* device_presum_A) {
       float reference = float(reference_view.at(coord));
       float abs_err = std::fabs(reference - computed);
       float err = abs_err / std::fabs(reference + 1e-6);
-      bool equal = reference == computed || err <= MAX_REL_ERR || abs_err <= MAX_ABS_ERR;
+      bool equal = reference == computed ||
+                   (options.alpha != 0.0f &&
+                    (err <= MAX_REL_ERR || abs_err <= MAX_ABS_ERR + rounding_error(r,c,0)));
 
       // C0
       if (r < options.m/2 && c < options.n/2 && !equal && passed_C0) {
